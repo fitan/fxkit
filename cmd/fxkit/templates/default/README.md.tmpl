@@ -1,0 +1,51 @@
+# {{.AppName}}
+
+Scaffolded with [fxkit](https://github.com/fitan/fxkit).
+
+## Run
+
+```bash
+# Stand-alone (no Dapr)
+make run
+
+# With Dapr sidecar (in-memory state + pubsub by default)
+make dapr-run
+```
+
+Visit:
+
+- `GET  /greet/{name}` — sample JSON handler (chi)
+- `GET  /docs`         — Scalar API reference
+- `GET  /openapi.yaml` — embedded OpenAPI skeleton (extend with Buf when you add RPCs)
+- `GET  /healthz`      — liveness
+
+Trigger the pub/sub subscriber:
+
+```bash
+curl -X POST "http://localhost:3501/v1.0/publish/pubsub/orders" \
+  -H "Content-Type: application/json" \
+  -d '{"id":1}'
+```
+
+## Add a service
+
+```bash
+mkdir -p internal/users
+# write internal/users/users.go with fx.Module that uses
+# server.ProvideRoutes / daprx.ProvideTopics / etc.
+```
+
+Then mount it in `cmd/main.go`:
+
+```go
+fxkit.Run(
+    fxkit.Default(),
+    hello.Module,
+    users.Module,
+)
+```
+
+## Config
+
+`configs/config.yaml` controls the framework. Use [Config.Viper] or
+`UnmarshalKey` to load your own sections (see fxkit docs).

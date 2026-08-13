@@ -1,0 +1,12 @@
+version: 1
+apps:
+  - appID: {{.AppName}}
+    appDirPath: .
+    appPort: 8080
+    daprHTTPPort: 3501
+    command:
+      - ./bin/server
+      - serve
+    configFilePath: ./configs/dapr/dapr-config.yaml
+    resourcesPaths:
+      - ./configs/dapr

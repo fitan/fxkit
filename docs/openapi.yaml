@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info:
+  title: fxkit service
+  version: "1.0.0"
+  description: |
+    Placeholder OpenAPI skeleton. Replace via host embed or docs.MergedModule
+    (base YAML + live Huma routes). Prefer Huma RegisterResource / Register for REST.
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK

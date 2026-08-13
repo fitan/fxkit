@@ -1,0 +1,16 @@
+package main
+
+import (
+	"github.com/fitan/fxkit"
+	"github.com/fitan/fxkit/cli"
+
+	"{{.Module}}/internal/hello"
+)
+
+func main() {
+	cli.SetRootName("{{.AppName}}", "{{.AppName}} service")
+	fxkit.Run(
+		fxkit.Minimal(),
+		hello.Module,
+	)
+}

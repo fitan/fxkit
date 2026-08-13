@@ -1,0 +1,14 @@
+bin/
+*.exe
+*.test
+*.out
+.DS_Store
+.env
+.env.*
+!.env.example
+.idea/
+*.swp
+*.swo
+
+# Local CLI binary built inside the module
+/fxkit

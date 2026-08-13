@@ -1,0 +1,10 @@
+.PHONY: build run clean
+
+build:
+	go build -o bin/server ./cmd
+
+run:
+	go run ./cmd serve
+
+clean:
+	rm -rf bin/
