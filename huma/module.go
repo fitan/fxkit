@@ -66,16 +66,12 @@ func invokeRegistrars(p registrarParams) {
 }
 
 // NewAPI 在共享 chi mux 上构建 Huma API，使用 app 元数据作为 OpenAPI 标题。
-func NewAPI(mux *chi.Mux, cfg *config.Config) huma.API {
-	app := cfg.Get().App
-	title := app.Name
-	if title == "" {
-		title = "API"
-	}
-	conf := huma.DefaultConfig(title, "1.0.0")
+func NewAPI(mux *chi.Mux, app *config.App) huma.API {
+	conf := huma.DefaultConfig(app.Name, "1.0.0")
 	// 宿主应用自行提供 Scalar/docs（见 fxkit/docs）。
 	conf.DocsPath = ""
-	conf.OpenAPIPath = "/huma/openapi.json"
+	// Huma appends .json / .yaml; this must be the path without extension.
+	conf.OpenAPIPath = "/huma/openapi"
 	return humachi.New(mux, conf)
 }
 
@@ -99,7 +95,7 @@ func defaultRegistrars() []Registrar { return nil }
 
 // ProvideMiddleware 将一个 [MiddlewareRegistrar] 发布到 "huma_middlewares" fx group，
 // 由 [Module] 在启动时通过 [huma.API.UseMiddleware] 挂载。构造函数须返回 [MiddlewareRegistrar]
-//（常为 [MiddlewareFunc]），可依赖任意 Fx 提供的值。
+// （常为 [MiddlewareFunc]），可依赖任意 Fx 提供的值。
 //
 //	func provideAuthMiddleware(p Params) fxhuma.MiddlewareRegistrar { ... }
 //

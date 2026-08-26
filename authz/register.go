@@ -7,37 +7,37 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fitan/fxkit/config"
+	"github.com/danielgtaylor/huma/v2"
 	"go.uber.org/fx"
 )
 
 type autoRegisterParams struct {
 	fx.In
 	LC       fx.Lifecycle
-	Config   *config.Config
+	Config   *Config
 	Enforcer *Enforcer
 	Routes   []HTTPRoute `group:"authz_http_routes"`
+	API      huma.API    `optional:"true"`
 }
 
-// registerRoutesOnStart syncs ProvideHTTPRoutes → Casbin policies for bootstrap_role.
+// registerRoutesOnStart syncs ProvideHTTPRoutes plus live Huma OpenAPI operations
+// into Casbin policies for bootstrap_role (so RegisterResource is covered).
 func registerRoutesOnStart(p autoRegisterParams) {
 	p.LC.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			if p.Enforcer == nil || !p.Enforcer.Enabled() || p.Config == nil {
 				return nil
 			}
-			ac := p.Config.Get().Auth.Casbin
+			ac := p.Config.Casbin
 			if !ac.AutoRegisterRoutes {
 				return nil
 			}
 			role := strings.TrimSpace(ac.BootstrapRole)
-			if role == "" {
-				role = "admin"
-			}
 			c, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
 
-			policies := PoliciesFromRoutes(role, p.Routes)
+			routes := mergeHTTPRoutes(p.Routes, HTTPRoutesFromOpenAPI(p.API))
+			policies := PoliciesFromRoutes(role, routes)
 			if len(policies) > 0 {
 				if err := p.Enforcer.AddPolicies(policies); err != nil {
 					return fmt.Errorf("authz auto-register policies: %w", err)
@@ -50,7 +50,7 @@ func registerRoutesOnStart(p autoRegisterParams) {
 			}); err != nil {
 				return fmt.Errorf("authz ensure bootstrap role: %w", err)
 			}
-			if err := p.Enforcer.SyncRouteCatalog(p.Routes); err != nil {
+			if err := p.Enforcer.SyncRouteCatalog(routes); err != nil {
 				return fmt.Errorf("authz sync route catalog: %w", err)
 			}
 			var bindings []RoleBinding
@@ -69,7 +69,7 @@ func registerRoutesOnStart(p autoRegisterParams) {
 			slog.InfoContext(c, "authz auto-registered routes",
 				"role", role,
 				"policies", len(policies),
-				"catalog", len(p.Routes),
+				"catalog", len(routes),
 				"users", len(bindings),
 			)
 			return nil

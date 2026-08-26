@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/casbin/casbin/v2/model"
-	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	"go.uber.org/fx"
@@ -63,33 +63,32 @@ type Enforcer struct {
 	e       *casbin.Enforcer
 	db      *gorm.DB // permission catalog (nil for memory enforcer)
 	enabled bool
+
+	reloadMu     sync.Mutex
+	reloadCancel context.CancelFunc
+	reloadWG     sync.WaitGroup
 }
 
 type enforcerParams struct {
 	fx.In
-	Config *config.Config
+	Config *Config
 	DB     *gormx.Client `optional:"true"`
+	LC     fx.Lifecycle  `optional:"true"`
 }
 
 // NewEnforcer builds a Postgres-backed Casbin enforcer when auth.casbin.enabled.
 // Returns a disabled no-op enforcer when Casbin is off (never nil).
 func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 	out := &Enforcer{}
-	if p.Config == nil {
-		return out, nil
-	}
-	ac := p.Config.Get().Auth
-	if !ac.Enabled || !ac.Casbin.Enabled {
+	if p.Config == nil || !p.Config.Enabled || !p.Config.Casbin.Enabled {
 		slog.Info("auth casbin disabled")
 		return out, nil
 	}
+	ac := p.Config
 	if p.DB == nil || p.DB.Pool() == nil {
 		return nil, fxerrors.Internal("auth.casbin.enabled requires gormx database")
 	}
 	table := strings.TrimSpace(ac.Casbin.TableName)
-	if table == "" {
-		table = "casbin_rule"
-	}
 	adapter, err := newGormAdapter(p.DB.Pool(), table)
 	if err != nil {
 		return nil, fmt.Errorf("auth casbin adapter: %w", err)
@@ -115,7 +114,9 @@ func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 	out.e = e
 	out.db = p.DB.Pool()
 	out.enabled = true
-	slog.Info("auth casbin enabled", "table", table)
+	reloadEvery := ac.Casbin.ReloadInterval
+	out.attachPolicyReloader(p.LC, reloadEvery)
+	slog.Info("auth casbin enabled", "table", table, "reload_interval", reloadEvery)
 	return out, nil
 }
 
@@ -137,6 +138,61 @@ func (e *Enforcer) Enabled() bool {
 	return e != nil && e.enabled && e.e != nil
 }
 
+// ReloadPolicies replaces the in-memory model from the adapter (other replicas' writes).
+func (e *Enforcer) ReloadPolicies() error {
+	if !e.Enabled() {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.e.LoadPolicy()
+}
+
+func (e *Enforcer) attachPolicyReloader(lc fx.Lifecycle, interval time.Duration) {
+	if e == nil || lc == nil || interval <= 0 || !e.Enabled() {
+		return
+	}
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			ctx, cancel := context.WithCancel(context.Background())
+			e.reloadMu.Lock()
+			e.reloadCancel = cancel
+			e.reloadMu.Unlock()
+			e.reloadWG.Add(1)
+			go func() {
+				defer e.reloadWG.Done()
+				e.reloadLoop(ctx, interval)
+			}()
+			return nil
+		},
+		OnStop: func(context.Context) error {
+			e.reloadMu.Lock()
+			cancel := e.reloadCancel
+			e.reloadMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			e.reloadWG.Wait()
+			return nil
+		},
+	})
+}
+
+func (e *Enforcer) reloadLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := e.ReloadPolicies(); err != nil {
+				slog.Warn("auth casbin reload policy", "error", err)
+			}
+		}
+	}
+}
+
 // Enforce checks whether Sub may Act on Obj.
 func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 	_ = ctx
@@ -145,7 +201,7 @@ func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 		return true, nil
 	}
 	sub := strings.TrimSpace(in.Sub)
-	obj := strings.TrimSpace(in.Obj)
+	obj := normalizeRequestPath(in.Obj)
 	act := strings.ToUpper(strings.TrimSpace(in.Act))
 	if sub == "" || obj == "" || act == "" {
 		return false, nil

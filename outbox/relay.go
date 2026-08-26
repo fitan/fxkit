@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/hatchetx"
 	"go.uber.org/fx"
@@ -35,7 +34,7 @@ func (p *hatchetPublisher) PublishEvent(ctx context.Context, _, topicName string
 type Relay struct {
 	client    *gormx.Client
 	publisher EventPublisher
-	cfg       config.OutboxConfig
+	cfg       Config
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -46,21 +45,20 @@ type Relay struct {
 type NewRelayParams struct {
 	fx.In
 
-	Client  *gormx.Client
-	Hatchet *hatchetx.Client `optional:"true"`
-	Cfg     *config.Config
+	Client     *gormx.Client
+	Hatchet    *hatchetx.Client `optional:"true"`
+	Outbox     *Config
+	HatchetCfg *hatchetx.Config `optional:"true"`
 }
 
 // NewRelay builds a Relay that publishes via Hatchet when hatchet.outbox_publisher is enabled.
 func NewRelay(p NewRelayParams) *Relay {
-	outboxCfg := config.OutboxConfig{}
-	hatchetCfg := config.HatchetConfig{}
-	if p.Cfg != nil {
-		outboxCfg = p.Cfg.Get().Outbox
-		hatchetCfg = p.Cfg.Get().Hatchet
+	outboxCfg := Config{}
+	if p.Outbox != nil {
+		outboxCfg = *p.Outbox
 	}
 	var pub EventPublisher
-	if hatchetCfg.Enabled && hatchetCfg.OutboxPublisher && p.Hatchet != nil && p.Hatchet.Enabled() {
+	if p.HatchetCfg != nil && p.HatchetCfg.Enabled && p.HatchetCfg.OutboxPublisher && p.Hatchet != nil && p.Hatchet.Enabled() {
 		pub = &hatchetPublisher{client: p.Hatchet}
 		slog.Info("outbox: using Hatchet event publisher")
 	}
@@ -87,24 +85,30 @@ func (r *Relay) getPublisher() EventPublisher {
 	return r.publisher
 }
 
+// batchResult is the outcome of one [Relay.processBatch] call.
+type batchResult struct {
+	Published int
+	Claimed   int
+}
+
 // ProcessBatch claims and publishes up to batch_size pending (or stale processing) events.
+// The int result is the number of rows marked published.
 func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
+	res, err := r.processBatch(ctx)
+	return res.Published, err
+}
+
+func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 	if r == nil || r.client == nil {
-		return 0, fmt.Errorf("outbox: nil relay client")
+		return batchResult{}, fmt.Errorf("outbox: nil relay client")
 	}
 	pub := r.getPublisher()
 	if pub == nil {
-		return 0, fmt.Errorf("outbox: nil publisher")
+		return batchResult{}, fmt.Errorf("outbox: nil publisher")
 	}
 	batchSize := r.cfg.BatchSize
-	if batchSize <= 0 {
-		batchSize = 50
-	}
 	maxRetries := r.cfg.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 10
-	}
-	claimTimeout := r.cfg.ClaimTimeoutDuration()
+	claimTimeout := r.cfg.ClaimTimeout
 	staleBefore := time.Now().UTC().Add(-claimTimeout)
 
 	events, err := claimBatch(ctx, r.client.Conn(ctx), claimParams{
@@ -112,11 +116,12 @@ func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
 		StaleBefore: staleBefore,
 	})
 	if err != nil {
-		return 0, err
+		return batchResult{}, err
 	}
 	if len(events) == 0 {
-		return 0, nil
+		return batchResult{}, nil
 	}
+	out := batchResult{Claimed: len(events)}
 
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	var hbwg sync.WaitGroup
@@ -133,7 +138,6 @@ func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
 		hbwg.Wait()
 	}()
 
-	published := 0
 	for _, ev := range events {
 		meta := publishMetadata(ev)
 		if err := pub.PublishEvent(ctx, ev.Pubsub, ev.Topic, ev.Payload, meta); err != nil {
@@ -168,13 +172,13 @@ func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
 			)
 			continue
 		}
-		published++
+		out.Published++
 		slog.InfoContext(ctx, "outbox: published",
 			"id", ev.ID, "topic", ev.Topic, "pubsub", ev.Pubsub,
 			"idempotency_key", idempotencyKeyValue(ev),
 		)
 	}
-	return published, nil
+	return out, nil
 }
 
 func publishMetadata(ev OutboxEvent) map[string]string {
@@ -259,7 +263,11 @@ func (r *Relay) Run(ctx context.Context) {
 	if r == nil {
 		return
 	}
-	interval := r.cfg.PollDuration()
+	interval := r.cfg.PollInterval
+	if interval <= 0 {
+		slog.Error("outbox: poll_interval must be > 0")
+		return
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.mu.Lock()
 	r.cancel = cancel
@@ -271,16 +279,19 @@ func (r *Relay) Run(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		n, err := r.ProcessBatch(runCtx)
+		res, err := r.processBatch(runCtx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.ErrorContext(runCtx, "outbox: relay batch failed", "error", err)
 		}
-		// Always wait at least one tick between batches to avoid CPU/DB hot-loops on backlog.
+		// Full batch ⇒ likely more pending; drain without waiting a full poll tick.
+		// Empty/partial batches wait so a persistent error cannot hot-loop.
+		if err == nil && res.Claimed > 0 && res.Claimed >= r.cfg.BatchSize {
+			continue
+		}
 		select {
 		case <-runCtx.Done():
 			return
 		case <-ticker.C:
-			_ = n
 		}
 	}
 }

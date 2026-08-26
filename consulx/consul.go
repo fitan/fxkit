@@ -1,9 +1,9 @@
 // Package consulx 对接 Consul agent：可选自注册（TTL 心跳）与构建元数据补丁。
 //
 // [discovery.consul_address] 为空时模块不启用。
-// [discovery.register]=true 时注册 app.name（或 DAPR_APP_ID），写入本机 IP，并 TTL 保活；停机注销。
-// 另有元数据补丁：对已存在的同名同端口服务补全 version/commit 等（兼容 sidecar 先注册的场景）。
-// Consul 不可达时仅告警，不阻断启动。
+// [discovery.register]=true 时以 app.name 注册，写入本机 IP，并 TTL 保活；停机注销。
+// 另有元数据补丁：对已存在的同名同端口服务补全 version/commit 等（兼容 sidecar 先注册）。
+// 配置错误会阻断启动；Consul 不可达时仅告警。
 package consulx
 
 import (
@@ -15,13 +15,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/server"
 	"go.uber.org/fx"
 )
 
@@ -38,24 +38,24 @@ type agentService struct {
 }
 
 type agentCheck struct {
-	CheckID                           string   `json:"CheckID,omitempty"`
-	Name                              string   `json:"Name,omitempty"`
-	Notes                             string   `json:"Notes,omitempty"`
-	Status                            string   `json:"Status,omitempty"`
-	ServiceID                         string   `json:"ServiceID,omitempty"`
-	HTTP                              string   `json:"HTTP,omitempty"`
-	TCP                               string   `json:"TCP,omitempty"`
-	GRPC                              string   `json:"GRPC,omitempty"`
-	GRPCUseTLS                        bool     `json:"GRPCUseTLS,omitempty"`
-	Interval                          string   `json:"Interval,omitempty"`
-	Timeout                           string   `json:"Timeout,omitempty"`
-	TTL                               string   `json:"TTL,omitempty"`
-	DeregisterCriticalServiceAfter    string   `json:"DeregisterCriticalServiceAfter,omitempty"`
-	TLSSkipVerify                     bool     `json:"TLSSkipVerify,omitempty"`
-	Method                            string   `json:"Method,omitempty"`
-	Header                            map[string][]string `json:"Header,omitempty"`
-	SuccessBeforePassing              int      `json:"SuccessBeforePassing,omitempty"`
-	FailuresBeforeCritical            int      `json:"FailuresBeforeCritical,omitempty"`
+	CheckID                        string              `json:"CheckID,omitempty"`
+	Name                           string              `json:"Name,omitempty"`
+	Notes                          string              `json:"Notes,omitempty"`
+	Status                         string              `json:"Status,omitempty"`
+	ServiceID                      string              `json:"ServiceID,omitempty"`
+	HTTP                           string              `json:"HTTP,omitempty"`
+	TCP                            string              `json:"TCP,omitempty"`
+	GRPC                           string              `json:"GRPC,omitempty"`
+	GRPCUseTLS                     bool                `json:"GRPCUseTLS,omitempty"`
+	Interval                       string              `json:"Interval,omitempty"`
+	Timeout                        string              `json:"Timeout,omitempty"`
+	TTL                            string              `json:"TTL,omitempty"`
+	DeregisterCriticalServiceAfter string              `json:"DeregisterCriticalServiceAfter,omitempty"`
+	TLSSkipVerify                  bool                `json:"TLSSkipVerify,omitempty"`
+	Method                         string              `json:"Method,omitempty"`
+	Header                         map[string][]string `json:"Header,omitempty"`
+	SuccessBeforePassing           int                 `json:"SuccessBeforePassing,omitempty"`
+	FailuresBeforeCritical         int                 `json:"FailuresBeforeCritical,omitempty"`
 }
 
 type registerServiceRequest struct {
@@ -71,33 +71,32 @@ type registerServiceRequest struct {
 	Checks            []agentCheck      `json:"Checks,omitempty"`
 }
 
-// registerStartupMeta 装配 Fx OnStart hook，为配置端口上匹配 Dapr app id（或 app.name）的注册项补全 Consul agent 元数据。
-func registerStartupMeta(lc fx.Lifecycle, cfg *config.Config) {
+// registerStartupMeta 装配 Fx OnStart hook，为配置端口上匹配 app.name 的注册项补全 Consul agent 元数据。
+func registerStartupMeta(lc fx.Lifecycle, disc *Config, app *config.App, srv *server.Config) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			buildinfo.Normalize()
-			c := cfg.Get()
-			appName := consulServiceName(c.App.Name)
-			targetPort, _ := strconv.Atoi(strings.TrimSpace(c.Server.Port))
+			appName := ""
+			if app != nil {
+				appName = consulServiceName(app.Name)
+			}
+			targetPort := 0
+			if srv != nil {
+				targetPort, _ = strconv.Atoi(strings.TrimSpace(srv.Port))
+			}
 			if appName == "" || targetPort <= 0 {
 				return nil
 			}
-			consulAddr := strings.TrimSpace(c.Discovery.ConsulAddress)
+			consulAddr := ""
+			if disc != nil {
+				consulAddr = strings.TrimSpace(disc.ConsulAddress)
+			}
 			if consulAddr == "" {
 				return nil
 			}
 
 			httpClient := &http.Client{Timeout: 8 * time.Second}
-			meta := map[string]string{
-				"version":        buildinfo.Version,
-				"build_commit":   buildinfo.Commit,
-				"build_time":     buildinfo.BuildTime,
-				"build_built_by": buildinfo.BuiltBy,
-				"git_remote":     buildinfo.GitRemote,
-				"git_branch":     buildinfo.GitBranch,
-				"git_dirty":      buildinfo.Dirty,
-				"go_version":     buildinfo.GoVersion,
-			}
+			meta := buildinfo.Meta()
 
 			var lastErr error
 			for i := 0; i < 6; i++ {
@@ -130,12 +129,36 @@ func registerStartupMeta(lc fx.Lifecycle, cfg *config.Config) {
 	})
 }
 
-// consulServiceName 返回 Dapr 注册 Consul 时使用的逻辑服务名（DAPR_APP_ID），回退到 config 中的 app.name。
+// consulServiceName 是写入 Consul catalog 的逻辑服务名（app.name）。
 func consulServiceName(appNameFromConfig string) string {
-	if id := strings.TrimSpace(os.Getenv("DAPR_APP_ID")); id != "" {
-		return id
-	}
 	return strings.TrimSpace(appNameFromConfig)
+}
+
+// consulServiceID uniquely identifies a replica: name + advertise address + port.
+// Name+port alone collides when multiple hosts expose the same listen port.
+func consulServiceID(name, addr string, port int) string {
+	return name + "-" + sanitizeConsulIDPart(addr) + "-" + strconv.Itoa(port)
+}
+
+func sanitizeConsulIDPart(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "unknown"
+	}
+	return out
 }
 
 func patchConsulServiceMeta(
@@ -198,6 +221,7 @@ func listAgentServices(ctx context.Context, client *http.Client, base string) ([
 	if err != nil {
 		return nil, err
 	}
+	config.ApplyConsulToken(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -223,6 +247,7 @@ func listAgentChecksByService(ctx context.Context, client *http.Client, base str
 	if err != nil {
 		return nil, err
 	}
+	config.ApplyConsulToken(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -310,6 +335,7 @@ func registerServiceWithMeta(
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	config.ApplyConsulToken(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -325,6 +351,7 @@ func registerServiceWithMeta(
 // Module 将 Consul 自注册与元数据补丁接入 Fx。
 // discovery.consul_address 为空时为空操作；discovery.register 控制是否自注册。
 var Module = fx.Module("fxkit/consulx",
+	config.Provide[Config]("discovery"),
 	fx.Invoke(registerSelfLifecycle),
 	fx.Invoke(registerStartupMeta),
 )

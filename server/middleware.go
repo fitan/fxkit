@@ -47,7 +47,7 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 					w.Header().Add("Vary", "Origin")
 				}
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			// X-User is intentionally omitted; use Authorization (Bearer) in production.
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
@@ -71,20 +71,32 @@ func sseWriteDeadlineMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// otelMiddleware 用 otelhttp 包装每个请求，span 名称为 URL 路径。
+// otelMiddleware 用 otelhttp 包装每个请求。初始 span 名为 METHOD + 原始路径；
+// [routePatternMiddleware] 在路由匹配后改成 METHOD + chi pattern，避免高基数。
 // 跳过 Server-Sent-Event 路径，避免 trace context 占满长连接流。
 func otelMiddleware(next http.Handler) http.Handler {
 	return otelhttp.NewMiddleware("",
-		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-			return r.URL.Path
-		}),
+		otelhttp.WithSpanNameFormatter(httpSpanName),
 		otelhttp.WithFilter(func(r *http.Request) bool {
 			return !isSSERequestPath(r.URL.Path)
 		}),
 	)(next)
 }
 
-// routePatternMiddleware 将 chi 匹配的路由 pattern 附加到活跃 span。须在 [otelMiddleware] 之后运行以确保 span 存在。
+func httpSpanName(_ string, r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if pattern := rc.RoutePattern(); pattern != "" {
+			return r.Method + " " + pattern
+		}
+	}
+	if r.Pattern != "" {
+		return r.Method + " " + r.Pattern
+	}
+	return r.Method + " " + r.URL.Path
+}
+
+// routePatternMiddleware 将 chi 匹配的路由 pattern 设为 span 名并附加 attribute。
+// 须在 [otelMiddleware] 之后运行以确保 span 存在。
 func routePatternMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		span := trace.SpanFromContext(r.Context())
@@ -94,6 +106,7 @@ func routePatternMiddleware(next http.Handler) http.Handler {
 		}
 		if rc := chi.RouteContext(r.Context()); rc != nil {
 			if pattern := rc.RoutePattern(); pattern != "" {
+				span.SetName(r.Method + " " + pattern)
 				span.SetAttributes(attribute.String("http.route.pattern", pattern))
 			}
 		}

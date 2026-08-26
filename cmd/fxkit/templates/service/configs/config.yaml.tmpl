@@ -1,0 +1,77 @@
+server:
+  port: "8080"
+  log_payloads: false          # true 时记录 JSON 请求/响应体；生产慎开
+  cors_allowed_origins:        # 空 = 不设 CORS；显式 ["*"] 才允许任意源
+    - "http://localhost:3000"
+
+app:
+  name: "{{.AppName}}"         # Consul 注册名 / Huma 标题 / otel.service_name 回退
+{{if not .Minimal}}
+db:                            # fxkit/gormx；driver 或 dsn 空 = 不连库
+  driver: ""                   # mysql | postgres | sqlite
+  dsn: ""                      # compose: postgres://fxkit:fxkit@localhost:5432/fxkit?sslmode=disable
+  log_level: "warn"            # silent | error | warn | info
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 1h
+
+outbox:                        # fxkit/outbox；需 hatchet.enabled + outbox_publisher 才投递
+  enabled: false
+  poll_interval: 1s            # 必须 > 0
+  batch_size: 50
+  max_retries: 10
+  claim_timeout: 30s           # processing 租约；超时可被其他 relay 回收
+
+hatchet:                       # fxkit/hatchetx；token 也可用 HATCHET_CLIENT_TOKEN
+  enabled: false
+  token: ""                    # compose 后 make hatchet-token
+  host_port: "localhost:7077"  # loopback 默认 TLS none
+  namespace: ""
+  worker_name: "{{.AppName}}"
+  outbox_publisher: true
+
+auth:                          # fxkit/authz，仅覆盖 Huma
+  enabled: false
+  issuer: ""                   # OIDC issuer；Casbin + X-User 本地可不设
+  audience: ""
+  jwks_url: ""                 # 默认 {issuer}/jwks
+  org_claim: "organization_id"
+  require_org: false
+  deny_unregistered: false     # Casbin 关闭时：true = 未登记路由 403；false = 登录即可
+  dev_header_user: false       # true 允许 X-User；生产务必 false
+  tls_insecure: false          # 跳过 JWKS 证书校验；仅本地自签 IdP
+  casbin:
+    enabled: false
+    table_name: "casbin_rule"
+    auto_register_routes: true
+    bootstrap_role: "admin"
+    bootstrap_users: []        # 启动绑到 bootstrap_role，如 [alice]
+    auto_bind_bootstrap: false # 无角色 subject 自动绑 admin；生产务必 false
+    reload_interval: 5s        # 多副本重载策略；0s 关闭
+
+otel:                          # fxkit/otelx；compose otel-lgtm → localhost:4317
+  enabled: false
+  service_name: "{{.AppName}}" # 空则回退 app.name
+  service_version: "0.1.0"
+  environment: "development"
+  endpoint: "localhost:4317"
+  protocol: "grpc"             # grpc | http
+  insecure: true
+  sampling: "always_on"
+  traces:
+    enabled: true
+    exporter: "otlp"           # otlp | stdout
+  metrics:
+    enabled: true
+    exporter: "otlp"
+    runtime_metrics: true
+  logs:
+    enabled: true
+    exporter: "otlp"
+
+discovery:                     # consulx 注册 + reqx 发现
+  consul_address: ""           # compose: http://localhost:8500
+  consul_passing_only: true    # reqx 是否只取 healthy
+  register: false              # true = 以 app.name TTL 自注册
+  advertise_address: ""        # 空 = 自动本机 IP
+{{end}}

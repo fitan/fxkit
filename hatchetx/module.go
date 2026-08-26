@@ -59,6 +59,7 @@ type Registrar func(client *Client) ([]WorkflowBase, error)
 
 // Module provides [Client] and, when enabled, starts a worker for all [Registrar]s.
 var Module = fx.Module("fxkit/hatchetx",
+	config.Provide[Config]("hatchet"),
 	fx.Provide(NewClient),
 	fx.Provide(fx.Annotate(defaultRegistrars, fx.ResultTags(`group:"hatchet_registrars,flatten"`))),
 	fx.Invoke(registerLifecycle),
@@ -78,11 +79,11 @@ func ProvideRegistrar(fn any) fx.Option {
 // (see https://docs.hatchet.run/home/migration-guide-go). Yaml/config values are
 // applied as env defaults when the corresponding env var is unset — avoiding
 // deprecated pkg/client WithToken / WithHostPort / WithNamespace opts.
-func NewClient(cfg *config.Config) (*Client, error) {
-	if cfg == nil || !cfg.Get().Hatchet.Enabled {
+func NewClient(cfg *Config) (*Client, error) {
+	if cfg == nil || !cfg.Enabled {
 		return &Client{}, nil
 	}
-	if err := applyHatchetEnv(cfg.Get().Hatchet); err != nil {
+	if err := applyHatchetEnv(*cfg); err != nil {
 		return nil, err
 	}
 	sdk, err := hatchet.NewClient()
@@ -94,7 +95,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 // applyHatchetEnv bridges fxkit yaml config into the env vars the SDK reads.
 // Existing process env wins (do not overwrite).
-func applyHatchetEnv(hcfg config.HatchetConfig) error {
+func applyHatchetEnv(hcfg Config) error {
 	if hcfg.Token != "" {
 		setenvIfEmpty("HATCHET_CLIENT_TOKEN", hcfg.Token)
 	}
@@ -185,19 +186,16 @@ func (c *Client) Crons() *features.CronsClient {
 type lifecycleParams struct {
 	fx.In
 	LC         fx.Lifecycle
-	Cfg        *config.Config
+	Cfg        *Config
 	Client     *Client
 	Registrars []Registrar `group:"hatchet_registrars"`
 }
 
 func registerLifecycle(p lifecycleParams) {
-	if p.Cfg == nil || !p.Cfg.Get().Hatchet.Enabled || !p.Client.Enabled() {
+	if p.Cfg == nil || !p.Cfg.Enabled || !p.Client.Enabled() {
 		return
 	}
-	workerName := p.Cfg.Get().Hatchet.WorkerName
-	if workerName == "" {
-		workerName = "fxkit-worker"
-	}
+	workerName := p.Cfg.WorkerName
 
 	var cleanup func() error
 	p.LC.Append(fx.Hook{

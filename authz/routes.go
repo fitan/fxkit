@@ -38,14 +38,8 @@ func (r HTTPRoute) match(method, path string) bool {
 }
 
 func pathMatches(pattern, path string) bool {
-	pattern = strings.TrimSuffix(pattern, "/")
-	path = strings.TrimSuffix(path, "/")
-	if pattern == "" {
-		pattern = "/"
-	}
-	if path == "" {
-		path = "/"
-	}
+	pattern = normalizeRequestPath(pattern)
+	path = normalizeRequestPath(path)
 	pp := splitPath(pattern)
 	sp := splitPath(path)
 	if len(pp) != len(sp) {
@@ -62,6 +56,17 @@ func pathMatches(pattern, path string) bool {
 	return true
 }
 
+// normalizeRequestPath trims space and a trailing slash so findRoute and Casbin
+// Enforce see the same path (GET /users/ ≡ /users).
+func normalizeRequestPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimSuffix(path, "/")
+	if path == "" {
+		return "/"
+	}
+	return path
+}
+
 func splitPath(p string) []string {
 	p = strings.Trim(p, "/")
 	if p == "" {
@@ -71,17 +76,65 @@ func splitPath(p string) []string {
 }
 
 func findRoute(routes []HTTPRoute, method, path string) (HTTPRoute, bool) {
+	return indexRoutes(routes).find(method, path)
+}
+
+// skipAuthzPath is true for built-in Huma spec/docs/schema routes (always public).
+func skipAuthzPath(path string) bool {
+	p := normalizeRequestPath(path)
+	switch {
+	case strings.HasPrefix(p, "/huma/openapi"),
+		strings.HasPrefix(p, "/openapi.json"),
+		strings.HasPrefix(p, "/openapi.yaml"),
+		strings.HasPrefix(p, "/openapi-3.0"),
+		p == "/openapi":
+		return true
+	case p == "/docs", strings.HasPrefix(p, "/docs/"):
+		return true
+	case p == "/schemas", strings.HasPrefix(p, "/schemas/"):
+		return true
+	default:
+		return false
+	}
+}
+
+type routeIndex struct {
+	byMethod map[string][]HTTPRoute
+	any      []HTTPRoute
+}
+
+func indexRoutes(routes []HTTPRoute) routeIndex {
+	idx := routeIndex{byMethod: map[string][]HTTPRoute{}}
+	for _, r := range routes {
+		m := strings.ToUpper(strings.TrimSpace(r.Method))
+		if m == "" {
+			idx.any = append(idx.any, r)
+			continue
+		}
+		idx.byMethod[m] = append(idx.byMethod[m], r)
+	}
+	return idx
+}
+
+func (idx routeIndex) find(method, path string) (HTTPRoute, bool) {
+	method = strings.ToUpper(strings.TrimSpace(method))
 	var best HTTPRoute
 	bestScore := -1
-	for _, r := range routes {
+	consider := func(r HTTPRoute) {
 		if !r.match(method, path) {
-			continue
+			return
 		}
 		score := routeSpecificity(r)
 		if score > bestScore {
 			best = r
 			bestScore = score
 		}
+	}
+	for _, r := range idx.byMethod[method] {
+		consider(r)
+	}
+	for _, r := range idx.any {
+		consider(r)
 	}
 	if bestScore < 0 {
 		return HTTPRoute{}, false

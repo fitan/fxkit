@@ -89,3 +89,21 @@ func TestRBAC_RolePermissionsAndBindings(t *testing.T) {
 		t.Fatalf("after delete perms=%+v err=%v", perms, err)
 	}
 }
+
+func TestEnforce_TrailingSlashNeedsNormalize(t *testing.T) {
+	e, err := authz.NewMemoryEnforcer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if err := e.AddPolicies([]authz.Policy{{Sub: "admin", Obj: "/users", Act: "GET"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddRoleBindings([]authz.RoleBinding{{User: "alice", Role: "admin"}}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := e.Enforce(ctx, authz.EnforceInput{Sub: "alice", Obj: "/users/", Act: "GET"})
+	if err != nil || !ok {
+		t.Fatalf("trailing slash should match /users: ok=%v err=%v", ok, err)
+	}
+}

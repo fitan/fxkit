@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/server"
 )
 
 func TestDetectLocalIP_SkipsEmptyConsul(t *testing.T) {
@@ -16,9 +17,9 @@ func TestDetectLocalIP_SkipsEmptyConsul(t *testing.T) {
 	}
 }
 
-func TestResolveAdvertise_EnvWins(t *testing.T) {
-	t.Setenv("FXKIT_ADVERTISE_ADDRESS", "9.9.9.9")
-	if got := resolveAdvertise(nil); got.Addr != "9.9.9.9" || !got.Explicit {
+func TestResolveAdvertise_ConfigWins(t *testing.T) {
+	got := resolveAdvertise(&Config{AdvertiseAddress: "9.9.9.9"})
+	if got.Addr != "9.9.9.9" || !got.Explicit {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -33,17 +34,11 @@ func TestIsLoopbackAddr(t *testing.T) {
 }
 
 func TestRegisterSelf_RequiresConsulAddress(t *testing.T) {
-	cfg, err := config.New(config.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Viper().Set("discovery.register", true)
-	cfg.Viper().Set("discovery.consul_address", "")
-	if err := cfg.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	_, err = registerSelf(context.Background(), cfg)
+	_, err := registerSelf(context.Background(), &Config{Register: true}, &config.App{Name: "orders"}, &server.Config{Port: "8080"})
 	if err == nil || !strings.Contains(err.Error(), "consul_address") {
 		t.Fatalf("err=%v", err)
+	}
+	if !isRegisterConfigError(err) {
+		t.Fatalf("want config error, got %T %v", err, err)
 	}
 }

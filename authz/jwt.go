@@ -12,6 +12,7 @@ import (
 	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
+	"go.uber.org/fx"
 )
 
 // TokenValidator validates a raw Bearer access token into a [Subject].
@@ -25,14 +26,11 @@ type TokenValidator interface {
 // NewValidator builds a JWKS-backed validator when auth.enabled；否则返回 nil。
 // Casbin + DevHeaderUser 本地模式可不配置 issuer/audience（仅用 X-User 认人）。
 func NewValidator(p validatorParams) (TokenValidator, error) {
-	if p.Config == nil {
-		return nil, nil
-	}
-	c := p.Config.Get().Auth
-	if !c.Enabled {
+	if p.Config == nil || !p.Config.Enabled {
 		slog.Info("auth jwt validator disabled")
 		return nil, nil
 	}
+	c := p.Config
 	issuer := strings.TrimSpace(c.Issuer)
 	audience := strings.TrimSpace(c.Audience)
 	if issuer == "" || audience == "" {
@@ -50,9 +48,6 @@ func NewValidator(p validatorParams) (TokenValidator, error) {
 		jwksURL = strings.TrimRight(issuer, "/") + "/jwks"
 	}
 	orgClaim := strings.TrimSpace(c.OrgClaim)
-	if orgClaim == "" {
-		orgClaim = "organization_id"
-	}
 
 	// jwx/v3 cache (auto-refresh JWKS). Logto docs use jwk.Fetch once; Cache is the
 	// production equivalent for a stable IdP JWKS endpoint.
@@ -80,6 +75,7 @@ func NewValidator(p validatorParams) (TokenValidator, error) {
 		regOpts = append(regOpts, jwk.WithHTTPClient(httpClient))
 	}
 	if err := cache.Register(regCtx, jwksURL, regOpts...); err != nil {
+		_ = cache.Shutdown(context.Background())
 		return nil, fmt.Errorf("auth: register jwks %s: %w", jwksURL, err)
 	}
 
@@ -90,14 +86,22 @@ func NewValidator(p validatorParams) (TokenValidator, error) {
 		"org_claim", orgClaim,
 		"tls_insecure", c.TLSInsecure,
 	)
-	return &jwksValidator{
+	v := &jwksValidator{
 		issuer:     issuer,
 		audience:   audience,
 		jwksURL:    jwksURL,
 		orgClaim:   orgClaim,
 		requireOrg: c.RequireOrg,
 		cache:      cache,
-	}, nil
+	}
+	if p.LC != nil {
+		p.LC.Append(fx.Hook{
+			OnStop: func(ctx context.Context) error {
+				return cache.Shutdown(ctx)
+			},
+		})
+	}
+	return v, nil
 }
 
 type jwksValidator struct {

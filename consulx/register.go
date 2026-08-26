@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,28 +16,56 @@ import (
 
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/server"
 	"go.uber.org/fx"
 )
 
 const (
-	defaultTTL              = "15s"
-	defaultDeregisterAfter  = "1m"
-	ttlPassInterval         = 5 * time.Second
+	defaultTTL             = "15s"
+	defaultDeregisterAfter = "1m"
+	ttlPassInterval        = 5 * time.Second
 )
+
+type registerConfigError struct{ msg string }
+
+func (e *registerConfigError) Error() string { return e.msg }
+
+func registerConfigErrorf(format string, args ...any) error {
+	return &registerConfigError{msg: fmt.Sprintf(format, args...)}
+}
+
+func isRegisterConfigError(err error) bool {
+	var e *registerConfigError
+	return errors.As(err, &e)
+}
+
+type registerSelfParams struct {
+	fx.In
+	LC     fx.Lifecycle
+	Disc   *Config
+	App    *config.App          `optional:"true"`
+	Server *server.Config       `optional:"true"`
+	HTTP   *server.HTTPServer   `optional:"true"` // start-order: listen before register
+}
 
 // registerSelfLifecycle registers app.name on the Consul agent when discovery.register is true.
 // Uses a TTL check (process heartbeats) so remote/Docker Consul need not HTTP-probe the app.
-func registerSelfLifecycle(lc fx.Lifecycle, cfg *config.Config) {
-	if cfg == nil {
+func registerSelfLifecycle(p registerSelfParams) {
+	if p.Disc == nil {
 		return
 	}
+	_ = p.HTTP // depend on listener so the port is bound before TTL registration
 	var cancelTTL context.CancelFunc
 	var registeredID string
-	lc.Append(fx.Hook{
+	p.LC.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			id, err := registerSelf(ctx, cfg)
+			id, err := registerSelf(ctx, p.Disc, p.App, p.Server)
 			if err != nil {
-				return err
+				if isRegisterConfigError(err) {
+					return err
+				}
+				slog.Warn("consul register skipped", "error", err)
+				return nil
 			}
 			if id == "" {
 				return nil
@@ -44,7 +73,7 @@ func registerSelfLifecycle(lc fx.Lifecycle, cfg *config.Config) {
 			registeredID = id
 			ttlCtx, cancel := context.WithCancel(context.Background())
 			cancelTTL = cancel
-			go ttlPassLoop(ttlCtx, cfg, id)
+			go ttlPassLoop(ttlCtx, p.Disc, id)
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
@@ -54,7 +83,7 @@ func registerSelfLifecycle(lc fx.Lifecycle, cfg *config.Config) {
 			if registeredID == "" {
 				return nil
 			}
-			if err := deregisterSelf(ctx, cfg, registeredID); err != nil {
+			if err := deregisterSelf(ctx, p.Disc, registeredID); err != nil {
 				slog.Warn("consul deregister skipped", "error", err)
 			}
 			return nil
@@ -62,30 +91,37 @@ func registerSelfLifecycle(lc fx.Lifecycle, cfg *config.Config) {
 	})
 }
 
-func registerSelf(ctx context.Context, cfg *config.Config) (string, error) {
-	c := cfg.Get()
-	if !c.Discovery.Register {
+func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *server.Config) (string, error) {
+	if disc == nil || !disc.Register {
 		return "", nil
 	}
-	baseAddr := strings.TrimSpace(c.Discovery.ConsulAddress)
+	baseAddr := strings.TrimSpace(disc.ConsulAddress)
 	if baseAddr == "" {
-		return "", fmt.Errorf("discovery.register=true requires discovery.consul_address")
+		return "", registerConfigErrorf("discovery.register=true requires discovery.consul_address")
 	}
-	name := consulServiceName(c.App.Name)
+	name := ""
+	if app != nil {
+		name = consulServiceName(app.Name)
+	}
 	if name == "" {
-		return "", fmt.Errorf("app.name empty")
+		return "", registerConfigErrorf("app.name empty")
 	}
-	port, _ := strconv.Atoi(strings.TrimSpace(c.Server.Port))
+	port := 0
+	if srv != nil {
+		port, _ = strconv.Atoi(strings.TrimSpace(srv.Port))
+	}
 	if port <= 0 {
-		return "", fmt.Errorf("invalid server.port")
+		return "", registerConfigErrorf("invalid server.port")
 	}
 
-	adv := resolveAdvertise(cfg)
+	adv := resolveAdvertise(disc)
 	if isLoopbackAddr(adv.Addr) && !adv.Explicit {
-		return "", fmt.Errorf("discovery.register: advertise %q is loopback; set discovery.advertise_address or FXKIT_ADVERTISE_ADDRESS", adv.Addr)
+		return "", registerConfigErrorf("discovery.register: advertise %q is loopback; set discovery.advertise_address", adv.Addr)
 	}
-	id := name + "-" + strconv.Itoa(port)
+	id := consulServiceID(name, adv.Addr, port)
 	buildinfo.Normalize()
+	meta := buildinfo.Meta()
+	meta["module"] = "fxkit/consulx"
 
 	payload := registerServiceRequest{
 		ID:      id,
@@ -93,14 +129,10 @@ func registerSelf(ctx context.Context, cfg *config.Config) (string, error) {
 		Address: adv.Addr,
 		Port:    port,
 		Tags:    []string{"fxkit", "http"},
-		Meta: map[string]string{
-			"version":        buildinfo.Version,
-			"build_commit":   buildinfo.Commit,
-			"build_time":     buildinfo.BuildTime,
-			"build_built_by": buildinfo.BuiltBy,
-			"module":         "fxkit/consulx",
-		},
+		Meta:    meta,
 		Checks: []agentCheck{{
+			CheckID:                        "service:" + id,
+			Name:                           "TTL " + name,
 			TTL:                            defaultTTL,
 			DeregisterCriticalServiceAfter: defaultDeregisterAfter,
 		}},
@@ -119,6 +151,7 @@ func registerSelf(ctx context.Context, cfg *config.Config) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	config.ApplyConsulToken(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -135,8 +168,11 @@ func registerSelf(ctx context.Context, cfg *config.Config) (string, error) {
 	return id, nil
 }
 
-func ttlPassLoop(ctx context.Context, cfg *config.Config, serviceID string) {
-	baseAddr := strings.TrimSpace(cfg.Get().Discovery.ConsulAddress)
+func ttlPassLoop(ctx context.Context, disc *Config, serviceID string) {
+	if disc == nil {
+		return
+	}
+	baseAddr := strings.TrimSpace(disc.ConsulAddress)
 	if baseAddr == "" || serviceID == "" {
 		return
 	}
@@ -165,6 +201,7 @@ func passTTL(ctx context.Context, client *http.Client, agentBase, serviceID stri
 	if err != nil {
 		return err
 	}
+	config.ApplyConsulToken(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -177,8 +214,11 @@ func passTTL(ctx context.Context, client *http.Client, agentBase, serviceID stri
 	return nil
 }
 
-func deregisterSelf(ctx context.Context, cfg *config.Config, serviceID string) error {
-	baseAddr := strings.TrimSpace(cfg.Get().Discovery.ConsulAddress)
+func deregisterSelf(ctx context.Context, disc *Config, serviceID string) error {
+	if disc == nil {
+		return nil
+	}
+	baseAddr := strings.TrimSpace(disc.ConsulAddress)
 	if baseAddr == "" || serviceID == "" {
 		return nil
 	}
@@ -190,6 +230,7 @@ func deregisterSelf(ctx context.Context, cfg *config.Config, serviceID string) e
 	if err != nil {
 		return err
 	}
+	config.ApplyConsulToken(req)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return err

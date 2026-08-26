@@ -11,8 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Repo is a one-layer generic GORM repository for model T.
-// Feature packages embed *Repo[T] and only add domain-specific queries.
+// Repo is an optional generic GORM helper. Prefer [List] plus explicit service
+// methods for writes; new code does not need to embed *Repo[T].
 type Repo[T any] struct {
 	client        *gormx.Client
 	spec          ListSpec
@@ -46,7 +46,8 @@ type WhereInput struct {
 	Detail string // optional NotFound detail, e.g. "email=a@example.com"
 }
 
-// NewRepo constructs a typed repository. Call once at wiring time (e.g. Fx Provide).
+// NewRepo constructs an optional typed repository. Call once at wiring time if you
+// use [Repo]; most services should call [List] / [FirstByID] instead.
 func NewRepo[T any](cfg RepoConfig) (*Repo[T], error) {
 	if cfg.Client == nil || cfg.Client.Pool() == nil {
 		return nil, fxerrors.Internal("crudx.Repo: nil gorm client")

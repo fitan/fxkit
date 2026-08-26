@@ -12,12 +12,15 @@ require (
 	github.com/hatchet-dev/hatchet v0.93.1
 	github.com/imroc/req/v3 v3.59.0
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/knadh/koanf/parsers/yaml v1.1.1
+	github.com/knadh/koanf/providers/file v1.2.1
+	github.com/knadh/koanf/providers/rawbytes v1.0.1
+	github.com/knadh/koanf/v2 v2.3.6
 	github.com/lestrrat-go/httprc/v3 v3.0.5
 	github.com/lestrrat-go/jwx/v3 v3.1.1
 	github.com/mattn/go-isatty v0.0.22
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/viper v1.21.0
 	go.opentelemetry.io/contrib/bridges/otelslog v0.18.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.68.0
@@ -89,6 +92,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/labstack/echo/v4 v4.15.1 // indirect
@@ -101,7 +105,9 @@ require (
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.1-0.20220423185008-bf980b35cac4 // indirect
+	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
 	github.com/oapi-codegen/runtime v1.4.0 // indirect
 	github.com/oasdiff/yaml v0.0.9 // indirect
@@ -121,6 +127,7 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/viper v1.21.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect

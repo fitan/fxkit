@@ -1,0 +1,82 @@
+# {{.AppName}}
+
+Monorepo scaffolded with [fxkit](https://github.com/fitan/fxkit). One Go module, services under `services/`.
+
+## Layout
+
+```
+.
+├── docker-compose.yml   # postgres / hatchet / consul / otel
+├── deploy/postgres/     # extra DBs created on first postgres start
+├── go.mod
+├── Makefile
+└── services/
+    └── <name>/
+        ├── cmd/main.go
+        ├── configs/config.yaml
+        └── internal/hello/
+```
+
+## Add a service
+
+```bash
+fxkit new mysvc
+# HTTP-only bundle:
+fxkit new mysvc --minimal
+```
+
+## Run
+
+```bash
+make run SVC=mysvc
+# or
+go run ./services/mysvc/cmd serve --config services/mysvc/configs/config.yaml
+```
+
+Visit:
+
+- `GET /greet/{name}` — sample Huma handler
+- `GET /docs` — Scalar API reference
+- `GET /healthz` — liveness
+
+Local ports default to `8080` per service; change `server.port` or pass `--port` when running more than one.
+
+## Local middleware
+
+`fxkit.Default()` 可选依赖（Postgres、Hatchet、Consul、OTLP）由仓库根 `docker-compose.yml` 提供：
+
+```bash
+make infra
+make hatchet-token   # 复制为 HATCHET_CLIENT_TOKEN；也可在 http://localhost:8888 Settings → API Tokens 查看
+```
+
+| 服务 | 端口 | 用途 |
+|------|------|------|
+| postgres | 5432 | gormx / outbox / Casbin（库 `fxkit`）；Hatchet 库 `hatchet` |
+| hatchet | 8888 / 7077 | dashboard / gRPC |
+| consul | 8500 | 注册与发现 |
+| otel-lgtm | 4317 / 3300 | OTLP gRPC / Grafana（admin/admin） |
+
+服务配置示例（按需打开对应开关）：
+
+```yaml
+db:
+  driver: postgres
+  dsn: "postgres://fxkit:fxkit@localhost:5432/fxkit?sslmode=disable"
+hatchet:
+  enabled: true
+  token: "<paste make hatchet-token>"
+  host_port: "localhost:7077"
+otel:
+  enabled: true
+  endpoint: "localhost:4317"
+discovery:
+  consul_address: "http://localhost:8500"
+  register: true
+```
+
+停止：`make infra-down`（保留 volume）。鉴权 IdP 不在此栈；本地用 `auth.dev_header_user` + `X-User`。
+
+## Config
+
+Each service has `services/<name>/configs/config.yaml`. Override with Consul KV (`--consul` / `--consul-key`) or CLI `--port`.

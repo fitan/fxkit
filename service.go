@@ -1,6 +1,7 @@
 package fxkit
 
 import (
+	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/server"
 	"go.uber.org/fx"
 )
@@ -30,6 +31,18 @@ func Provide(ctors ...any) ServiceOption {
 		out = append(out, fx.Provide(c))
 	}
 	return ServiceOption{options: out}
+}
+
+// ProvideConfig 把 YAML 顶层 key 解成 *T 并注入（等价于 [config.Provide]）。
+//
+//	type OrdersConfig struct {
+//	    PageSize int `yaml:"page_size"`
+//	}
+//	var Module = fxkit.Service("orders", NewService,
+//	    fxkit.ProvideConfig[OrdersConfig]("orders"),
+//	)
+func ProvideConfig[T any](key string) ServiceOption {
+	return ServiceOption{options: []fx.Option{config.Provide[T](key)}}
 }
 
 // Invoke 包装 fx.Invoke。

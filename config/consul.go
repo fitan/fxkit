@@ -40,7 +40,7 @@ func fetchConsulKV(ctx context.Context, in fetchConsulKVInput) ([]byte, error) {
 	}
 	token := strings.TrimSpace(in.Token)
 	if token == "" {
-		token = strings.TrimSpace(os.Getenv(envConsulHTTPToken))
+		token = ConsulHTTPToken()
 	}
 
 	u, err := url.Parse(base + "/v1/kv/" + key)
@@ -97,4 +97,19 @@ func normalizeConsulHTTPAddr(addr string) (string, error) {
 		return "", fmt.Errorf("invalid consul address %q: missing host", addr)
 	}
 	return strings.TrimRight(u.String(), "/"), nil
+}
+
+// ConsulHTTPToken 返回 CONSUL_HTTP_TOKEN（已 trim）；未设置则为空。
+func ConsulHTTPToken() string {
+	return strings.TrimSpace(os.Getenv(envConsulHTTPToken))
+}
+
+// ApplyConsulToken 在 CONSUL_HTTP_TOKEN 非空时设置 X-Consul-Token。
+func ApplyConsulToken(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if tok := ConsulHTTPToken(); tok != "" {
+		req.Header.Set("X-Consul-Token", tok)
+	}
 }

@@ -1,0 +1,57 @@
+// Package hello 是脚手架示例服务：Huma JSON greet 端点。
+// 复制/重命名后作为新服务包的模板，并将生成的 Module 接入 cmd/main.go。
+package hello
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/fitan/fxkit"
+	fxhuma "github.com/fitan/fxkit/huma"
+	"go.uber.org/fx"
+)
+
+type Service struct{}
+
+func NewService() *Service {
+	return &Service{}
+}
+
+type GreetInput struct {
+	Name string `path:"name" doc:"Greeting target"`
+}
+
+type GreetOutput struct {
+	Body struct {
+		Greeting string `json:"greeting"`
+	}
+}
+
+func (s *Service) Greet(_ context.Context, in *GreetInput) (*GreetOutput, error) {
+	name := in.Name
+	if name == "" {
+		name = "World"
+	}
+	out := &GreetOutput{}
+	out.Body.Greeting = fmt.Sprintf("Hello, %s!", name)
+	return out, nil
+}
+
+func Register(svc *Service) fxhuma.Registrar {
+	return fxhuma.FuncRegistrar(func(api huma.API) {
+		fxhuma.Register(api, huma.Operation{
+			OperationID: "greet",
+			Method:      http.MethodGet,
+			Path:        "/greet/{name}",
+			Summary:     "Greet by name",
+			Tags:        []string{"Hello"},
+		}, svc.Greet)
+	})
+}
+
+var Module = fx.Options(
+	fxkit.Service("hello", NewService),
+	fxhuma.ProvideRegistrar(Register),
+)

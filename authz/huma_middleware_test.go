@@ -228,6 +228,21 @@ func TestHumaMiddleware_AutoBindBootstrap(t *testing.T) {
 	}
 }
 
+func TestHumaMiddleware_DevHeaderIgnoresBearerWithoutValidator(t *testing.T) {
+	api := installMiddleware(t, authz.HumaMiddlewareConfig{
+		Enabled:       true,
+		DevHeaderUser: true,
+		Routes:        testRoutes(),
+		SubjectFunc: func(_ context.Context, h http.Header) authz.Subject {
+			return authz.Subject{ID: h.Get("X-User"), Permissions: []string{"users:list"}}
+		},
+	})
+	resp := api.Get("/users", "Authorization: Bearer leftover", "X-User: bob")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestSubject_Has(t *testing.T) {
 	s := authz.Subject{Permissions: []string{"users:list", "orders:*"}}
 	if !s.Has("users:list") || s.Has("users:create") {
@@ -248,5 +263,79 @@ func TestHumaPathToCasbin(t *testing.T) {
 	}
 	if got := authz.HumaPathToCasbin("/users"); got != "/users" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestHumaMiddleware_UnlistedRequiresLogin(t *testing.T) {
+	_, api := humatest.New(t)
+	reg := authz.NewHumaMiddleware(authz.HumaMiddlewareConfig{
+		Enabled:       true,
+		DevHeaderUser: true,
+		Routes:        testRoutes(),
+		SubjectFunc: func(_ context.Context, h http.Header) authz.Subject {
+			return authz.Subject{ID: h.Get("X-User")}
+		},
+	})
+	if m := reg.Middleware(api); m != nil {
+		api.UseMiddleware(m)
+	}
+	huma.Register(api, huma.Operation{OperationID: "secret", Method: http.MethodGet, Path: "/secret"},
+		func(ctx context.Context, _ *struct{}) (*listOutput, error) {
+			out := &listOutput{}
+			out.Body.OK = true
+			return out, nil
+		})
+	if resp := api.Get("/secret"); resp.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := api.Get("/secret", "X-User: bob"); resp.Code != http.StatusOK {
+		t.Fatalf("logged in unlisted: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestHumaMiddleware_DenyUnregistered(t *testing.T) {
+	_, api := humatest.New(t)
+	reg := authz.NewHumaMiddleware(authz.HumaMiddlewareConfig{
+		Enabled:          true,
+		DevHeaderUser:    true,
+		DenyUnregistered: true,
+		Routes:           testRoutes(),
+		SubjectFunc: func(_ context.Context, h http.Header) authz.Subject {
+			return authz.Subject{ID: h.Get("X-User")}
+		},
+	})
+	if m := reg.Middleware(api); m != nil {
+		api.UseMiddleware(m)
+	}
+	huma.Register(api, huma.Operation{OperationID: "secret", Method: http.MethodGet, Path: "/secret"},
+		func(ctx context.Context, _ *struct{}) (*listOutput, error) {
+			out := &listOutput{}
+			out.Body.OK = true
+			return out, nil
+		})
+	if resp := api.Get("/secret", "X-User: bob"); resp.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestHumaMiddleware_OpPublic(t *testing.T) {
+	_, api := humatest.New(t)
+	reg := authz.NewHumaMiddleware(authz.HumaMiddlewareConfig{
+		Enabled: true,
+		Routes:  testRoutes(),
+	})
+	if m := reg.Middleware(api); m != nil {
+		api.UseMiddleware(m)
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "health", Method: http.MethodGet, Path: "/ready",
+		Metadata: map[string]any{authz.OpPublic: true},
+	}, func(ctx context.Context, _ *struct{}) (*listOutput, error) {
+		out := &listOutput{}
+		out.Body.OK = true
+		return out, nil
+	})
+	if resp := api.Get("/ready"); resp.Code != http.StatusOK {
+		t.Fatalf("public op: status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }

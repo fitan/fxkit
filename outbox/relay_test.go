@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/outbox"
 )
 
@@ -49,7 +48,7 @@ func TestRelay_ProcessBatch_PublishesAndMarksPublished(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{}
 	relay.SetPublisher(pub)
 	n, err := relay.ProcessBatch(ctx)
@@ -98,16 +97,10 @@ func TestRelay_ProcessBatch_PublishFailClearsLockAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := config.New(config.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Viper().Set("outbox.max_retries", 3)
-	if err := cfg.Sync(); err != nil {
-		t.Fatal(err)
-	}
+	oc := mustOutboxCfg(t)
+	oc.MaxRetries = 3
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: cfg})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: oc})
 	pub := &mockPublisher{err: errPublish}
 	relay.SetPublisher(pub)
 
@@ -175,7 +168,7 @@ func TestRelay_StaleMarkFailedDoesNotResurrectPublished(t *testing.T) {
 		return errPublish
 	}}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	relay.SetPublisher(pub)
 	n, err := relay.ProcessBatch(ctx)
 	if err != nil {
@@ -208,16 +201,10 @@ func TestRelay_ProcessBatch_MaxRetriesMarksFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := config.New(config.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Viper().Set("outbox.max_retries", 2)
-	if err := cfg.Sync(); err != nil {
-		t.Fatal(err)
-	}
+	oc := mustOutboxCfg(t)
+	oc.MaxRetries = 2
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: cfg})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: oc})
 	relay.SetPublisher(&mockPublisher{err: errPublish})
 
 	if _, err := relay.ProcessBatch(ctx); err != nil {

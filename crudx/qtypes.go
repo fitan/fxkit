@@ -50,7 +50,8 @@ type RelationSpec struct {
 	Nested map[string]*RelationSpec
 }
 
-// ListSpec configures [ApplyList] field registry, joins, sort mapping, and limits.
+// ListSpec is the filter/sort whitelist for [List] / [ApplyList].
+// Only names listed here may appear in q= or sortBy.
 type ListSpec struct {
 	Fields      map[string]FieldSpec
 	Relations   map[string]*RelationSpec

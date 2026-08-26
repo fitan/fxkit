@@ -34,10 +34,8 @@ type ListInput[M, Row any] struct {
 	Preload func(*gorm.DB) *gorm.DB // optional preload applied before Find
 }
 
-// List runs a ZStack-style list query (filters, sort, offset or keyset cursor)
-// and projects the fetched rows via in.ToRow. It is a thin free-function
-// replacement for the former generic CRUD service; callers own the *gorm.DB and
-// the DTO mapping.
+// List runs a ZStack-style list query (filters, sort, offset or keyset cursor),
+// optional count, nextCursor, and DTO projection. Callers own the *gorm.DB.
 func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row], error) {
 	if in.ToRow == nil {
 		return ListResult[Row]{}, fxerrors.Internal("crudx.List: ToRow is required")
@@ -60,9 +58,10 @@ func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row
 	}
 
 	params := in.Params
+	pkCol := qualifiedColumn(meta.Table, meta.Column)
 	// Filter/sort/cursor without Limit/Offset so Count is accurate regardless of GORM version.
-	tx, err = applyList(tx, in.Spec, &params, listApplyOpts{
-		PKColumn:   meta.Column,
+	tx, _, err = applyList(tx, in.Spec, &params, listApplyOpts{
+		PKColumn:   pkCol,
 		PKKind:     meta.Kind,
 		SkipPaging: true,
 	})
@@ -78,8 +77,8 @@ func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row
 		var n int64
 		// Distinct on PK avoids inflated totals when filters introduce JOINs.
 		countTx := tx.Session(&gorm.Session{})
-		if meta.Column != "" {
-			countTx = countTx.Distinct(meta.Column)
+		if pkCol != "" {
+			countTx = countTx.Distinct(pkCol)
 		}
 		if err := countTx.Count(&n).Error; err != nil {
 			return ListResult[Row]{}, fxerrors.Wrap(err)
@@ -145,6 +144,9 @@ func nextCursor[M any](last *M, params ListParams, spec ListSpec, meta *ModelMet
 	sortBy, sortDir := params.SortBy, params.SortDirection
 	if sortBy == "" {
 		sortBy, sortDir = ParseSort(spec.DefaultSort)
+	}
+	if err := rejectRelationCursor(spec, &params, sortBy); err != nil {
+		return "", err
 	}
 	sv, err := readSortValue(last, sortBy, spec, meta)
 	if err != nil {

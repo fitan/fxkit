@@ -182,8 +182,10 @@ type ensurePoolInput struct {
 }
 
 func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
-	// reqx defaults to healthy-only; override via ClientInput.PassingOnly.
-	passingOnly := resolvePassingOnly(in.PassingOnly, f.cfg)
+	passingOnly, consulAddr, err := discoverySettings(in.PassingOnly, f.cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	key := poolKey(in.Name, passingOnly, in.Seeds)
 
@@ -196,11 +198,6 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 
 	pool := newEndpointPool(in.Seeds)
 	watchCtx, watchCancel := context.WithCancel(f.root)
-
-	consulAddr := ""
-	if f.cfg != nil {
-		consulAddr = strings.TrimSpace(f.cfg.Get().Discovery.ConsulAddress)
-	}
 
 	if in.Name != "" && consulAddr != "" {
 		base, err := normalizeConsulBase(consulAddr)
@@ -234,14 +231,21 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 	return pool, nil
 }
 
-func resolvePassingOnly(override *bool, cfg *config.Config) bool {
-	if override != nil {
-		return *override
-	}
+func discoverySettings(override *bool, cfg *config.Config) (passingOnly bool, consulAddr string, err error) {
+	passingOnly = true
 	if cfg != nil {
-		return cfg.Get().Discovery.ConsulPassingOnly
+		var dc *discoveryConfig
+		dc, err = config.Load[discoveryConfig](cfg, "discovery")
+		if err != nil {
+			return false, "", err
+		}
+		passingOnly = dc.ConsulPassingOnly
+		consulAddr = strings.TrimSpace(dc.ConsulAddress)
 	}
-	return true
+	if override != nil {
+		passingOnly = *override
+	}
+	return passingOnly, consulAddr, nil
 }
 
 func poolKey(name string, passingOnly bool, seeds []string) string {
@@ -263,7 +267,11 @@ func (f *Factory) Endpoints(in ClientInput) []string {
 	if f == nil {
 		return nil
 	}
-	key := poolKey(strings.TrimSpace(in.Name), resolvePassingOnly(in.PassingOnly, f.cfg), normalizeEndpoints(in.Seeds))
+	passingOnly, _, err := discoverySettings(in.PassingOnly, f.cfg)
+	if err != nil {
+		return nil
+	}
+	key := poolKey(strings.TrimSpace(in.Name), passingOnly, normalizeEndpoints(in.Seeds))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m, ok := f.pools[key]

@@ -1,0 +1,17 @@
+# {{.AppName}}
+
+{{if .Minimal}}`fxkit.Minimal()` + Huma.{{else}}`fxkit.Default()` + Huma.{{end}}
+
+## Run
+
+From the **repo root**:
+
+```bash
+make run SVC={{.AppName}}
+# or
+go run ./services/{{.AppName}}/cmd serve --config services/{{.AppName}}/configs/config.yaml
+```
+
+- `GET /greet/{name}` — sample Huma handler
+- `GET /docs` — Scalar API reference
+- `GET /healthz` — liveness

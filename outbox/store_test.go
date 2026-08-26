@@ -13,7 +13,7 @@ import (
 
 func testDB(t *testing.T) *gormx.Client {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{TranslateError: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +92,44 @@ func TestEnqueue_IdempotencyKeyDedups(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 row after duplicate enqueue, got %d", count)
+	}
+}
+
+func TestEnqueue_IdempotencyKeyDoesNotResetPublished(t *testing.T) {
+	client := testDB(t)
+	store := outbox.NewStore(client)
+	ctx := context.Background()
+
+	key := "user-created:1"
+	payload := []byte(`{"user_id":"old"}`)
+	row := outbox.OutboxEvent{
+		Pubsub:         "hatchet",
+		Topic:          "user-created",
+		Payload:        payload,
+		IdempotencyKey: &key,
+		Status:         outbox.StatusPublished,
+	}
+	if err := client.Conn(ctx).Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Enqueue(ctx, outbox.Message{
+		Pubsub:         "hatchet",
+		Topic:          "user-created",
+		Payload:        []byte(`{"user_id":"new"}`),
+		IdempotencyKey: key,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got outbox.OutboxEvent
+	if err := client.Conn(ctx).First(&got, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != outbox.StatusPublished {
+		t.Fatalf("status=%q want published", got.Status)
+	}
+	if string(got.Payload) != string(payload) {
+		t.Fatalf("payload=%s", got.Payload)
 	}
 }
 
@@ -179,4 +217,3 @@ func TestInbox_Once(t *testing.T) {
 		t.Fatalf("expected empty-key always run, got runs=%d", runs)
 	}
 }
-

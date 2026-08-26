@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ type APIPermission struct {
 	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	Method      string    `gorm:"size:16;uniqueIndex:uk_authz_api;not null" json:"method"`
 	Path        string    `gorm:"size:255;uniqueIndex:uk_authz_api;not null" json:"path"` // Huma `{id}` form
-	Pattern     string    `gorm:"size:255" json:"pattern"`                                 // Casbin `:id` form
+	Pattern     string    `gorm:"size:255" json:"pattern"`                                // Casbin `:id` form
 	OperationID string    `gorm:"size:128" json:"operation_id"`
 	Summary     string    `gorm:"size:255" json:"summary"`
 	Description string    `gorm:"size:1024" json:"description"`
@@ -75,13 +76,14 @@ func (e *Enforcer) SyncRouteCatalog(routes []HTTPRoute) error {
 
 // ListRouteCatalog returns all registered API permissions (for admin / debugging).
 func (e *Enforcer) ListRouteCatalog() ([]APIPermission, error) {
-	out, err := e.ListRouteCatalogPage(context.Background(), ListRouteCatalogInput{
-		Limit: 10000, ReplyWithCount: false,
-	})
-	if err != nil {
+	if e == nil || e.db == nil {
+		return nil, nil
+	}
+	var rows []APIPermission
+	if err := e.db.Order("path, method").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return out.Items, nil
+	return rows, nil
 }
 
 // ListRouteCatalogInput pages/filters the permission catalog.
@@ -339,6 +341,74 @@ func HTTPRoutesFromOperations(ops ...huma.Operation) []HTTPRoute {
 			continue
 		}
 		out = append(out, HTTPRouteFromOperation(op))
+	}
+	return out
+}
+
+// HTTPRoutesFromOpenAPI copies live Huma operations into HTTPRoute rows so
+// RegisterResource / Register without ProvideHTTPRoutes still get Casbin policies.
+func HTTPRoutesFromOpenAPI(api huma.API) []HTTPRoute {
+	if api == nil {
+		return nil
+	}
+	doc := api.OpenAPI()
+	if doc == nil || doc.Paths == nil {
+		return nil
+	}
+	var ops []huma.Operation
+	for path, item := range doc.Paths {
+		if item == nil {
+			continue
+		}
+		add := func(method string, op *huma.Operation) {
+			if op == nil {
+				return
+			}
+			cp := *op
+			if strings.TrimSpace(cp.Method) == "" {
+				cp.Method = method
+			}
+			if strings.TrimSpace(cp.Path) == "" {
+				cp.Path = path
+			}
+			if skipAuthzPath(cp.Path) || isPublicOperation(&cp) {
+				return
+			}
+			ops = append(ops, cp)
+		}
+		add(http.MethodGet, item.Get)
+		add(http.MethodPost, item.Post)
+		add(http.MethodPut, item.Put)
+		add(http.MethodPatch, item.Patch)
+		add(http.MethodDelete, item.Delete)
+		add(http.MethodHead, item.Head)
+		add(http.MethodOptions, item.Options)
+		add(http.MethodTrace, item.Trace)
+	}
+	return HTTPRoutesFromOperations(ops...)
+}
+
+func mergeHTTPRoutes(base, extra []HTTPRoute) []HTTPRoute {
+	key := func(r HTTPRoute) string {
+		return strings.ToUpper(strings.TrimSpace(r.Method)) + "\x00" + strings.TrimSpace(r.Path)
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]HTTPRoute, 0, len(base)+len(extra))
+	for _, r := range base {
+		k := key(r)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	for _, r := range extra {
+		k := key(r)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
 	}
 	return out
 }

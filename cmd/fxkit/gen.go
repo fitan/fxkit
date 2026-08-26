@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"go/format"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
 
 	"github.com/spf13/cobra"
 )
@@ -40,18 +37,24 @@ type resourceField struct {
 
 // resourceTemplate 拼接生成的模块源码。
 type resourceTemplate struct {
-	Package   string
-	TypeName  string // PascalCase 结构体名
-	Path      string // URL 路径（/articles）
-	PathSlug  string // 无 leading slash 的路径（articles）
-	DaprAppID string // Invoke.Call 的被调 Dapr app id
-	Tag       string // OpenAPI tag（Article）
-	Fields    []resourceField
+	Package    string
+	TypeName   string // PascalCase 结构体名
+	Path       string // URL 路径（/articles）
+	PathSlug   string // 无 leading slash 的路径（articles）
+	Tag        string // OpenAPI tag（Article）
+	Fields     []resourceField
 	SearchOn   []string // 可搜索列
 	FilterOn   []string // 可过滤列
 	SortBy     string
-	SortFields []string // List 的 ORDER BY 白名单
-	UsesTime   bool
+	SortFields []string     // List 的 ORDER BY 白名单（去重）
+	ListFields []specColumn // ListSpec.Fields（去重）
+}
+
+// specColumn 是生成 ListSpec 时的一列。
+type specColumn struct {
+	Name    string
+	Kind    string // crudx.FieldString / FieldNumber / FieldBool / FieldTime
+	Indexed bool
 }
 
 func genResourceCmd() *cobra.Command {
@@ -61,14 +64,13 @@ func genResourceCmd() *cobra.Command {
 		search    []string
 		filters   []string
 		sort      string
-		appID     string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "resource <name>",
-		Short: "Generate typed JSON CRUD (Huma GET list + JSON handlers) backed by GORM",
-		Long: `Generate a typed JSON CRUD module: list via Huma GET with ZStack-style q= params;
-get/create/update/delete via Huma (add routes as needed).
+		Short: "Generate a Huma resource with crudx list (q=/cursor) and explicit write methods",
+		Long: `Generate a resource module: list via crudx.List (ZStack-style q= / cursor),
+plus explicit Get/Create/Update/Delete mounted by RegisterResource.
 
 Field syntax: <name>:<type>[:flag,flag,...]
   types:   string | text | int | int32 | int64 | float | bool | time
@@ -76,7 +78,6 @@ Field syntax: <name>:<type>[:flag,flag,...]
 
 Example:
   fxkit gen resource Article \
-      --app-id my-service \
       --field title:string:required \
       --field body:text \
       --field author_id:int64:index \
@@ -87,7 +88,7 @@ Example:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			data, err := parseResourceArgs(name, fieldsRaw, search, filters, sort, appID)
+			data, err := parseResourceArgs(name, fieldsRaw, search, filters, sort)
 			if err != nil {
 				return err
 			}
@@ -104,23 +105,12 @@ Example:
 				return fmt.Errorf("mkdir %s: %w", outDir, err)
 			}
 
-			tmpl, err := template.New("resource").Funcs(template.FuncMap{
-				"join": strings.Join,
-			}).Parse(resourceTmpl)
+			formatted, err := renderResource(data)
 			if err != nil {
-				return fmt.Errorf("template parse: %w", err)
-			}
-
-			var buf bytes.Buffer
-			if err := tmpl.Execute(&buf, data); err != nil {
-				return fmt.Errorf("template execute: %w", err)
-			}
-
-			formatted, err := format.Source(buf.Bytes())
-			if err != nil {
-			// 输出未格式化源码以便调试模板问题。
-				fmt.Fprintln(os.Stderr, buf.String())
-				return fmt.Errorf("gofmt generated source: %w", err)
+				if len(formatted) > 0 {
+					fmt.Fprintln(os.Stderr, string(formatted))
+				}
+				return err
 			}
 			if err := os.WriteFile(outFile, formatted, 0o644); err != nil {
 				return fmt.Errorf("write %s: %w", outFile, err)
@@ -128,9 +118,8 @@ Example:
 
 			fmt.Printf("✓ generated %s\n", outFile)
 			fmt.Println("Next steps:")
-			fmt.Println("  - import the new module from cmd/main.go (ensure huma.Module is in the app graph)")
+			fmt.Println("  - import the new module from services/<svc>/cmd/main.go (ensure huma.Module is in the app graph)")
 			fmt.Println("  - run `go mod tidy && go build ./...`")
-			fmt.Println("  - set --app-id to the callee Dapr app id (Invoke.Call); must match dapr.yaml")
 			return nil
 		},
 	}
@@ -140,21 +129,19 @@ Example:
 	cmd.Flags().StringSliceVar(&search, "search", nil, "comma-separated columns allowing q=~ fuzzy match (must be indexed)")
 	cmd.Flags().StringSliceVar(&filters, "filter", nil, "comma-separated columns allowing q= exact / in filters")
 	cmd.Flags().StringVar(&sort, "sort", "created_at desc", "default ORDER BY clause for List")
-	cmd.Flags().StringVar(&appID, "app-id", "fxkit-example", "Dapr app id of the service that hosts these Invoke methods (Invoke.Call target)")
 	return cmd
 }
 
-func parseResourceArgs(name string, fields, search, filters []string, sort, appID string) (*resourceTemplate, error) {
+func parseResourceArgs(name string, fields, search, filters []string, sort string) (*resourceTemplate, error) {
 	data := &resourceTemplate{
-		Package:   strings.ToLower(plural(name)),
-		TypeName:  name,
-		Path:      "/" + strings.ToLower(plural(name)),
-		PathSlug:  strings.ToLower(plural(name)),
-		DaprAppID: appID,
-		Tag:       name,
-		SearchOn:  search,
-		FilterOn:  filters,
-		SortBy:    sort,
+		Package:  strings.ToLower(plural(name)),
+		TypeName: name,
+		Path:     "/" + strings.ToLower(plural(name)),
+		PathSlug: strings.ToLower(plural(name)),
+		Tag:      name,
+		SearchOn: search,
+		FilterOn: filters,
+		SortBy:   sort,
 	}
 
 	for _, raw := range fields {
@@ -162,13 +149,11 @@ func parseResourceArgs(name string, fields, search, filters []string, sort, appI
 		if err != nil {
 			return nil, fmt.Errorf("parse field %q: %w", raw, err)
 		}
-		if f.GoType == "time.Time" {
-			data.UsesTime = true
-		}
 		data.Fields = append(data.Fields, f)
 	}
 
-	data.SortFields = buildSortFields(sort, search, filters)
+	data.ensureSearchIndexes()
+	data.buildListSpec()
 
 	return data, nil
 }
@@ -185,30 +170,105 @@ func sortFieldFromSpec(spec string) string {
 	return strings.TrimSpace(field)
 }
 
-func buildSortFields(defaultSort string, cols ...[]string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	add := func(name string) {
-		name = strings.TrimSpace(name)
+// ensureSearchIndexes adds a GORM index on --search columns so q=~ is legal
+// (crudx requires Indexed). TEXT columns are skipped: MySQL cannot index them
+// without a prefix length.
+func (data *resourceTemplate) ensureSearchIndexes() {
+	for _, col := range data.SearchOn {
+		f := matchField(data.Fields, col)
+		if f == nil || f.Indexed || f.Unique {
+			continue
+		}
+		if strings.Contains(f.GormTag, "type:text") {
+			continue
+		}
+		f.Indexed = true
+		f.GormTag = appendGormTag(f.GormTag, "index")
+	}
+}
+
+func (data *resourceTemplate) buildListSpec() {
+	addField := func(name, kind string, indexed bool) {
+		name = toSnake(strings.TrimSpace(name))
 		if name == "" {
 			return
 		}
-		if _, ok := seen[name]; ok {
+		for i := range data.ListFields {
+			if data.ListFields[i].Name == name {
+				if indexed {
+					data.ListFields[i].Indexed = true
+				}
+				return
+			}
+		}
+		data.ListFields = append(data.ListFields, specColumn{Name: name, Kind: kind, Indexed: indexed})
+	}
+	addSort := func(name string) {
+		name = toSnake(strings.TrimSpace(name))
+		if name == "" {
 			return
 		}
-		seen[name] = struct{}{}
-		out = append(out, name)
+		for _, s := range data.SortFields {
+			if s == name {
+				return
+			}
+		}
+		data.SortFields = append(data.SortFields, name)
 	}
-	add(sortFieldFromSpec(defaultSort))
-	for _, list := range cols {
-		for _, c := range list {
-			add(c)
+
+	addField("id", "crudx.FieldNumber", false)
+	addField("created_at", "crudx.FieldTime", false)
+	addField("updated_at", "crudx.FieldTime", false)
+	for _, col := range data.SearchOn {
+		kind := "crudx.FieldString"
+		if f := matchField(data.Fields, col); f != nil {
+			kind = fieldKindLiteral(f.GoType)
+		}
+		addField(col, kind, true)
+	}
+	for _, col := range data.FilterOn {
+		kind := "crudx.FieldString"
+		indexed := false
+		if f := matchField(data.Fields, col); f != nil {
+			kind = fieldKindLiteral(f.GoType)
+			indexed = f.Indexed
+		}
+		addField(col, kind, indexed)
+	}
+
+	addSort("id")
+	addSort("created_at")
+	addSort("updated_at")
+	addSort(sortFieldFromSpec(data.SortBy))
+	for _, col := range data.SearchOn {
+		addSort(col)
+	}
+	for _, col := range data.FilterOn {
+		addSort(col)
+	}
+}
+
+func matchField(fields []resourceField, name string) *resourceField {
+	want := toSnake(strings.TrimSpace(name))
+	for i := range fields {
+		if fields[i].Column == want || strings.EqualFold(fields[i].JSONName, name) || strings.EqualFold(fields[i].Name, name) {
+			return &fields[i]
 		}
 	}
-	if len(out) == 0 {
-		return []string{"id", "created_at"}
+	return nil
+}
+
+func fieldKindLiteral(goType string) string {
+	switch goType {
+	case "int", "int32", "int64", "float64":
+		return "crudx.FieldNumber"
+	case "bool":
+		return "crudx.FieldBool"
+	case "time.Time":
+		return "crudx.FieldTime"
+	default:
+		return "crudx.FieldString"
 	}
-	return out
 }
 
 func parseField(raw string) (resourceField, error) {
@@ -366,277 +426,3 @@ func toSnake(s string) string {
 	}
 	return b.String()
 }
-
-// resourceTmpl 是 `fxkit gen resource` 输出的 Go 源码模板。
-const resourceTmpl = `// 由 fxkit gen resource 生成；提交后可自由编辑。
-package {{.Package}}
-
-import (
-	"context"
-	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/fitan/fxkit/crudx"
-	"github.com/fitan/fxkit/fxerrors"
-	fxhuma "github.com/fitan/fxkit/huma"
-	"github.com/fitan/fxkit/gormx"
-	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
-)
-
-// {{.TypeName}} 是 GORM model。JSON tag 为 "-" 表示永不直接暴露；请调整 List/Detail DTO。
-type {{.TypeName}} struct {
-	ID int64 ` + "`gorm:\"primaryKey\" json:\"-\"`" + `
-{{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`gorm:\"{{.GormTag}}\" json:\"-\"`" + `
-{{- end}}
-	CreatedAt time.Time ` + "`json:\"-\"`" + `
-	UpdatedAt time.Time ` + "`json:\"-\"`" + `
-}
-
-// {{.TypeName}}ListRow 是列表投影（可裁剪字段以隐藏数据）。
-type {{.TypeName}}ListRow struct {
-	ID int64 ` + "`json:\"id\"`" + `
-{{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
-{{- end}}
-}
-
-// {{.TypeName}}Detail 由 get/create/update 返回。
-type {{.TypeName}}Detail struct {
-	ID int64 ` + "`json:\"id\"`" + `
-{{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
-{{- end}}
-	CreatedAt time.Time ` + "`json:\"createdAt\"`" + `
-	UpdatedAt time.Time ` + "`json:\"updatedAt\"`" + `
-}
-
-type List{{.TypeName}}Resp struct {
-	Items []{{.TypeName}}ListRow ` + "`json:\"items\"`" + `
-	Total *int64                 ` + "`json:\"total,omitempty\"`" + `
-	Start int                    ` + "`json:\"start\"`" + `
-	Limit int                    ` + "`json:\"limit\"`" + `
-}
-
-type Get{{.TypeName}}Req struct {
-	ID string ` + "`json:\"id\"`" + `
-}
-
-type Create{{.TypeName}}Req struct {
-{{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
-{{- end}}
-}
-
-type Update{{.TypeName}}Req struct {
-	ID string ` + "`json:\"id\"`" + `
-{{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
-{{- end}}
-}
-
-type Delete{{.TypeName}}Req struct {
-	ID string ` + "`json:\"id\"`" + `
-}
-
-type delete{{.TypeName}}Resp struct{}
-
-// Service 实现 JSON CRUD handler。
-type Service struct {
-	client   *gormx.Client
-	listSpec crudx.ListSpec
-}
-
-// NewService 解析元数据并在开发环境运行 AutoMigrate。
-func NewService(client *gormx.Client, lc fx.Lifecycle) (*Service, error) {
-	if client == nil {
-		return nil, fxerrors.Internal("{{.Package}}: nil gormx client")
-	}
-	if _, err := crudx.ResolveModel[{{.TypeName}}](client.Conn(context.Background())); err != nil {
-		return nil, err
-	}
-	s := &Service{
-		client: client,
-		listSpec: crudx.ListSpec{
-			Fields: map[string]crudx.FieldSpec{
-				"id":         {Column: "{{.PathSlug}}.id", Kind: crudx.FieldNumber},
-				"created_at": {Column: "{{.PathSlug}}.created_at", Kind: crudx.FieldNumber},
-				"updated_at": {Column: "{{.PathSlug}}.updated_at", Kind: crudx.FieldNumber},
-{{- range .SearchOn}}
-				"{{.}}": {Column: "{{$.PathSlug}}.{{.}}", Kind: crudx.FieldString, Indexed: true},
-{{- end}}
-{{- range .FilterOn}}
-				"{{.}}": {Column: "{{$.PathSlug}}.{{.}}", Kind: crudx.FieldString},
-{{- end}}
-			},
-			SortFields: map[string]string{
-				"id":         "{{.PathSlug}}.id",
-				"created_at": "{{.PathSlug}}.created_at",
-				"updated_at": "{{.PathSlug}}.updated_at",
-{{- range .SortFields}}
-				"{{.}}": "{{$.PathSlug}}.{{.}}",
-{{- end}}
-			},
-			DefaultSort: "{{.SortBy}}",
-			Limits:      crudx.Limits{LimitDefault: 20, LimitMax: 100},
-		},
-	}
-	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
-			var z {{.TypeName}}
-			return client.Conn(ctx).AutoMigrate(&z)
-		},
-	})
-	return s, nil
-}
-
-// Routes 挂载 JSON CRUD 路由（按需扩展 Huma）。
-func (s *Service) Routes() []server.Route {
-	return nil
-}
-
-func (s *Service) List(ctx context.Context, params crudx.ListParams) (List{{.TypeName}}Resp, error) {
-	tx := s.client.Conn(ctx).Model(&{{.TypeName}}{}).Table("{{.PathSlug}}")
-	tx, err := crudx.ApplyList(tx, s.listSpec, &params)
-	if err != nil {
-		return List{{.TypeName}}Resp{}, err
-	}
-	var total *int64
-	if params.ReplyWithCount {
-		var n int64
-		if err := tx.Count(&n).Error; err != nil {
-			return List{{.TypeName}}Resp{}, fxerrors.Wrap(err)
-		}
-		total = &n
-	}
-	var rows []{{.TypeName}}
-	if err := tx.Find(&rows).Error; err != nil {
-		return List{{.TypeName}}Resp{}, fxerrors.Wrap(err)
-	}
-	items := make([]{{.TypeName}}ListRow, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, to{{.TypeName}}ListRow(row))
-	}
-	return List{{.TypeName}}Resp{
-		Items: items,
-		Total: total,
-		Start: params.Start,
-		Limit: params.Limit,
-	}, nil
-}
-
-type list{{.TypeName}}Input struct {
-	fxhuma.ListQueryInput
-}
-
-type list{{.TypeName}}Output struct {
-	Body List{{.TypeName}}Resp
-}
-
-// NewHumaRegistrar registers GET {{.Path}} (ZStack-style q= list).
-func NewHumaRegistrar(svc *Service) fxhuma.Registrar {
-	return fxhuma.FuncRegistrar(func(api huma.API) {
-		fxhuma.Register(api, huma.Operation{
-			OperationID: "list{{.TypeName}}",
-			Method:      http.MethodGet,
-			Path:        "{{.Path}}",
-			Summary:     "List {{.Tag}}",
-			Tags:        []string{"{{.Tag}}"},
-		}, func(ctx context.Context, in *list{{.TypeName}}Input) (*list{{.TypeName}}Output, error) {
-			params, err := fxhuma.ListParamsFromInput(&in.ListQueryInput)
-			if err != nil {
-				return nil, err
-			}
-			out, err := svc.List(ctx, params)
-			if err != nil {
-				return nil, err
-			}
-			return &list{{.TypeName}}Output{Body: out}, nil
-		})
-	})
-}
-
-func (s *Service) Get(ctx context.Context, req Get{{.TypeName}}Req) ({{.TypeName}}Detail, error) {
-	row, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return {{.TypeName}}Detail{}, err
-	}
-	return to{{.TypeName}}Detail(*row), nil
-}
-
-func (s *Service) Create(ctx context.Context, req Create{{.TypeName}}Req) ({{.TypeName}}Detail, error) {
-	u := {{.TypeName}}{}
-{{- range .Fields}}
-	u.{{.Name}} = req.{{.Name}}
-{{- end}}
-	crudx.ZeroPrimaryKey[{{.TypeName}}](&u)
-	if err := s.client.Conn(ctx).Create(&u).Error; err != nil {
-		return {{.TypeName}}Detail{}, crudx.MapDBError(err)
-	}
-	out, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), strconv.FormatInt(u.ID, 10))
-	if err != nil {
-		return {{.TypeName}}Detail{}, err
-	}
-	return to{{.TypeName}}Detail(*out), nil
-}
-
-func (s *Service) Update(ctx context.Context, req Update{{.TypeName}}Req) ({{.TypeName}}Detail, error) {
-	existing, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return {{.TypeName}}Detail{}, err
-	}
-	next := *existing
-{{- range .Fields}}
-	next.{{.Name}} = req.{{.Name}}
-{{- end}}
-	if err := s.client.Conn(ctx).Save(&next).Error; err != nil {
-		return {{.TypeName}}Detail{}, crudx.MapDBError(err)
-	}
-	out, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return {{.TypeName}}Detail{}, err
-	}
-	return to{{.TypeName}}Detail(*out), nil
-}
-
-func (s *Service) Delete(ctx context.Context, req Delete{{.TypeName}}Req) (delete{{.TypeName}}Resp, error) {
-	row, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return delete{{.TypeName}}Resp{}, err
-	}
-	if err := s.client.Conn(ctx).Delete(row).Error; err != nil {
-		return delete{{.TypeName}}Resp{}, crudx.MapDBError(err)
-	}
-	return delete{{.TypeName}}Resp{}, nil
-}
-
-func to{{.TypeName}}ListRow(m {{.TypeName}}) {{.TypeName}}ListRow {
-	return {{.TypeName}}ListRow{
-		ID: m.ID,
-{{- range .Fields}}
-		{{.Name}}: m.{{.Name}},
-{{- end}}
-	}
-}
-
-func to{{.TypeName}}Detail(m {{.TypeName}}) {{.TypeName}}Detail {
-	return {{.TypeName}}Detail{
-		ID: m.ID,
-{{- range .Fields}}
-		{{.Name}}: m.{{.Name}},
-{{- end}}
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
-	}
-}
-
-// Module 装配 {{.TypeName}} Huma list API。
-var Module = fx.Module("{{.Package}}",
-	fx.Provide(NewService),
-	server.ProvideRoutes((*Service).Routes),
-	fxhuma.ProvideRegistrar(NewHumaRegistrar),
-)
-`

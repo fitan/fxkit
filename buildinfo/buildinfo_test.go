@@ -35,3 +35,28 @@ func TestParseDirty(t *testing.T) {
 		t.Fatal("expected dirty")
 	}
 }
+
+func TestMetaOmitsEmpty(t *testing.T) {
+	Version = "1.2.3"
+	Commit = "abc123"
+	GitRemote = "unknown"
+	GitBranch = "main"
+	Dirty = "false"
+	GoVersion = "go1.26.0"
+	BuildTime = ""
+	BuiltBy = ""
+
+	m := Meta()
+	if m["version"] != "1.2.3" || m["build_commit"] != "abc123" {
+		t.Fatalf("meta=%v", m)
+	}
+	if _, ok := m["build_time"]; ok {
+		t.Fatal("empty build_time should be omitted")
+	}
+	if _, ok := m["build_built_by"]; ok {
+		t.Fatal("empty built_by should be omitted")
+	}
+	if m["git_branch"] != "main" || m["go_version"] != "go1.26.0" {
+		t.Fatalf("meta=%v", m)
+	}
+}

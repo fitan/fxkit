@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/XSAM/otelsql"
@@ -30,8 +31,8 @@ import (
 
 // New 使用配置的 driver/DSN 打开 [Client]，启用 otelsql trace 与 metrics。
 // db.driver 未设置时返回 (nil, nil)，无 DB 服务仍可保留 gormx.Module。
-func New(cfg *config.Config) (*Client, error) {
-	pool, err := openPool(cfg)
+func New(c *Config) (*Client, error) {
+	pool, err := openPool(c)
 	if err != nil {
 		return nil, err
 	}
@@ -41,9 +42,8 @@ func New(cfg *config.Config) (*Client, error) {
 	return &Client{pool: pool}, nil
 }
 
-func openPool(cfg *config.Config) (*gorm.DB, error) {
-	c := cfg.Get().DB
-	if c.Driver == "" || c.DSN == "" {
+func openPool(c *Config) (*gorm.DB, error) {
+	if c == nil || c.Driver == "" || c.DSN == "" {
 		slog.Info("gormx disabled: db.driver/db.dsn not set")
 		return nil, nil
 	}
@@ -71,9 +71,13 @@ func openPool(cfg *config.Config) (*gorm.DB, error) {
 		slog.Info("otelsql driver registered", "driver", otelDriverName)
 	}
 
-	gormCfg := &gorm.Config{Logger: newSlogAdapter(c.LogLevel)}
+	gormCfg := &gorm.Config{
+		Logger:         newSlogAdapter(c.LogLevel),
+		TranslateError: true,
+	}
 
-	sqlDB, err := sql.Open(otelDriverName, c.DSN)
+	dsn := prepareDSN(c.Driver, c.DSN)
+	sqlDB, err := sql.Open(otelDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database with otel driver: %w", err)
 	}
@@ -111,7 +115,7 @@ func openPool(cfg *config.Config) (*gorm.DB, error) {
 
 	sqlDB.SetMaxIdleConns(c.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(c.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(time.Duration(c.ConnMaxLifetimeSec) * time.Second)
+	sqlDB.SetConnMaxLifetime(c.ConnMaxLifetime)
 
 	slog.Info("database connected",
 		"driver", c.Driver,
@@ -142,15 +146,15 @@ type slogAdapter struct {
 
 func newSlogAdapter(level string) logger.Interface {
 	var l slog.Level
-	switch level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "silent":
 		l = slog.LevelDebug + 100
 	case "error":
 		l = slog.LevelError
-	case "warn":
-		l = slog.LevelWarn
-	default:
+	case "info":
 		l = slog.LevelInfo
+	default:
+		l = slog.LevelWarn
 	}
 	return &slogAdapter{level: l}
 }
@@ -208,6 +212,7 @@ func (a *slogAdapter) Trace(ctx context.Context, begin time.Time, fc func() (sql
 
 // Module 在配置 db.driver/db.dsn 时向 Fx 暴露 [*Client]。
 var Module = fx.Module("fxkit/gormx",
+	config.Provide[Config]("db"),
 	fx.Provide(New),
 	fx.Invoke(registerClose),
 )

@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestFindRouteTrailingSlash(t *testing.T) {
+	routes := []HTTPRoute{{Method: http.MethodGet, Path: "/users", Permission: "users:list"}}
+	got, ok := findRoute(routes, http.MethodGet, "/users/")
+	if !ok || got.Permission != "users:list" {
+		t.Fatalf("got=%+v ok=%v", got, ok)
+	}
+	if got := normalizeRequestPath("/users/"); got != "/users" {
+		t.Fatalf("normalize=%q", got)
+	}
+	if got := normalizeRequestPath("/"); got != "/" {
+		t.Fatalf("root=%q", got)
+	}
+}
+
 func TestFindRoutePrefersSpecific(t *testing.T) {
 	routes := []HTTPRoute{
 		{Method: "", Path: "/users/{id}", Permission: "users:get"},
@@ -35,5 +49,14 @@ func TestSubjectHasWildcard(t *testing.T) {
 	}
 	if s.Has("users:read") {
 		t.Fatal("orders:* should not match users:read")
+	}
+}
+
+func TestSkipAuthzPath(t *testing.T) {
+	if !skipAuthzPath("/huma/openapi.json") || !skipAuthzPath("/schemas/Foo") || !skipAuthzPath("/openapi.json") {
+		t.Fatal("builtin spec paths should skip authz")
+	}
+	if skipAuthzPath("/users") {
+		t.Fatal("/users should not skip authz")
 	}
 }

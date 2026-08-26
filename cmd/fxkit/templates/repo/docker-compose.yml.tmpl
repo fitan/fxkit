@@ -1,0 +1,82 @@
+# 本地中间件：对齐 fxkit.Default() 依赖（不含业务进程本身）。
+#   gormx / outbox / casbin → postgres
+#   hatchetx                 → hatchet (lite-dev)
+#   consulx / reqx           → consul
+#   otelx                    → otel-lgtm (OTLP :4317)
+#
+# 启动：make infra
+# 停止：make infra-down
+# 鉴权 IdP 不在此栈；本地用 auth.dev_header_user / X-User。
+
+name: {{.AppName}}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: postgres -c max_connections=200
+    environment:
+      POSTGRES_USER: fxkit
+      POSTGRES_PASSWORD: fxkit
+      POSTGRES_DB: fxkit
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fxkit -d fxkit"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  hatchet:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-lite-dev:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8888:8888" # dashboard
+      - "7077:7077" # gRPC（hatchet.host_port）
+    environment:
+      DATABASE_URL: postgresql://hatchet:hatchet@postgres:5432/hatchet?sslmode=disable
+      SERVER_AUTH_COOKIE_DOMAIN: localhost
+      SERVER_AUTH_COOKIE_INSECURE: "t"
+      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
+      SERVER_GRPC_INSECURE: "t"
+      SERVER_GRPC_BROADCAST_ADDRESS: localhost:7077
+      SERVER_GRPC_PORT: "7077"
+      SERVER_URL: http://localhost:8888
+      SERVER_AUTH_SET_EMAIL_VERIFIED: "t"
+      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: localhost:7077
+    volumes:
+      - hatchet_config:/config
+
+  consul:
+    image: hashicorp/consul:1.20
+    restart: unless-stopped
+    command: ["agent", "-dev", "-client=0.0.0.0", "-ui"]
+    ports:
+      - "8500:8500"
+    healthcheck:
+      test: ["CMD", "consul", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    restart: unless-stopped
+    ports:
+      - "3300:3000" # Grafana（避开常见前端 :3000）
+      - "4317:4317" # OTLP gRPC（otel.endpoint）
+      - "4318:4318" # OTLP HTTP
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+
+volumes:
+  postgres_data:
+  hatchet_config:

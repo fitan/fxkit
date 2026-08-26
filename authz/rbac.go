@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -259,18 +260,32 @@ func (e *Enforcer) SetRolePermissions(ctx context.Context, in SetRolePermissions
 	if _, err := e.EnsureRole(ctx, CreateRoleInput{Name: role}); err != nil {
 		return err
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, err := e.e.RemoveFilteredPolicy(0, role); err != nil {
-		return err
-	}
+	rules := make([][]string, 0, len(in.Items))
 	for _, item := range in.Items {
 		path := HumaPathToCasbin(strings.TrimSpace(item.Path))
 		method := strings.ToUpper(strings.TrimSpace(item.Method))
 		if path == "" || method == "" {
 			continue
 		}
-		if _, err := e.e.AddPolicy(role, path, method); err != nil {
+		rules = append(rules, []string{role, path, method})
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if a, ok := e.e.GetAdapter().(*gormAdapter); ok && a != nil {
+		if err := a.replacePoliciesForSub(role, rules); err != nil {
+			return err
+		}
+		return e.e.LoadPolicy()
+	}
+	if _, err := e.e.RemoveFilteredPolicy(0, role); err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if _, err := e.e.AddPolicy(rule[0], rule[1], rule[2]); err != nil {
+			if reloadErr := e.e.LoadPolicy(); reloadErr != nil {
+				slog.Error("auth casbin reload after failed SetRolePermissions", "error", reloadErr)
+			}
 			return err
 		}
 	}
@@ -353,12 +368,8 @@ func (e *Enforcer) SetSubjectRoles(ctx context.Context, in SubjectRolesInput) er
 	if subject == "" {
 		return fxerrors.BadRequest("subject is required")
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, err := e.e.DeleteRolesForUser(subject); err != nil {
-		return err
-	}
 	seen := make(map[string]struct{}, len(in.Roles))
+	rules := make([][]string, 0, len(in.Roles))
 	for _, role := range in.Roles {
 		role = strings.TrimSpace(role)
 		if role == "" {
@@ -368,7 +379,22 @@ func (e *Enforcer) SetSubjectRoles(ctx context.Context, in SubjectRolesInput) er
 			continue
 		}
 		seen[role] = struct{}{}
-		if _, err := e.e.AddGroupingPolicy(subject, role); err != nil {
+		rules = append(rules, []string{subject, role})
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if a, ok := e.e.GetAdapter().(*gormAdapter); ok && a != nil {
+		if err := a.replaceGroupingsForUser(subject, rules); err != nil {
+			return err
+		}
+		return e.e.LoadPolicy()
+	}
+	if _, err := e.e.DeleteRolesForUser(subject); err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if _, err := e.e.AddGroupingPolicy(rule[0], rule[1]); err != nil {
 			return err
 		}
 	}

@@ -19,7 +19,7 @@ type claimParams struct {
 // claimBatch marks up to limit pending (or stale processing) rows as processing and returns them.
 func claimBatch(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent, error) {
 	if p.Limit <= 0 {
-		return nil, nil
+		return nil, fmt.Errorf("outbox: claim limit must be > 0")
 	}
 	switch db.Dialector.Name() {
 	case "sqlite":

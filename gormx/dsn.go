@@ -51,3 +51,41 @@ func extractMySQLDBName(dsn string) string {
 	}
 	return rest
 }
+
+// prepareDSN applies driver-specific DSN defaults (SQLite busy timeout / WAL).
+func prepareDSN(driver, dsn string) string {
+	if !strings.EqualFold(strings.TrimSpace(driver), "sqlite") {
+		return dsn
+	}
+	return ensureSQLitePragmas(dsn)
+}
+
+func ensureSQLitePragmas(dsn string) string {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return dsn
+	}
+	base, rawQuery := dsn, ""
+	if i := strings.Index(dsn, "?"); i >= 0 {
+		base, rawQuery = dsn[:i], dsn[i+1:]
+	}
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		q = url.Values{}
+	}
+	defaults := map[string]string{
+		"_busy_timeout": "5000",
+		"_journal_mode": "WAL",
+		"_fk":           "1",
+	}
+	for k, v := range defaults {
+		if q.Get(k) == "" {
+			q.Set(k, v)
+		}
+	}
+	enc := q.Encode()
+	if enc == "" {
+		return base
+	}
+	return base + "?" + enc
+}

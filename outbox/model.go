@@ -32,11 +32,11 @@ type OutboxEvent struct {
 	Topic          string     `gorm:"size:255;not null;index:idx_outbox_poll,priority:2"`
 	Payload        []byte     `gorm:"not null"`
 	IdempotencyKey *string    `gorm:"size:128;uniqueIndex"`
-	Status         string     `gorm:"size:32;not null;index:idx_outbox_poll,priority:1"`
+	Status         string     `gorm:"size:32;not null;index:idx_outbox_poll,priority:1;index:idx_outbox_claim,priority:1"`
 	Attempts       int        `gorm:"not null;default:0"`
 	LastError      string     `gorm:"type:text"`
 	LeaseID        string     `gorm:"size:64;index"`
-	LockedAt       *time.Time `gorm:"index"`
+	LockedAt       *time.Time `gorm:"index:idx_outbox_claim,priority:2"`
 	CreatedAt      time.Time  `gorm:"index:idx_outbox_poll,priority:3"`
 	PublishedAt    *time.Time `gorm:"index"`
 }

@@ -23,7 +23,7 @@ Import 示例使用 `github.com/fitan/fxkit`——按消费方 `go.mod` / `repla
 | 任务 | Skill |
 |------|--------|
 | main、Module、配置、chi、gormx、fxerrors、CLI | **本 skill** |
-| Huma REST / RegisterResource / crudx | `fxkit-huma-crud` |
+| Huma REST / 列表 q= / crudx | `fxkit-huma-crud` |
 | Events、outbox、cron、actor | `fxkit-hatchet` |
 | JWT / Casbin / X-User | `fxkit-authz` |
 | OTel / OTLP / 采样 / slog trace | `fxkit-otel` |
@@ -33,13 +33,13 @@ Import 示例使用 `github.com/fitan/fxkit`——按消费方 `go.mod` / `repla
 
 ## 新服务最小路径
 
-1. CLI（可选）：`fxkit new myapp --module github.com/me/myapp`（本地开发可加 `--fxkit-path`）。
-2. `main`：
+1. CLI（可选）：`fxkit init myplatform --module github.com/me/myplatform`，再 `fxkit new myapp`（本地开发可在 init 加 `--fxkit-path`）。
+2. `main`（脚手架已写入 `huma.Module`）：
 
 ```go
 func main() {
 	cli.SetRootName("myapp", "myapp service")
-	fxkit.Run(fxkit.Default(), hello.Module)
+	fxkit.Run(fxkit.Default(), huma.Module, hello.Module)
 }
 ```
 
@@ -49,7 +49,7 @@ func main() {
 fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 ```
 
-4. 启动：`./myapp serve --config configs/config.yaml`（或 `FXKIT_SERVER_PORT=8081`）。
+4. 启动：`make infra`（可选中间件）后 `make run SVC=myapp`（或 `./myapp serve --port 8081`）。
 
 内置：`/healthz` `/readyz` `/version` `/docs`（若挂 docs）。
 
@@ -67,6 +67,7 @@ fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 var Module = fxkit.Service("hello", NewService,
 	fxkit.Routes(helloRoutes),
 	fxkit.Provide(NewSomething),
+	fxkit.ProvideConfig[HelloConfig]("hello"),
 	fxkit.Invoke(seedOnStart),
 )
 ```
@@ -119,37 +120,48 @@ return s.db.Transaction(ctx, func(txCtx context.Context) error {
 | `Transaction(ctx, fn)` | 事务 |
 | `Pool()` | 长生命周期 `*gorm.DB` |
 
-未配 `db.driver` 时通常不连库；`/readyz` 在配了 DB 时会 ping。列表/仓库见 `fxkit-huma-crud`（`crudx.List` / `crudx.NewRepo`）。
+未配 `db.driver` 时通常不连库；`/readyz` 在配了 DB 时会 ping。列表见 `fxkit-huma-crud`（`crudx.List` + `ListSpec`）。
 
 ## 配置约定
 
-优先级：`--port` > `FXKIT_*` env > Consul KV > 本地 YAML > defaults。
+优先级：`--port` > Consul KV > 本地 YAML > defaults。配置树不从环境变量覆盖。
 
 从 Consul 拉配置：
 
 ```bash
 ./myapp serve --consul localhost:8500 --consul-key config/myapp.yaml
-# 或 FXKIT_CONFIG_CONSUL / FXKIT_CONFIG_CONSUL_KEY
 ```
 
-扩展业务配置：
+扩展业务配置：不要把业务键塞进框架包。YAML 里加自己的顶层段，用 [ProvideConfig] 注入。非法值在 Load/Provide 时失败，不回退。
+
+```yaml
+orders:
+  page_size: 20
+```
 
 ```go
-func NewMyConfig(cfg *fxkit.Config) (*MyAppConfig, error) {
-	var c MyAppConfig
-	return &c, cfg.UnmarshalKey("myapp", &c)
+type OrdersConfig struct {
+	PageSize int `yaml:"page_size"`
 }
+
+var Module = fxkit.Service("orders", NewService,
+	fxkit.ProvideConfig[OrdersConfig]("orders"),
+)
+
+func NewService(cfg *OrdersConfig) *Service { ... }
 ```
 
-热重载：`cfg.Reload()`。CORS：空 = **不开放**；只有显式 `["*"]` 才任意源。
+非 Fx 场景用 `config.Load[OrdersConfig](cfg, "orders")`。
+
+热重载：`cfg.Reload()` 重建底层树后重读 YAML/Consul。`ProvideConfig` 在启动时解一次；要热更新请注入 `*fxkit.Config` 再 `Load`。框架段在各自包的 `Config` 上 `SetDefaults`/`Validate`。
 
 ## 脚手架 CLI（`cmd/fxkit`）
 
 ```bash
-fxkit new myapp --module github.com/me/myapp
-fxkit new myapp --minimal          # HTTP-only 倾向
-fxkit new myapp --no-db
-fxkit new myapp --fxkit-path /path/to/fxkit
+fxkit init myplatform --module github.com/me/myplatform
+fxkit init myplatform --fxkit-path /path/to/fxkit
+fxkit new myapp
+fxkit new myapp --minimal          # fxkit.Minimal() + Huma
 fxkit new myapp --skip-tidy
 
 fxkit gen resource Article \
@@ -167,7 +179,7 @@ fxkit gen resource Article \
 ## logx / buildinfo（轻量）
 
 - `logx`：默认彩色控制台 slog；`otel.enabled` 后由 otelx 安装带 OTLP fanout 的 handler。
-- `buildinfo`：`/version` 与 `-ldflags` 注入；Consul 元数据补丁会用 version/commit。
+- `buildinfo`：`/version` 与 `-ldflags` 注入；Consul 注册/补丁写入 `buildinfo.Meta()`（version、commit、git_*、go_version）。
 
 ## Agent 检查清单
 

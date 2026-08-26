@@ -3,11 +3,8 @@ package consulx
 import (
 	"net"
 	"net/url"
-	"os"
 	"strings"
 	"time"
-
-	"github.com/fitan/fxkit/config"
 )
 
 type advertiseResult struct {
@@ -16,19 +13,16 @@ type advertiseResult struct {
 }
 
 // resolveAdvertise returns the address written into the Consul catalog.
-// Priority: FXKIT_ADVERTISE_ADDRESS → discovery.advertise_address → auto-detect → 127.0.0.1.
-func resolveAdvertise(cfg *config.Config) advertiseResult {
-	if v := strings.TrimSpace(os.Getenv("FXKIT_ADVERTISE_ADDRESS")); v != "" {
-		return advertiseResult{Addr: v, Explicit: true}
-	}
-	if cfg != nil {
-		if v := strings.TrimSpace(cfg.Get().Discovery.AdvertiseAddress); v != "" {
+// Priority: discovery.advertise_address → auto-detect → 127.0.0.1.
+func resolveAdvertise(disc *Config) advertiseResult {
+	if disc != nil {
+		if v := strings.TrimSpace(disc.AdvertiseAddress); v != "" {
 			return advertiseResult{Addr: v, Explicit: true}
 		}
 	}
 	consul := ""
-	if cfg != nil {
-		consul = strings.TrimSpace(cfg.Get().Discovery.ConsulAddress)
+	if disc != nil {
+		consul = strings.TrimSpace(disc.ConsulAddress)
 	}
 	if ip := detectLocalIP(consul); ip != "" {
 		return advertiseResult{Addr: ip}

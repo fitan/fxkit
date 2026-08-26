@@ -6,9 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/outbox"
 )
+
+func mustOutboxCfg(t *testing.T) *outbox.Config {
+	t.Helper()
+	c := &outbox.Config{}
+	c.SetDefaults()
+	return c
+}
 
 func TestClaim_SingleBatchClaimsAll(t *testing.T) {
 	client := testDB(t)
@@ -26,7 +32,7 @@ func TestClaim_SingleBatchClaimsAll(t *testing.T) {
 		}
 	}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{}
 	relay.SetPublisher(pub)
 
@@ -56,7 +62,7 @@ func TestClaim_NoDoublePublish(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{}
 	relay.SetPublisher(pub)
 
@@ -92,7 +98,7 @@ func TestClaim_ReclaimsStaleProcessing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{}
 	relay.SetPublisher(pub)
 
@@ -135,7 +141,7 @@ func TestClaim_DoesNotReclaimFreshProcessing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{}
 	relay.SetPublisher(pub)
 
@@ -174,7 +180,7 @@ func TestClaim_ReclaimsProcessingWithNilLockedAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Cfg: &config.Config{}})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{}
 	relay.SetPublisher(pub)
 

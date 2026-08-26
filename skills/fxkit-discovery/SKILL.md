@@ -19,15 +19,15 @@ discovery:
   consul_address: "http://localhost:8500"
   consul_passing_only: true
   register: true                 # 无 sidecar 时打开
-  advertise_address: ""          # 空 = 自动本机 IP；或 FXKIT_ADVERTISE_ADDRESS
+  advertise_address: ""          # 空 = 自动本机 IP
 ```
 
-- `register: true`：以 `app.name` 注册，TTL 心跳，停机注销。
-- 地址空 → 跳过；Consul 不可达只告警，不拖垮启动。
-- 可对已存在同名同端口服务补丁 version/commit 元数据。
-- ACL：`CONSUL_HTTP_TOKEN`。
+- `register: true`：以 `app.name` 注册，服务 ID 为 `{name}-{advertise}-{port}`（多副本同端口不冲突），TTL 心跳，HTTP 监听后再注册，停机注销。
+- `register: true` 且无 `consul_address`：启动失败。仅 `register: false`（或未开注册）时地址空才跳过。
+- Consul 不可达只告警；可对已存在同名同端口服务补丁 version/commit 等 buildinfo 字段。
+- ACL：`CONSUL_HTTP_TOKEN`（注册、补丁、reqx watch 共用）。
 
-从 Consul **拉配置**（config 包）：`--consul` + `--consul-key`（或 `FXKIT_CONFIG_CONSUL*`）。
+从 Consul **拉配置**（config 包）：`--consul` + `--consul-key`。与 `discovery.consul_address` 相互独立。
 
 ## 调下游？
 

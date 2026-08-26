@@ -3,16 +3,50 @@ package otelx
 import (
 	"sync"
 	"testing"
-
-	"github.com/fitan/fxkit/config"
 )
 
+func TestHTTPEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{
+			name: "disabled",
+			cfg:  Config{Enabled: false, Traces: TracesConfig{Enabled: true}},
+			want: false,
+		},
+		{
+			name: "traces",
+			cfg:  Config{Enabled: true, Traces: TracesConfig{Enabled: true}},
+			want: true,
+		},
+		{
+			name: "metrics",
+			cfg:  Config{Enabled: true, Metrics: MetricsConfig{Enabled: true}},
+			want: true,
+		},
+		{
+			name: "logs only",
+			cfg:  Config{Enabled: true, Logs: LogsConfig{Enabled: true}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.HTTPEnabled(); got != tt.want {
+				t.Fatalf("HTTPEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOtlpUsesHTTP(t *testing.T) {
-	base := config.OtelConfig{Protocol: "grpc", Endpoint: "localhost:4317"}
+	base := Config{Protocol: "grpc", Endpoint: "localhost:4317"}
 	if otlpUsesHTTP(base, "otlp") {
 		t.Fatal("grpc protocol should not use http")
 	}
-	httpCfg := config.OtelConfig{Protocol: "http", Endpoint: "localhost:4318"}
+	httpCfg := Config{Protocol: "http", Endpoint: "localhost:4318"}
 	if !otlpUsesHTTP(httpCfg, "otlp") {
 		t.Fatal("http protocol should use http exporter")
 	}

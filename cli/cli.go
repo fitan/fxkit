@@ -47,7 +47,7 @@ func AddCommand(cmds ...*cobra.Command) {
 // Run 构建 cobra 根命令与 `serve` 子命令并执行。serve 子命令从用户提供的 options 组装 fx.App。
 //
 // 全局 deferred recover 防止意外 panic，使其在进程以 code 1 退出前写入 stderr
-//（OTel 日志管道安装后也会进入该管道）。
+// （OTel 日志管道安装后也会进入该管道）。
 func Run(opts ...fx.Option) {
 	logx.SetupDefault()
 
@@ -66,8 +66,8 @@ func Run(opts ...fx.Option) {
 		Short: rootShort,
 	}
 	rootCmd.PersistentFlags().StringP("config", "c", "configs/config.yaml", "local config file path (optional when --consul is set)")
-	rootCmd.PersistentFlags().String("consul", "", "Consul HTTP address to load config from (e.g. localhost:8500); also FXKIT_CONFIG_CONSUL")
-	rootCmd.PersistentFlags().String("consul-key", "", "Consul KV key holding YAML config; required with --consul (also FXKIT_CONFIG_CONSUL_KEY)")
+	rootCmd.PersistentFlags().String("consul", "", "Consul HTTP address to load config from (e.g. localhost:8500)")
+	rootCmd.PersistentFlags().String("consul-key", "", "Consul KV key holding YAML config; required with --consul")
 	rootCmd.AddCommand(buildServeCmd(opts))
 	rootCmd.AddCommand(buildVersionCmd())
 
@@ -86,7 +86,7 @@ func Run(opts ...fx.Option) {
 func buildServeCmd(opts []fx.Option) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Start the HTTP/Dapr service",
+		Short: "Start the HTTP service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			configFile, _ := cmd.Flags().GetString("config")
 			consulAddr, _ := cmd.Flags().GetString("consul")

@@ -49,7 +49,7 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 
 ## 行为
 
-1. 有 `Name` + `discovery.consul_address`：阻塞 watch `/v1/health/service/{name}?passing=…`，端点来自 `Service.Address`（空则 `Node.Address`）+ Port。
+1. 有 `Name` + `discovery.consul_address`：阻塞 watch `/v1/health/service/{name}?passing=…`，端点来自 `Service.Address`（空则 `Node.Address`）+ Port。Consul 返回空列表时清空本地池，避免继续打已下线实例。
 2. Round-robin 选节点发请求。
 3. **传输错误**或响应 **502 / 503 / 504** → 换下一端点重试（至多 `MaxFailover`）。
 4. 无 Consul 时可用 `Seeds` alone 跑通本地。

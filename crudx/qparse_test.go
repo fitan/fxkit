@@ -81,6 +81,7 @@ func TestParseQConditions_invalid(t *testing.T) {
 		{"a.b.c.d.name=xxx", ReasonRelationDepthOverLimit},
 		{"name~", ReasonEmptyLikeValue},
 		{"cpuNum>test", ReasonInvalidValueType},
+		{"cpuNum>null", ReasonInvalidValueType},
 		{"name", ReasonNoOperator},
 	}
 	for _, tc := range cases {

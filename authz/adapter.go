@@ -10,16 +10,18 @@ import (
 )
 
 // casbinRule is the Postgres row for Casbin policies (compatible with casbin_rule schema).
-// Queries always go through [gormAdapter.table] so TableName is not required.
+// Unique key is ptype+v0+v1+v2 (this model only stores sub/obj/act). v1 is 255 to match
+// authz_api_permission.path; v3–v5 are omitted from the unique index so MySQL utf8mb4
+// stays under the 3072-byte limit.
 type casbinRule struct {
 	ID    uint   `gorm:"primaryKey;autoIncrement"`
 	Ptype string `gorm:"column:ptype;size:100;uniqueIndex:uk_casbin_rule"`
 	V0    string `gorm:"column:v0;size:100;uniqueIndex:uk_casbin_rule"`
-	V1    string `gorm:"column:v1;size:100;uniqueIndex:uk_casbin_rule"`
+	V1    string `gorm:"column:v1;size:255;uniqueIndex:uk_casbin_rule"`
 	V2    string `gorm:"column:v2;size:100;uniqueIndex:uk_casbin_rule"`
-	V3    string `gorm:"column:v3;size:100;uniqueIndex:uk_casbin_rule"`
-	V4    string `gorm:"column:v4;size:100;uniqueIndex:uk_casbin_rule"`
-	V5    string `gorm:"column:v5;size:100;uniqueIndex:uk_casbin_rule"`
+	V3    string `gorm:"column:v3;size:100"`
+	V4    string `gorm:"column:v4;size:100"`
+	V5    string `gorm:"column:v5;size:100"`
 }
 
 // gormAdapter persists Casbin policies via GORM (avoids gorm-adapter / dbresolver clashes).
@@ -33,7 +35,7 @@ func newGormAdapter(db *gorm.DB, tableName string) (*gormAdapter, error) {
 		return nil, fmt.Errorf("auth casbin: nil db")
 	}
 	if strings.TrimSpace(tableName) == "" {
-		tableName = "casbin_rule"
+		return nil, fmt.Errorf("auth casbin: table name is required")
 	}
 	a := &gormAdapter{db: db, tableName: tableName}
 	if err := a.table().AutoMigrate(&casbinRule{}); err != nil {
@@ -108,6 +110,33 @@ func (a *gormAdapter) RemoveFilteredPolicy(_ string, ptype string, fieldIndex in
 		q = q.Where(cols[i]+" = ?", v)
 	}
 	return q.Delete(&casbinRule{}).Error
+}
+
+// replacePoliciesForSub atomically replaces all p rules whose v0 is sub.
+func (a *gormAdapter) replacePoliciesForSub(sub string, rules [][]string) error {
+	return a.replaceRules("p", sub, rules)
+}
+
+// replaceGroupingsForUser atomically replaces all g rules whose v0 is user.
+func (a *gormAdapter) replaceGroupingsForUser(user string, rules [][]string) error {
+	return a.replaceRules("g", user, rules)
+}
+
+func (a *gormAdapter) replaceRules(ptype, v0 string, rules [][]string) error {
+	return a.db.Transaction(func(tx *gorm.DB) error {
+		t := tx.Table(a.tableName)
+		if err := t.Where("ptype = ? AND v0 = ?", ptype, v0).Delete(&casbinRule{}).Error; err != nil {
+			return err
+		}
+		if len(rules) == 0 {
+			return nil
+		}
+		rows := make([]casbinRule, 0, len(rules))
+		for _, rule := range rules {
+			rows = append(rows, ruleToRow(ptype, rule))
+		}
+		return t.CreateInBatches(rows, 100).Error
+	})
 }
 
 func ruleToRow(ptype string, rule []string) casbinRule {

@@ -3,8 +3,6 @@ package hatchetx
 import (
 	"os"
 	"testing"
-
-	"github.com/fitan/fxkit/config"
 )
 
 func TestApplyHatchetEnv_SetsWhenEmpty(t *testing.T) {
@@ -12,7 +10,7 @@ func TestApplyHatchetEnv_SetsWhenEmpty(t *testing.T) {
 	t.Setenv("HATCHET_CLIENT_HOST_PORT", "")
 	t.Setenv("HATCHET_CLIENT_NAMESPACE", "")
 
-	err := applyHatchetEnv(config.HatchetConfig{
+	err := applyHatchetEnv(Config{
 		Token:     "tok",
 		HostPort:  "localhost:7077",
 		Namespace: "ns",
@@ -35,7 +33,7 @@ func TestApplyHatchetEnv_DoesNotOverwrite(t *testing.T) {
 	t.Setenv("HATCHET_CLIENT_TOKEN", "from-env")
 	t.Setenv("HATCHET_CLIENT_HOST_PORT", "env:1")
 
-	err := applyHatchetEnv(config.HatchetConfig{
+	err := applyHatchetEnv(Config{
 		Token:    "from-yaml",
 		HostPort: "yaml:7077",
 	})
@@ -51,9 +49,22 @@ func TestApplyHatchetEnv_DoesNotOverwrite(t *testing.T) {
 }
 
 func TestApplyHatchetEnv_InvalidHostPort(t *testing.T) {
-	err := applyHatchetEnv(config.HatchetConfig{HostPort: "not-a-host-port"})
+	err := applyHatchetEnv(Config{HostPort: "not-a-host-port"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestConfigValidate_EnabledRequiresToken(t *testing.T) {
+	t.Setenv("HATCHET_CLIENT_TOKEN", "")
+	c := Config{Enabled: true}
+	c.SetDefaults()
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected token error")
+	}
+	c.Token = "tok"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

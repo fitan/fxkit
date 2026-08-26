@@ -40,8 +40,8 @@ otel:
 
 - 安装 Trace / Metric / Log Provider；slog 可 fanout 到 OTLP，并从活跃 span 注入 `trace_id` / `span_id`。
 - Propagator：`TraceContext` + `Baggage`。
-- HTTP 服务侧中间件由 `server` 挂 OTel（可随 otel 总开关）。
-- 出站：`reqx` 默认经 `otelhttp` 传播（见 `fxkit-discovery`）。
+- HTTP 服务侧中间件由 `server` 挂 OTel（可随 otel 总开关）。匹配到 chi 路由后 span 名为 `METHOD {pattern}`（如 `GET /users/{id}`），避免按原始 URL 高基数。
+- 出站：`reqx` 默认经 `otelhttp` 传播（见 `fxkit-reqx`）。
 - Runtime metrics 挂在全局 MeterProvider，随 shutdown 结束。
 - Endpoint 带 `http://` / `https://` 时会规范化为 `host:port`。
 

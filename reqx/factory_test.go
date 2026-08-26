@@ -36,6 +36,18 @@ func TestParseEndpoint(t *testing.T) {
 	}
 }
 
+func TestEndpointPoolReplaceEmpty(t *testing.T) {
+	t.Parallel()
+	p := newEndpointPool([]string{"a:1", "b:2"})
+	p.replace(nil)
+	if p.len() != 0 {
+		t.Fatalf("len=%d after clear", p.len())
+	}
+	if _, err := p.next(); err == nil {
+		t.Fatal("expected error on empty pool")
+	}
+}
+
 func TestEndpointPoolRoundRobin(t *testing.T) {
 	t.Parallel()
 	p := newEndpointPool([]string{"a:1", "b:2", "a:1"})
@@ -103,6 +115,30 @@ func TestClientStaticSeeds(t *testing.T) {
 	eps := f.Endpoints(ClientInput{Seeds: []string{srv.URL}, OTel: &otelOff})
 	if len(eps) != 1 {
 		t.Fatalf("endpoints=%v", eps)
+	}
+}
+
+func TestWatchFetchSendsConsulToken(t *testing.T) {
+	t.Setenv("CONSUL_HTTP_TOKEN", "acl-token")
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Consul-Token")
+		w.Header().Set("X-Consul-Index", "1")
+		_, _ = io.WriteString(w, `[]`)
+	}))
+	t.Cleanup(srv.Close)
+
+	w := watchConfig{
+		consulBase:  srv.URL,
+		service:     "users",
+		passingOnly: true,
+		httpClient:  srv.Client(),
+	}
+	if _, _, err := w.fetch(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if got != "acl-token" {
+		t.Fatalf("token=%q", got)
 	}
 }
 
@@ -239,18 +275,26 @@ func TestHTTPSScheme(t *testing.T) {
 	}
 }
 
-func TestResolvePassingOnly(t *testing.T) {
+func TestDiscoverySettings(t *testing.T) {
 	t.Parallel()
 	f := false
-	if resolvePassingOnly(&f, nil) {
-		t.Fatal("override false")
+	got, addr, err := discoverySettings(&f, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !resolvePassingOnly(nil, nil) {
-		t.Fatal("nil cfg defaults true")
+	if got || addr != "" {
+		t.Fatalf("override false: passing=%v addr=%q", got, addr)
+	}
+	got, _, err = discoverySettings(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatal("nil cfg defaults passing_only true")
 	}
 }
 
-func TestWatch_EmptyConsulKeepsCurrentAndContinues(t *testing.T) {
+func TestWatch_EmptyConsulClearsPool(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -276,11 +320,10 @@ func TestWatch_EmptyConsulKeepsCurrentAndContinues(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		// Second Consul fetch starts only after the empty result was applied.
 		if hits.Load() >= 2 {
 			eps := pool.snapshot()
-			if len(eps) != 1 || eps[0] != "10.1.2.3:8080" {
-				t.Fatalf("empty consul must not replace pool, got %v", eps)
+			if len(eps) != 0 {
+				t.Fatalf("empty consul must clear pool, got %v", eps)
 			}
 			cancel()
 			return

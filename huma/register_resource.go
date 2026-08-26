@@ -9,7 +9,8 @@ import (
 	"github.com/fitan/fxkit/crudx"
 )
 
-// ResourceHandlers is the minimal surface [RegisterResource] needs from a crudx service.
+// ResourceHandlers is the optional REST surface [RegisterResource] needs.
+// List should be implemented with [crudx.List]; writes stay as ordinary service methods.
 type ResourceHandlers[ListRow, Detail, CreateReq, UpdateReq any] interface {
 	List(ctx context.Context, params crudx.ListParams) (crudx.ListResult[ListRow], error)
 	Get(ctx context.Context, id string) (Detail, error)
@@ -26,6 +27,40 @@ type RegisterResourceInput[UpdateReq any] struct {
 	// BindUpdate extracts the path id into UpdateReq before calling Update.
 	// If nil, PUT is not registered.
 	BindUpdate func(id string, body UpdateReq) UpdateReq
+}
+
+// ResourceOperations returns the Huma operations [RegisterResource] mounts.
+// Use with [authz.HTTPRoutesFromOperations] when also publishing HTTPRoute;
+// with auto_register_routes the OpenAPI scrape already covers these paths.
+func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []huma.Operation {
+	path := in.Path
+	tags := in.Tags
+	listSummary := in.ListSummary
+	if listSummary == "" {
+		listSummary = "List"
+	}
+	ops := []huma.Operation{
+		{OperationID: "list" + sanitizeOpID(path), Method: http.MethodGet, Path: path, Summary: listSummary, Tags: tags},
+		{OperationID: "get" + sanitizeOpID(path), Method: http.MethodGet, Path: path + "/{id}", Summary: "Get", Tags: tags},
+		{OperationID: "create" + sanitizeOpID(path), Method: http.MethodPost, Path: path, Summary: "Create", Tags: tags},
+	}
+	if in.BindUpdate != nil {
+		ops = append(ops, huma.Operation{
+			OperationID: "update" + sanitizeOpID(path),
+			Method:      http.MethodPut,
+			Path:        path + "/{id}",
+			Summary:     "Update",
+			Tags:        tags,
+		})
+	}
+	ops = append(ops, huma.Operation{
+		OperationID: "delete" + sanitizeOpID(path),
+		Method:      http.MethodDelete,
+		Path:        path + "/{id}",
+		Summary:     "Delete",
+		Tags:        tags,
+	})
+	return ops
 }
 
 type idPath struct {
@@ -51,7 +86,8 @@ type updateIn[T any] struct {
 
 type emptyOut struct{}
 
-// RegisterResource mounts standard Huma JSON routes for a crudx-backed resource:
+// RegisterResource optionally mounts the five JSON routes for a resource.
+// Use it when you want a uniform REST shape; a single [Register] is enough for list-only APIs.
 //
 //	GET    {path}       list (ZStack q=)
 //	GET    {path}/{id}  get

@@ -6,12 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-func TestNew_LoadsFromConsulKV(t *testing.T) {
-	clearFXKITEnv(t)
+func TestApplyConsulToken(t *testing.T) {
+	t.Setenv(envConsulHTTPToken, "acl-token")
+	req, err := http.NewRequest(http.MethodGet, "http://consul/v1/agent/self", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ApplyConsulToken(req)
+	if got := req.Header.Get("X-Consul-Token"); got != "acl-token" {
+		t.Fatalf("token=%q", got)
+	}
+}
 
+func TestNew_LoadsFromConsulKV(t *testing.T) {
 	const yamlBody = `
 server:
   port: "9099"
@@ -43,22 +54,36 @@ discovery:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := cfg.Get()
-	if c.Server.Port != "9099" || c.App.Name != "from-consul" {
-		t.Fatalf("core: %+v", c)
+	app, err := Load[App](cfg, "app")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Bootstrap consul address seeds discovery when YAML omits it.
-	if c.Discovery.ConsulAddress != srv.URL {
-		t.Fatalf("discovery.consul_address = %q, want bootstrap %q", c.Discovery.ConsulAddress, srv.URL)
+	var srvPort struct {
+		Port string `yaml:"port"`
 	}
-	if !c.Discovery.ConsulPassingOnly {
-		t.Fatalf("discovery: %+v", c.Discovery)
+	if err := cfg.UnmarshalKey("server", &srvPort); err != nil {
+		t.Fatal(err)
+	}
+	if srvPort.Port != "9099" || app.Name != "from-consul" {
+		t.Fatalf("port=%q app=%q", srvPort.Port, app.Name)
+	}
+	var disc struct {
+		ConsulAddress     string `yaml:"consul_address"`
+		ConsulPassingOnly bool   `yaml:"consul_passing_only"`
+	}
+	if err := cfg.UnmarshalKey("discovery", &disc); err != nil {
+		t.Fatal(err)
+	}
+	// --consul is only the config source; discovery stays independent.
+	if disc.ConsulAddress != "" {
+		t.Fatalf("discovery.consul_address = %q, want empty (not seeded from --consul)", disc.ConsulAddress)
+	}
+	if !disc.ConsulPassingOnly {
+		t.Fatalf("discovery: %+v", disc)
 	}
 }
 
 func TestNew_ConsulOverlaysLocalFile(t *testing.T) {
-	clearFXKITEnv(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(`
@@ -70,7 +95,7 @@ app:
 		t.Fatal(err)
 	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`
 server:
   port: "7070"
@@ -88,16 +113,23 @@ app:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := cfg.Get()
-	if c.Server.Port != "7070" || c.App.Name != "consul-app" {
-		t.Fatalf("want consul overlay, got %+v / %+v", c.Server, c.App)
+	app, err := Load[App](cfg, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var srvPort struct {
+		Port string `yaml:"port"`
+	}
+	if err := cfg.UnmarshalKey("server", &srvPort); err != nil {
+		t.Fatal(err)
+	}
+	if srvPort.Port != "7070" || app.Name != "consul-app" {
+		t.Fatalf("want consul overlay, got port=%q name=%q", srvPort.Port, app.Name)
 	}
 }
 
 func TestNew_ConsulAllowsMissingLocalFile(t *testing.T) {
-	clearFXKITEnv(t)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("server:\n  port: \"6060\"\napp:\n  name: remote\n"))
 	}))
 	t.Cleanup(srv.Close)
@@ -111,16 +143,69 @@ func TestNew_ConsulAllowsMissingLocalFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Get().Server.Port != "6060" {
-		t.Fatalf("port=%q", cfg.Get().Server.Port)
+	var srvPort struct {
+		Port string `yaml:"port"`
+	}
+	if err := cfg.UnmarshalKey("server", &srvPort); err != nil {
+		t.Fatal(err)
+	}
+	if srvPort.Port != "6060" {
+		t.Fatalf("port=%q", srvPort.Port)
 	}
 }
 
 func TestNew_ConsulRequiresKey(t *testing.T) {
-	clearFXKITEnv(t)
 	_, err := New(Options{ConsulAddress: "localhost:8500"})
 	if err == nil || !strings.Contains(err.Error(), "consul-key") {
 		t.Fatalf("want consul-key error, got %v", err)
+	}
+}
+
+func TestReload_DropsStaleConsulKeys(t *testing.T) {
+	var body atomic.Value
+	body.Store([]byte("app:\n  name: first\notel:\n  enabled: true\n"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body.Load().([]byte))
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg, err := New(Options{ConsulAddress: srv.URL, ConsulConfigKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := Load[App](cfg, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var otel struct {
+		Enabled bool `yaml:"enabled"`
+	}
+	if err := cfg.UnmarshalKey("otel", &otel); err != nil {
+		t.Fatal(err)
+	}
+	if app.Name != "first" || !otel.Enabled {
+		t.Fatalf("first load: name=%q otel.enabled=%v", app.Name, otel.Enabled)
+	}
+
+	body.Store([]byte("app:\n  name: second\n"))
+	if err := cfg.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	app, err = Load[App](cfg, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otel = struct {
+		Enabled bool `yaml:"enabled"`
+	}{}
+	if err := cfg.UnmarshalKey("otel", &otel); err != nil {
+		t.Fatal(err)
+	}
+	if app.Name != "second" {
+		t.Fatalf("name=%q", app.Name)
+	}
+	if otel.Enabled {
+		t.Fatal("stale otel.enabled survived reload")
 	}
 }
 

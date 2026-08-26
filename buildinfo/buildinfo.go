@@ -128,6 +128,29 @@ func parseDirty(s string) bool {
 	}
 }
 
+// Meta 返回可写入 Consul 等目录的构建字段。空值省略。
+func Meta() map[string]string {
+	Normalize()
+	pairs := []struct{ k, v string }{
+		{"version", Version},
+		{"build_commit", Commit},
+		{"build_time", BuildTime},
+		{"build_built_by", BuiltBy},
+		{"git_remote", GitRemote},
+		{"git_branch", GitBranch},
+		{"git_dirty", Dirty},
+		{"go_version", GoVersion},
+	}
+	out := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		if strings.TrimSpace(p.v) == "" {
+			continue
+		}
+		out[p.k] = p.v
+	}
+	return out
+}
+
 // Get 返回当前（已 Normalize）构建信息的快照。
 func Get() Info {
 	Normalize()

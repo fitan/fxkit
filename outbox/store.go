@@ -9,7 +9,6 @@ import (
 
 	"github.com/fitan/fxkit/gormx"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // Message is a single outbox entry to publish after commit.
@@ -56,28 +55,36 @@ func (s *Store) Enqueue(ctx context.Context, msg Message) error {
 	}
 	if key := strings.TrimSpace(msg.IdempotencyKey); key != "" {
 		row.IdempotencyKey = &key
-		res := s.client.Conn(ctx).Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "idempotency_key"}},
-			DoUpdates: clause.Assignments(map[string]any{
-				"status":     StatusPending,
-				"attempts":   0,
-				"last_error": "",
-				"locked_at":  nil,
-				"lease_id":   "",
-				"payload":    gorm.Expr("excluded.payload"),
-				"topic":      gorm.Expr("excluded.topic"),
-				"pubsub":     gorm.Expr("excluded.pubsub"),
-			}),
-			Where: clause.Where{Exprs: []clause.Expression{
-				gorm.Expr("outbox_events.status = ?", StatusFailed),
-			}},
-		}).Create(&row)
-		if res.Error != nil {
-			return res.Error
-		}
-		return nil
+		return enqueueIdempotent(s.client.Conn(ctx), row)
 	}
 	return s.client.Conn(ctx).Create(&row).Error
+}
+
+// enqueueIdempotent inserts a keyed row, or resets it only when the existing
+// row is failed. Portable across Postgres / SQLite / MySQL: GORM's OnConflict
+// WHERE is ignored by the MySQL dialect (ON DUPLICATE KEY UPDATE).
+func enqueueIdempotent(db *gorm.DB, row OutboxEvent) error {
+	if err := db.Create(&row).Error; err == nil {
+		return nil
+	} else if !isUniqueViolation(err) {
+		return err
+	}
+	key := ""
+	if row.IdempotencyKey != nil {
+		key = *row.IdempotencyKey
+	}
+	return db.Model(&OutboxEvent{}).
+		Where("idempotency_key = ? AND status = ?", key, StatusFailed).
+		Updates(map[string]any{
+			"status":     StatusPending,
+			"attempts":   0,
+			"last_error": "",
+			"locked_at":  nil,
+			"lease_id":   "",
+			"payload":    row.Payload,
+			"topic":      row.Topic,
+			"pubsub":     row.Pubsub,
+		}).Error
 }
 
 // EnqueueTopicInput is the struct form of [EnqueueTopicMsg].

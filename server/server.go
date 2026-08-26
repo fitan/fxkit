@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/otelx"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/fx"
 )
@@ -15,14 +16,15 @@ import (
 // MuxParams 是 [NewMux] 的输入。任意模块可向 "middleware" fx group 贡献 [Middleware] 以扩展 chi mux。
 type MuxParams struct {
 	fx.In
-	Config           *config.Config
-	ExtraMiddlewares []Middleware `group:"middleware"`
+	Server           *Config
+	Otel             *otelx.Config `optional:"true"`
+	ExtraMiddlewares []Middleware  `group:"middleware"`
 }
 
 // NewMux 构建共享 chi mux，默认中间件链为 CORS → OTel HTTP（启用时）→ route-pattern → recover，
-// 并加上其他模块贡献的中间件。otelhttp 最多在此处安装一次；daprx 仅 enrich 活跃 span。
+// 并加上其他模块贡献的中间件。otelhttp 最多在此处安装一次。
 //
-// config 中 server.log_payloads 为 true 时启用请求体日志。
+// server.log_payloads 为 true 时启用请求体日志。
 func NewMux(p MuxParams) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -30,8 +32,12 @@ func NewMux(p MuxParams) *chi.Mux {
 	// recover must be outermost so panics in CORS/OTel/body-log are caught.
 	r.Use(recoverMiddleware)
 	r.Use(sseWriteDeadlineMiddleware)
-	r.Use(corsMiddleware(p.Config.Get().Server.CORSAllowedOrigins))
-	if p.Config.Get().Otel.HTTPEnabled() {
+	origins := []string{}
+	if p.Server != nil {
+		origins = p.Server.CORSAllowedOrigins
+	}
+	r.Use(corsMiddleware(origins))
+	if p.Otel != nil && p.Otel.HTTPEnabled() {
 		r.Use(otelMiddleware)
 		r.Use(routePatternMiddleware)
 	}
@@ -43,7 +49,7 @@ func NewMux(p MuxParams) *chi.Mux {
 		r.Use(mw)
 	}
 
-	if p.Config.Get().Server.LogPayloads {
+	if p.Server != nil && p.Server.LogPayloads {
 		r.Use(requestBodyLogMiddleware)
 	}
 
@@ -85,7 +91,7 @@ func RegisterRoutes(p RouterParams) {
 type ServerParams struct {
 	fx.In
 	Lifecycle fx.Lifecycle
-	Config    *config.Config
+	Server    *Config
 	Mux       *chi.Mux
 }
 
@@ -95,12 +101,11 @@ type HTTPServer struct {
 }
 
 // NewHTTPServer 将 chi mux 绑定到支持 h2c 的 [http.Server]（配置端口），并通过 Fx 生命周期 hook 管理 Start/Stop。
-// 当其他模块（例如 daprx）持有 listener 时，请勿包含 [ListenerModule]。
 func NewHTTPServer(p ServerParams) *HTTPServer {
-	port := p.Config.Get().Server.Port
-	if port == "" {
-		port = "8080"
+	if p.Server == nil {
+		panic("server: nil Config")
 	}
+	port := p.Server.Port
 
 	srv := &http.Server{
 		Addr:              ":" + port,
@@ -138,8 +143,9 @@ func NewHTTPServer(p ServerParams) *HTTPServer {
 }
 
 // Module 提供共享 chi mux 与最终 router，供需挂载路由的模块使用。
-// 不包含 HTTP listener —— 独立 HTTP 请配合 [ListenerModule]，由 Dapr 持有 listener 请配合 [daprx.Module]。
+// 不包含 HTTP listener —— 独立 HTTP 请配合 [ListenerModule]。
 var Module = fx.Module("fxkit/server",
+	config.Provide[Config]("server"),
 	fx.Provide(
 		fx.Annotate(defaultRoutes, fx.ResultTags(`group:"routes,flatten"`)),
 		fx.Annotate(defaultMiddleware, fx.ResultTags(`group:"middleware"`)),
@@ -148,8 +154,7 @@ var Module = fx.Module("fxkit/server",
 	fx.Invoke(RegisterRoutes, RegisterHealth),
 )
 
-// ListenerModule 在共享 mux 上启动独立 HTTP listener。请勿与 [daprx.Module] 同时使用 ——
-// Dapr SDK 会通过自身机制持有 listener。
+// ListenerModule 在共享 mux 上启动独立 HTTP listener。
 var ListenerModule = fx.Module("fxkit/server/listener",
 	fx.Provide(NewHTTPServer),
 	fx.Invoke(func(*HTTPServer) {}),

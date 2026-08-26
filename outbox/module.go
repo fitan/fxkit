@@ -13,14 +13,15 @@ import (
 // Included in [github.com/fitan/fxkit.Default]; relay stays off until outbox.enabled=true.
 // Publisher is Hatchet when hatchet.outbox_publisher is true — see [NewRelay].
 var Module = fx.Module("fxkit/outbox",
+	config.Provide[Config]("outbox"),
 	fx.Provide(NewStore),
 	fx.Provide(NewInbox),
 	fx.Provide(NewRelay),
 	fx.Invoke(registerLifecycle),
 )
 
-func registerLifecycle(lc fx.Lifecycle, cfg *config.Config, client *gormx.Client, relay *Relay, inbox *Inbox) {
-	if cfg == nil || !cfg.Get().Outbox.Enabled {
+func registerLifecycle(lc fx.Lifecycle, cfg *Config, client *gormx.Client, relay *Relay, inbox *Inbox) {
+	if cfg == nil || !cfg.Enabled {
 		return
 	}
 	if client == nil {
@@ -43,10 +44,10 @@ func registerLifecycle(lc fx.Lifecycle, cfg *config.Config, client *gormx.Client
 				}
 			}
 			slog.Info("outbox relay starting",
-				"poll_interval", cfg.Get().Outbox.PollDuration(),
-				"batch_size", cfg.Get().Outbox.BatchSize,
-				"max_retries", cfg.Get().Outbox.MaxRetries,
-				"claim_timeout", cfg.Get().Outbox.ClaimTimeoutDuration(),
+				"poll_interval", cfg.PollInterval,
+				"batch_size", cfg.BatchSize,
+				"max_retries", cfg.MaxRetries,
+				"claim_timeout", cfg.ClaimTimeout,
 			)
 			go relay.Run(context.Background())
 			return nil

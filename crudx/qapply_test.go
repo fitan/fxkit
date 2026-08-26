@@ -1,6 +1,7 @@
 package crudx
 
 import (
+	"context"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -258,6 +259,52 @@ func TestApplyList_tooManyLikeBlocked(t *testing.T) {
 	assertInvalid(t, err, ReasonTooManyLikeConditions)
 }
 
+func TestApplyList_cursorNeedsPK(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	spec.SortFields["id"] = "users.id"
+	tok, err := EncodeCursor("id", "asc", int64(1), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, Cursor: tok, SortBy: "id", SortDirection: "asc",
+	})
+	assertInvalid(t, err, ReasonCursorNeedsPK)
+}
+
+func TestApplyList_cursorOnTypedModel(t *testing.T) {
+	db := newListTestDB(t)
+	ctx := context.Background()
+	for _, m := range []listTestModel{
+		{Name: "A", Email: "a@example.com"},
+		{Name: "B", Email: "b@example.com"},
+		{Name: "C", Email: "c@example.com"},
+	} {
+		if err := db.Create(&m).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	tok, err := EncodeCursor("id", "asc", int64(1), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := listTestSpec()
+	tx, err := ApplyList(listTestBaseDB(db, ctx), spec, &ListParams{
+		Limit: 10, Cursor: tok, SortBy: "id", SortDirection: "asc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	if err := tx.Pluck("list_test_models.id", &ids).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != 2 || ids[1] != 3 {
+		t.Fatalf("want ids 2,3 got %v", ids)
+	}
+}
+
 func TestApplyList_sortInjectionRejected(t *testing.T) {
 	db := setupUsersDB(t)
 	spec := testSpec()
@@ -278,4 +325,47 @@ func TestApplyList_sortInjectionRejected(t *testing.T) {
 	if len(names) != 3 {
 		t.Fatalf("expected 3 rows, got %d", len(names))
 	}
+}
+
+func TestApplyList_hasManyDedup(t *testing.T) {
+	db := setupUsersDB(t)
+	if err := db.Exec(`CREATE TABLE tags (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO tags (user_id, name) VALUES (1,'red'), (1,'blue'), (1,'green')`).Error; err != nil {
+		t.Fatal(err)
+	}
+	spec := testSpec()
+	spec.Relations["tag"] = &RelationSpec{
+		Table: "tags", Alias: "tag", On: "tag.user_id = users.id",
+		Fields: map[string]FieldSpec{
+			"name": {Column: "tag.name", Kind: FieldString},
+		},
+	}
+	tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, Q: []string{"tag.name!=zzz"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	if err := tx.Pluck("users.name", &names).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "Alice" {
+		t.Fatalf("want distinct Alice, got %v", names)
+	}
+}
+
+func TestApplyList_cursorRejectsRelationSort(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	tok, err := EncodeCursor("cluster.name", "asc", "prod", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, Cursor: tok, SortBy: "cluster.name", SortDirection: "asc",
+	})
+	assertInvalid(t, err, ReasonCursorRelationSort)
 }

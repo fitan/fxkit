@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fitan/fxkit/config"
 )
 
 type consulHealthEntry struct {
@@ -62,9 +64,10 @@ func (w watchConfig) run(ctx context.Context, pool *endpointPool) {
 		}
 		index = nextIndex
 		if len(eps) == 0 {
-			slog.Warn("reqx: consul returned no endpoints, keep watching",
+			slog.Warn("reqx: consul returned no endpoints, clearing pool",
 				"service", w.service,
 			)
+			pool.replace(nil)
 			continue
 		}
 		pool.replace(eps)
@@ -97,6 +100,7 @@ func (w watchConfig) fetch(ctx context.Context, index uint64) ([]string, uint64,
 	if err != nil {
 		return nil, index, err
 	}
+	config.ApplyConsulToken(req)
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
 		return nil, index, err

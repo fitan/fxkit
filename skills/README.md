@@ -32,7 +32,7 @@ Claude Code：同样目录放到 `<project>/.claude/skills/`。
 | Skill | 覆盖的 fxkit 包 | 何时用 |
 |-------|-----------------|--------|
 | `fxkit` | fxkit, cli, config, server, gormx, fxerrors, logx, buildinfo, cmd/fxkit | 新服务、模块、配置、路由、DB、错误、脚手架 |
-| `fxkit-huma-crud` | huma, crudx | REST CRUD、列表 q=/cursor、NewRepo |
+| `fxkit-huma-crud` | huma, crudx | 列表 q=/cursor、`ListSpec`、可选 RegisterResource |
 | `fxkit-hatchet` | hatchetx, outbox | 事件/MQ、workflow、cron、actor |
 | `fxkit-authz` | authz | JWT、Casbin、权限登记 |
 | `fxkit-otel` | otelx | Trace/Metric/Log、采样、OTLP |

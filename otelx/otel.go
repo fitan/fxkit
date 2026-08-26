@@ -2,7 +2,7 @@
 // 并安装同时输出到 stdout 与 OTLP log exporter 的 slog handler，从活跃 span 注入 trace_id/span_id。
 //
 // 默认关闭；在 config.yaml 中设置 otel.enabled=true 启用。
-// 遵循 [github.com/fitan/fxkit/config.OtelConfig] 的 sampling、exporter 与 runtime_metrics 字段。
+// 遵循 [Config] 的 sampling、exporter 与 runtime_metrics 字段。
 package otelx
 
 import (
@@ -38,18 +38,25 @@ import (
 )
 
 // Setup 是安装 OTel SDK 的 Fx invoker。由 [Module] 装配；仅测试时直接调用。
-func Setup(lc fx.Lifecycle, cfg *config.Config) error {
+func Setup(lc fx.Lifecycle, otelCfg *Config, app *config.App) error {
 	logx.SetupDefault()
 
-	c := cfg.Get()
-	if !c.Otel.Enabled {
+	if otelCfg == nil || !otelCfg.Enabled {
 		slog.Info("otel disabled")
 		return nil
 	}
 
+	cfg := *otelCfg
+	if strings.TrimSpace(cfg.ServiceName) == "" {
+		if app == nil || strings.TrimSpace(app.Name) == "" {
+			return fmt.Errorf("otel.service_name is empty and app.name is empty")
+		}
+		cfg.ServiceName = strings.TrimSpace(app.Name)
+	}
+
 	ctx := context.Background()
 
-	res, err := newResource(c.Otel)
+	res, err := newResource(cfg)
 	if err != nil {
 		return err
 	}
@@ -61,8 +68,8 @@ func Setup(lc fx.Lifecycle, cfg *config.Config) error {
 		propagation.Baggage{},
 	))
 
-	if c.Otel.Traces.Enabled {
-		tp, err := newTracerProvider(ctx, c.Otel, res)
+	if cfg.Traces.Enabled {
+		tp, err := newTracerProvider(ctx, cfg, res)
 		if err != nil {
 			return err
 		}
@@ -70,15 +77,15 @@ func Setup(lc fx.Lifecycle, cfg *config.Config) error {
 		shutdowns = append(shutdowns, tp.Shutdown)
 	}
 
-	if c.Otel.Metrics.Enabled {
-		mp, err := newMeterProvider(ctx, c.Otel, res)
+	if cfg.Metrics.Enabled {
+		mp, err := newMeterProvider(ctx, cfg, res)
 		if err != nil {
 			return err
 		}
 		otel.SetMeterProvider(mp)
 		shutdowns = append(shutdowns, mp.Shutdown)
 
-		if c.Otel.Metrics.RuntimeMetrics {
+		if cfg.Metrics.RuntimeMetrics {
 			// Instruments register on the global MeterProvider; mp.Shutdown above tears them down.
 			if err := startRuntimeMetrics(); err != nil {
 				return err
@@ -86,8 +93,8 @@ func Setup(lc fx.Lifecycle, cfg *config.Config) error {
 		}
 	}
 
-	if c.Otel.Logs.Enabled {
-		lp, err := newLoggerProvider(ctx, c.Otel, res)
+	if cfg.Logs.Enabled {
+		lp, err := newLoggerProvider(ctx, cfg, res)
 		if err != nil {
 			return err
 		}
@@ -116,19 +123,19 @@ func Setup(lc fx.Lifecycle, cfg *config.Config) error {
 	})
 
 	slog.Info("otel initialised",
-		"service", c.Otel.ServiceName,
-		"endpoint", c.Otel.Endpoint,
-		"protocol", c.Otel.Protocol,
-		"sampling", c.Otel.Sampling,
-		"traces", fmt.Sprintf("%v/%s", c.Otel.Traces.Enabled, c.Otel.Traces.Exporter),
-		"metrics", fmt.Sprintf("%v/%s", c.Otel.Metrics.Enabled, c.Otel.Metrics.Exporter),
-		"logs", fmt.Sprintf("%v/%s", c.Otel.Logs.Enabled, c.Otel.Logs.Exporter),
+		"service", cfg.ServiceName,
+		"endpoint", cfg.Endpoint,
+		"protocol", cfg.Protocol,
+		"sampling", cfg.Sampling,
+		"traces", fmt.Sprintf("%v/%s", cfg.Traces.Enabled, cfg.Traces.Exporter),
+		"metrics", fmt.Sprintf("%v/%s", cfg.Metrics.Enabled, cfg.Metrics.Exporter),
+		"logs", fmt.Sprintf("%v/%s", cfg.Logs.Enabled, cfg.Logs.Exporter),
 	)
 
 	return nil
 }
 
-func newResource(c config.OtelConfig) (*resource.Resource, error) {
+func newResource(c Config) (*resource.Resource, error) {
 	return resource.New(context.Background(),
 		resource.WithAttributes(
 			semconv.ServiceName(c.ServiceName),
@@ -141,7 +148,7 @@ func newResource(c config.OtelConfig) (*resource.Resource, error) {
 	)
 }
 
-func newTracerProvider(ctx context.Context, c config.OtelConfig, res *resource.Resource) (*sdktrace.TracerProvider, error) {
+func newTracerProvider(ctx context.Context, c Config, res *resource.Resource) (*sdktrace.TracerProvider, error) {
 	sampler, err := parseSampler(c.Sampling)
 	if err != nil {
 		return nil, err
@@ -170,7 +177,7 @@ func newTracerProvider(ctx context.Context, c config.OtelConfig, res *resource.R
 	return sdktrace.NewTracerProvider(tpOpts...), nil
 }
 
-func newMeterProvider(ctx context.Context, c config.OtelConfig, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
+func newMeterProvider(ctx context.Context, c Config, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
 	mpOpts := []sdkmetric.Option{sdkmetric.WithResource(res)}
 
 	switch c.Metrics.Exporter {
@@ -191,7 +198,7 @@ func newMeterProvider(ctx context.Context, c config.OtelConfig, res *resource.Re
 	return sdkmetric.NewMeterProvider(mpOpts...), nil
 }
 
-func newLoggerProvider(ctx context.Context, c config.OtelConfig, res *resource.Resource) (*sdklog.LoggerProvider, error) {
+func newLoggerProvider(ctx context.Context, c Config, res *resource.Resource) (*sdklog.LoggerProvider, error) {
 	lpOpts := []sdklog.LoggerProviderOption{sdklog.WithResource(res)}
 
 	switch c.Logs.Exporter {
@@ -212,7 +219,7 @@ func newLoggerProvider(ctx context.Context, c config.OtelConfig, res *resource.R
 	return sdklog.NewLoggerProvider(lpOpts...), nil
 }
 
-func otlpUsesHTTP(c config.OtelConfig, exporter string) bool {
+func otlpUsesHTTP(c Config, exporter string) bool {
 	switch exporter {
 	case "otlp_http", "http":
 		return true
@@ -223,7 +230,7 @@ func otlpUsesHTTP(c config.OtelConfig, exporter string) bool {
 	}
 }
 
-func newTraceExporter(ctx context.Context, c config.OtelConfig) (sdktrace.SpanExporter, error) {
+func newTraceExporter(ctx context.Context, c Config) (sdktrace.SpanExporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
 	if otlpUsesHTTP(c, c.Traces.Exporter) {
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(ep)}
@@ -239,7 +246,7 @@ func newTraceExporter(ctx context.Context, c config.OtelConfig) (sdktrace.SpanEx
 	return otlptracegrpc.New(ctx, opts...)
 }
 
-func newMetricExporter(ctx context.Context, c config.OtelConfig) (sdkmetric.Exporter, error) {
+func newMetricExporter(ctx context.Context, c Config) (sdkmetric.Exporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
 	if otlpUsesHTTP(c, c.Metrics.Exporter) {
 		opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpoint(ep)}
@@ -255,7 +262,7 @@ func newMetricExporter(ctx context.Context, c config.OtelConfig) (sdkmetric.Expo
 	return otlpmetricgrpc.New(ctx, opts...)
 }
 
-func newLogExporter(ctx context.Context, c config.OtelConfig) (sdklog.Exporter, error) {
+func newLogExporter(ctx context.Context, c Config) (sdklog.Exporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
 	if otlpUsesHTTP(c, c.Logs.Exporter) {
 		opts := []otlploghttp.Option{otlploghttp.WithEndpoint(ep)}
@@ -331,5 +338,6 @@ func parseRatio(s string) (float64, error) {
 
 // Module 在 otel.enabled 为 true 时安装 OTel SDK 生命周期。
 var Module = fx.Module("fxkit/otelx",
+	config.Provide[Config]("otel"),
 	fx.Invoke(Setup),
 )

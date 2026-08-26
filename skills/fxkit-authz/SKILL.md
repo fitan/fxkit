@@ -17,8 +17,9 @@ description: >-
 | 范围 | **仅 Huma/REST**；裸 chi handler **不经** authz |
 | 身份 | JWT Bearer，或 `auth.dev_header_user` 时的 `X-User` |
 | 授权 | Casbin：`Enforce(sub, path, METHOD)`；关闭 Casbin 时回退 `HTTPRoute.Permission` + scopes |
-| 策略库 | 默认与业务同库表 `casbin_rule` |
-| 未登记路由 | 默认放行；`auth.deny_unregistered=true` → 403 |
+| 策略库 | 默认与业务同库表 `casbin_rule`；多副本 `reload_interval`（默认 5s）重载内存 |
+| 未登记路由 | **一律要登录**。Casbin 关闭时：`deny_unregistered=false` 登录即可；`true` → 未登记 403。Casbin 开则 Enforce。`Metadata[authz.public]=true` 跳过 |
+| 组织 | `Subject.OrgID` 仅身份；**不参与** Casbin Enforce |
 
 ## 启用
 
@@ -33,7 +34,8 @@ auth:
     auto_register_routes: true
     bootstrap_role: admin
     bootstrap_users: [alice]
-  deny_unregistered: false
+    reload_interval: 5s   # 0s = 关闭（单副本可关）
+  deny_unregistered: false  # 仅 Casbin 关闭时：未登记是否 403
   dev_header_user: true   # 生产必须 false
 ```
 
@@ -41,7 +43,7 @@ auth:
 
 ## 登记受保护路由
 
-新增 Huma 路由时同步登记，否则 Casbin/`deny_unregistered` 行为不符合预期：
+`auto_register_routes` 会在启动时刮取已挂载的 Huma OpenAPI（含 `RegisterResource`），再与 `ProvideHTTPRoutes` 合并写入 Casbin。仍建议显式登记以便目录表有 Summary/Tags：
 
 ```go
 authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
@@ -82,11 +84,13 @@ curl -H "X-User: alice" http://localhost:8090/users
 curl -H "Authorization: Bearer <token>" http://localhost:8090/users
 ```
 
-`dev_header_user` 开启时进程打 WARN；CORS 允许头**不含** `X-User`（防浏览器绕过）。
+`dev_header_user` 开启时进程打 WARN；无 JWT validator 时残留 Bearer 不会挡住 `X-User`。CORS 允许头**不含** `X-User`（防浏览器绕过）。
 
 ## Agent 检查清单
 
-- [ ] 新 Huma 路径已 `ProvideHTTPRoutes`（或 auto_register 覆盖得到）。
+- [ ] 新 Huma 路径已 `ProvideHTTPRoutes`，或依赖 `auto_register_routes` 从 OpenAPI 刮取。
 - [ ] 生产关闭 `dev_header_user`。
+- [ ] 多租户在 handler 检查 `Subject.OrgID`（Casbin 不按组织隔离）。
 - [ ] 勿对裸 chi handler 假设有 authz 中间件。
-- [ ] 需要严管未登记路由时设 `deny_unregistered: true`。
+- [ ] 公开接口用 `Metadata[authz.OpPublic]=true`，不要指望未登记即匿名。
+- [ ] Casbin 关闭且要拒绝未登记路由时设 `deny_unregistered: true`。

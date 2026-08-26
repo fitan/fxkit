@@ -10,9 +10,9 @@
 | `fxerrors` | 主 skill | `fxkit`（构造表） |
 | `logx` | 主 skill（附） | 控制台 slog；otel 启用时由 otelx 接管 fanout |
 | `buildinfo` | 主 skill（附） | `/version`、`-ldflags`；Consul 元数据补丁会用到 |
-| `cmd/fxkit` | 主 skill CLI 节 | `fxkit new` / `gen resource` |
+| `cmd/fxkit` | 主 skill CLI 节 | `fxkit init` / `new` / `gen resource` |
 | `huma` | 专用 | `fxkit-huma-crud`（含 ProvideMiddleware） |
-| `crudx` | 专用 | `fxkit-huma-crud`（`NewRepo` + `List`） |
+| `crudx` | 专用 | `fxkit-huma-crud`（`List` + `ListSpec`；`Repo` 可选） |
 | `hatchetx` | 专用 | `fxkit-hatchet` |
 | `outbox` | 专用 | `fxkit-hatchet` |
 | `authz` | 专用 | `fxkit-authz` |

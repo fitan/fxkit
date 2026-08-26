@@ -354,7 +354,12 @@ func validateValueTypes(c Condition, fs FieldSpec) error {
 	}
 	checkOne := func(v any) error {
 		if v == nil {
-			return nil
+			switch effectiveOp {
+			case OpGT, OpGTE, OpLT, OpLTE:
+				return errInvalid
+			default:
+				return nil
+			}
 		}
 		switch effectiveOp {
 		case OpLike, OpNotLike:

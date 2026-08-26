@@ -1,10 +1,14 @@
 package authz
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -119,5 +123,50 @@ func TestSyncRouteCatalog(t *testing.T) {
 	}
 	if _, err := e.GetAPIPermission(t.Context(), created.ID); err == nil {
 		t.Fatal("expected not found after delete")
+	}
+}
+
+func TestHTTPRoutesFromOpenAPIAndMerge(t *testing.T) {
+	_, api := humatest.New(t)
+	huma.Register(api, huma.Operation{OperationID: "listItems", Method: http.MethodGet, Path: "/items", Summary: "list"},
+		func(context.Context, *struct{}) (*struct{ Body struct{ OK bool } }, error) {
+			return &struct{ Body struct{ OK bool } }{}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "createItem", Method: http.MethodPost, Path: "/items"},
+		func(context.Context, *struct{}) (*struct{ Body struct{ OK bool } }, error) {
+			return &struct{ Body struct{ OK bool } }{}, nil
+		})
+	got := HTTPRoutesFromOpenAPI(api)
+	foundGET, foundPOST := false, false
+	for _, r := range got {
+		if r.Path == "/items" && strings.EqualFold(r.Method, http.MethodGet) {
+			foundGET = true
+		}
+		if r.Path == "/items" && strings.EqualFold(r.Method, http.MethodPost) {
+			foundPOST = true
+		}
+		if skipAuthzPath(r.Path) {
+			t.Fatalf("openapi scrape included builtin path %q", r.Path)
+		}
+	}
+	if !foundGET || !foundPOST {
+		t.Fatalf("missing items routes: %+v", got)
+	}
+
+	merged := mergeHTTPRoutes(
+		[]HTTPRoute{{Method: "GET", Path: "/items", Permission: "items:list"}},
+		got,
+	)
+	getCount := 0
+	for _, r := range merged {
+		if r.Path == "/items" && strings.EqualFold(r.Method, http.MethodGet) {
+			getCount++
+			if r.Permission != "items:list" {
+				t.Fatalf("explicit route should win: %+v", r)
+			}
+		}
+	}
+	if getCount != 1 {
+		t.Fatalf("duplicate GET /items after merge: %d", getCount)
 	}
 }
