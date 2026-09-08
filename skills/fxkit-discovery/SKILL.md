@@ -23,6 +23,7 @@ discovery:
 ```
 
 - `register: true`：以 `app.name` 注册，服务 ID 为 `{name}-{advertise}-{port}`（多副本同端口不冲突），TTL 心跳，HTTP 监听后再注册，停机注销。
+- `discovery.tags`：额外 Consul 标签（与内置 `fxkit`/`http` 合并）。Traefik：`PathPrefix(/{app.name})` + file 里的 StripPrefix，网关路径与进程路由解耦。
 - `register: true` 且无 `consul_address`：启动失败。仅 `register: false`（或未开注册）时地址空才跳过。
 - Consul 不可达只告警；可对已存在同名同端口服务补丁 version/commit 等 buildinfo 字段。
 - ACL：`CONSUL_HTTP_TOKEN`（注册、补丁、reqx watch 共用）。

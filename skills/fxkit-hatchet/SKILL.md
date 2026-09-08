@@ -19,14 +19,20 @@ Hatchet = 持久化任务与事件引擎；**不是**带 consumer group 的传�
 hatchet:
   enabled: true
   host_port: "localhost:7077"
+  server_url: "http://localhost:8080"
   worker_name: "my-worker"
   outbox_publisher: true
+  otel: true
 outbox:
   enabled: true
   poll_interval: 1s
 ```
 
-Token：`hatchet.token` 或 `HATCHET_CLIENT_TOKEN`。V1 SDK 读 `HATCHET_CLIENT_*`；yaml 仅在 env 未设时注入。
+Token：`hatchet.token` 或 `HATCHET_CLIENT_TOKEN`。V1 SDK 读 `HATCHET_CLIENT_*`；yaml 仅在 env 未设时注入。Cron/Reminder 走 REST：`hatchet.server_url` / `HATCHET_CLIENT_SERVER_URL`（token 里是 localhost 时，连远程 dashboard 必须覆盖）。
+
+Trace：`Run()` 已打 producer span。`hatchet.otel`（默认 true）给 worker 挂 instrumentor（`hatchet.start_step_run`），**必须** `WithTracerProvider(otelx)`，禁止默认 `NewInstrumentor()`（会 `SetTracerProvider` 覆盖 otelx）。不要 `instrumentor.Shutdown` 共享 provider。`DisableHatchetCollector()`：span 只走 otelx OTLP。otelx 未启用则跳过。引擎 `hatchet.run/*` 与应用 trace 对不上是 SDK gRPC 未传 ctx，不是再导一份到引擎 collector 能解决的。
+
+TLS：`hatchet.tls_strategy`（`none` / `tls` / `mtls`）写入 `HATCHET_CLIENT_TLS_STRATEGY`。loopback 且未配置时默认 `none`；**非 loopback 的明文 gRPC 必须显式 `none`**（hatchet-lite `SERVER_GRPC_INSECURE`）。
 
 ## 事件当 MQ
 
@@ -141,3 +147,4 @@ _ = hatchetx.DeleteReminder(ctx, client, id)
 - [ ] Actor 入参带 JSON `actorId`；状态外置。
 - [ ] Reminder 按 cron 语义文档化，勿承诺 Dapr dueTime。
 - [ ] 勿假设 consumer group / offset；用 task 名 + worker 池解释扩展。
+- [ ] 要 worker span 时开 `otel.enabled` + `hatchet.otel`（默认 true）；勿另起一套 OTel SDK。

@@ -81,6 +81,19 @@ func TestRequireActorID_RejectsGetActorIDWithoutJSON(t *testing.T) {
 	}
 }
 
+func TestNewActor_DefaultConcurrencyMailbox(t *testing.T) {
+	t.Parallel()
+	a := NewActor[embedInput, int]("mailbox",
+		func(ctx context.Context, in embedInput) (int, error) { return in.Delta, nil },
+	)
+	if a.opts.concurrencyExpr != DefaultActorConcurrencyExpr {
+		t.Fatalf("expr=%q want %q", a.opts.concurrencyExpr, DefaultActorConcurrencyExpr)
+	}
+	if a.opts.maxRuns != 1 {
+		t.Fatalf("maxRuns=%d want 1 (same actorId must serialize)", a.opts.maxRuns)
+	}
+}
+
 func TestNewActor_Options(t *testing.T) {
 	t.Parallel()
 	a := NewActor[embedInput, int]("fxkit-counter",

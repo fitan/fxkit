@@ -128,7 +128,7 @@ func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *serve
 		Name:    name,
 		Address: adv.Addr,
 		Port:    port,
-		Tags:    []string{"fxkit", "http"},
+		Tags:    mergeRegisterTags(disc.Tags),
 		Meta:    meta,
 		Checks: []agentCheck{{
 			CheckID:                        "service:" + id,
@@ -166,6 +166,23 @@ func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *serve
 		"id", id, "name", name, "address", adv.Addr, "port", port, "check", "ttl:"+defaultTTL,
 	)
 	return id, nil
+}
+
+func mergeRegisterTags(extra []string) []string {
+	out := []string{"fxkit", "http"}
+	seen := map[string]struct{}{"fxkit": {}, "http": {}}
+	for _, t := range extra {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 func ttlPassLoop(ctx context.Context, disc *Config, serviceID string) {

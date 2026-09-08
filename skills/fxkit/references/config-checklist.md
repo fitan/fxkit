@@ -39,8 +39,11 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `hatchet.enabled` | 启用 client（有 registrar 时启 worker） |
 | `hatchet.token` / `HATCHET_CLIENT_TOKEN` | 必填（启用时；SDK 环境变量） |
 | `hatchet.host_port` | 如 `localhost:7077`；loopback 默认 TLS `none` |
+| `hatchet.server_url` | REST（cron/reminder）；空则用 token 里的 `server_url` |
+| `hatchet.tls_strategy` | `none` / `tls` / `mtls`；空 = 仅 loopback 默认 `none` |
 | `hatchet.namespace` / `worker_name` | 命名空间与 worker 名 |
 | `hatchet.outbox_publisher` | `true` 时 relay 推 Hatchet events |
+| `hatchet.otel` | worker `hatchet.start_step_run`；复用 otelx TracerProvider。默认 true；otelx 未开则跳过 |
 
 ## auth
 
@@ -78,3 +81,4 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `discovery.consul_passing_only` | 查询/watch 是否仅 healthy |
 | `discovery.register` | `true` 时自注册（TTL） |
 | `discovery.advertise_address` | 空 = 自动本机 IP |
+| `discovery.tags` | 额外 Consul 标签（与内置 `fxkit`/`http` 合并；Traefik Catalog 用） |

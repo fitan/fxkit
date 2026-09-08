@@ -46,7 +46,7 @@ func TestLoad_DefaultsMatchComponents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.HostPort != "localhost:7077" || !h.OutboxPublisher {
+	if h.HostPort != "localhost:7077" || !h.OutboxPublisher || !h.OTel {
 		t.Fatalf("hatchet: %+v", h)
 	}
 

@@ -118,6 +118,107 @@ func TestClientStaticSeeds(t *testing.T) {
 	}
 }
 
+func TestTransportClient(t *testing.T) {
+	t.Parallel()
+	var seenPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	lc := fxtest.NewLifecycle(t)
+	cfg, err := config.New(config.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := NewFactory(lc, cfg)
+	lc.RequireStart()
+	t.Cleanup(func() { lc.RequireStop() })
+
+	otelOff := false
+	httpClient, server, err := f.TransportClient(ClientInput{
+		Name:    "users",
+		Seeds:   []string{srv.URL},
+		OTel:    &otelOff,
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server != "http://users" {
+		t.Fatalf("server=%q", server)
+	}
+	req, err := http.NewRequest(http.MethodGet, server+"/v1/me", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if seenPath != "/v1/me" {
+		t.Fatalf("path=%q", seenPath)
+	}
+}
+
+func TestEndpointsEqual(t *testing.T) {
+	t.Parallel()
+	if !endpointsEqual(nil, nil) {
+		t.Fatal("nil")
+	}
+	if !endpointsEqual([]string{"a:1", "b:2"}, []string{"b:2", "a:1"}) {
+		t.Fatal("order")
+	}
+	if endpointsEqual([]string{"a:1"}, []string{"a:1", "b:2"}) {
+		t.Fatal("len")
+	}
+	if endpointsEqual([]string{"a:1"}, []string{"a:2"}) {
+		t.Fatal("diff")
+	}
+}
+
+func TestWatchSkipsReplaceWhenEndpointsUnchanged(t *testing.T) {
+	t.Parallel()
+	const body = `[{"Service":{"Address":"10.1.2.3","Port":8080}}]`
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("X-Consul-Index", "1")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	pool := newEndpointPool([]string{"10.1.2.3:8080"})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	go watchConfig{
+		consulBase: srv.URL,
+		service:    "catalog",
+		wait:       time.Millisecond,
+		httpClient: srv.Client(),
+	}.run(ctx, pool)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hits.Load() >= 3 {
+			eps := pool.snapshot()
+			if !endpointsEqual(eps, []string{"10.1.2.3:8080"}) {
+				t.Fatalf("pool=%v", eps)
+			}
+			cancel()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("watch hits=%d", hits.Load())
+}
+
 func TestWatchFetchSendsConsulToken(t *testing.T) {
 	t.Setenv("CONSUL_HTTP_TOKEN", "acl-token")
 	var got string
@@ -381,5 +482,24 @@ func TestResolveTransport_POSTFailoverRewindsBody(t *testing.T) {
 	}
 	if second != string(body) {
 		t.Fatalf("second body=%q first=%q", second, first)
+	}
+}
+
+func TestFormatConsulWait(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "1s"},
+		{500 * time.Millisecond, "1s"},
+		{5 * time.Minute, "300s"},
+		{10 * time.Minute, "600s"},
+		{15 * time.Minute, "600s"},
+	}
+	for _, tc := range cases {
+		if got := formatConsulWait(tc.in); got != tc.want {
+			t.Fatalf("formatConsulWait(%v)=%q want %q", tc.in, got, tc.want)
+		}
 	}
 }

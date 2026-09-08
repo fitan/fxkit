@@ -35,7 +35,7 @@ type watchConfig struct {
 
 func (w watchConfig) run(ctx context.Context, pool *endpointPool) {
 	if w.wait <= 0 {
-		w.wait = 55 * time.Second
+		w.wait = defaultWatchWait
 	}
 	if w.httpClient == nil {
 		w.httpClient = &http.Client{Timeout: w.wait + 10*time.Second}
@@ -64,10 +64,15 @@ func (w watchConfig) run(ctx context.Context, pool *endpointPool) {
 		}
 		index = nextIndex
 		if len(eps) == 0 {
-			slog.Warn("reqx: consul returned no endpoints, clearing pool",
-				"service", w.service,
-			)
-			pool.replace(nil)
+			if pool.len() > 0 {
+				slog.Warn("reqx: consul returned no endpoints, clearing pool",
+					"service", w.service,
+				)
+				pool.replace(nil)
+			}
+			continue
+		}
+		if endpointsEqual(pool.snapshot(), eps) {
 			continue
 		}
 		pool.replace(eps)
@@ -141,14 +146,13 @@ func (w watchConfig) fetch(ctx context.Context, index uint64) ([]string, uint64,
 }
 
 func formatConsulWait(d time.Duration) string {
-	sec := int(d.Seconds())
-	if sec < 1 {
-		sec = 1
+	if d < time.Second {
+		d = time.Second
 	}
-	if sec > 60 {
-		sec = 60
+	if d > maxWatchWait {
+		d = maxWatchWait
 	}
-	return strconv.Itoa(sec) + "s"
+	return strconv.Itoa(int(d/time.Second)) + "s"
 }
 
 func normalizeConsulBase(addr string) (string, error) {

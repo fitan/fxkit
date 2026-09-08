@@ -24,6 +24,7 @@ help:
 	@echo "make build          # build all services into bin/"
 	@echo "make build SVC=foo  # build one service"
 	@echo "make run SVC=foo    # run one service"
+	@echo "make openapi SVC=foo# dump OpenAPI 3.0 YAML (no HTTP listen)"
 	@echo "make infra          # start local middleware (postgres, hatchet, consul, otel)"
 	@echo "make infra-down     # stop middleware (keep volumes)"
 	@echo "make hatchet-token  # print a local Hatchet API token"
@@ -44,6 +45,10 @@ endif
 run:
 	@test -n "$(SVC)" || (echo "usage: make run SVC=<name>"; exit 1)
 	go run -ldflags "$(GO_LDFLAGS)" ./services/$(SVC)/cmd serve --config services/$(SVC)/configs/config.yaml
+
+openapi:
+	@test -n "$(SVC)" || (echo "usage: make openapi SVC=<name>"; exit 1)
+	go run -ldflags "$(GO_LDFLAGS)" ./services/$(SVC)/cmd openapi --config services/$(SVC)/configs/config.yaml -o services/$(SVC)/openapi.yaml
 
 infra:
 	docker compose up -d

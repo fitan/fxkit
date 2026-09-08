@@ -1,0 +1,50 @@
+# Traefik 南北向入口：本地插件托管静态页 + Consul Catalog（catalog / storefront）。
+# Consul Catalog 用服务登记的 Address（本机 LAN IP）；host.docker.internal 只用来连 Consul API。
+
+entryPoints:
+  web:
+    address: ":80"
+
+api:
+  dashboard: true
+  insecure: true
+
+experimental:
+  otlpLogs: true
+  localPlugins:
+    staticfiles:
+      moduleName: github.com/fitan/fxkit-example/staticfiles
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+  consulCatalog:
+    exposedByDefault: false
+    prefix: traefik
+    refreshInterval: 2s
+    endpoint:
+      address: "host.docker.internal:8500"
+      scheme: http
+
+log:
+  level: INFO
+
+# 与 catalog/storefront 同一 OTLP HTTP 采集端（10.170.34.223:4318）。
+tracing:
+  serviceName: traefik
+  sampleRate: 1.0
+  otlp:
+    http:
+      endpoint: "http://10.170.34.223:4318/v1/traces"
+
+metrics:
+  otlp:
+    http:
+      endpoint: "http://10.170.34.223:4318/v1/metrics"
+
+accessLog:
+  otlp:
+    serviceName: traefik
+    http:
+      endpoint: "http://10.170.34.223:4318/v1/logs"

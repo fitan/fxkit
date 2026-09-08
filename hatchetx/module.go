@@ -27,6 +27,8 @@
 // idempotency (at-least-once delivery).
 //
 // Enable with hatchet.enabled=true and HATCHET_CLIENT_TOKEN (or hatchet.token).
+// Worker traces (hatchet.start_step_run) attach when hatchet.otel is true (default)
+// and otelx has installed an SDK TracerProvider; see attachWorkerTracing.
 // See https://docs.hatchet.run/
 package hatchetx
 
@@ -105,12 +107,17 @@ func applyHatchetEnv(hcfg Config) error {
 		}
 		setenvIfEmpty("HATCHET_CLIENT_HOST_PORT", hp)
 	}
+	if u := strings.TrimSpace(hcfg.ServerURL); u != "" {
+		setenvIfEmpty("HATCHET_CLIENT_SERVER_URL", u)
+	}
 	if hcfg.Namespace != "" {
 		setenvIfEmpty("HATCHET_CLIENT_NAMESPACE", hcfg.Namespace)
 	}
-	// Local compose (SERVER_GRPC_INSECURE=t) needs plaintext gRPC. Only default to
-	// "none" for loopback hosts; cloud/TLS endpoints must set HATCHET_CLIENT_TLS_STRATEGY.
-	if isLoopbackHostPort(hcfg.HostPort) || isLoopbackHostPort(os.Getenv("HATCHET_CLIENT_HOST_PORT")) {
+	// Local compose (SERVER_GRPC_INSECURE=t) needs plaintext gRPC.
+	// yaml tls_strategy wins when env is unset; otherwise only loopback defaults to none.
+	if s := strings.TrimSpace(hcfg.TLSStrategy); s != "" {
+		setenvIfEmpty("HATCHET_CLIENT_TLS_STRATEGY", s)
+	} else if isLoopbackHostPort(hcfg.HostPort) || isLoopbackHostPort(os.Getenv("HATCHET_CLIENT_HOST_PORT")) {
 		setenvIfEmpty("HATCHET_CLIENT_TLS_STRATEGY", "none")
 	}
 	return nil
@@ -219,6 +226,7 @@ func registerLifecycle(p lifecycleParams) {
 			if err != nil {
 				return fmt.Errorf("hatchetx: new worker: %w", err)
 			}
+			attachWorkerTracing(w, p.Cfg.OTel)
 			cleanup, err = w.Start()
 			if err != nil {
 				return fmt.Errorf("hatchetx: start worker: %w", err)

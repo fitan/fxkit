@@ -1,5 +1,5 @@
-// Package cli 是框架的 Cobra 入口。默认根命令支持 `serve` 子命令，从传入 [Run] 的模块构造 Fx 图。
-// 宿主应用可在调用 [Run] 前通过 [AddCommand] 注册额外命令。
+// Package cli 是框架的 Cobra 入口。默认根命令支持 `serve` / `openapi` / `version`，
+// 从传入 [Run] 的模块构造 Fx 图。宿主应用可在调用 [Run] 前通过 [AddCommand] 注册额外命令。
 package cli
 
 import (
@@ -44,7 +44,8 @@ func AddCommand(cmds ...*cobra.Command) {
 	extraCommands = append(extraCommands, cmds...)
 }
 
-// Run 构建 cobra 根命令与 `serve` 子命令并执行。serve 子命令从用户提供的 options 组装 fx.App。
+// Run 构建 cobra 根命令与 `serve` / `openapi` / `version` 子命令并执行。
+// serve 从用户提供的 options 组装 fx.App；openapi 使用同一张图但不监听 HTTP。
 //
 // 全局 deferred recover 防止意外 panic，使其在进程以 code 1 退出前写入 stderr
 // （OTel 日志管道安装后也会进入该管道）。
@@ -69,6 +70,7 @@ func Run(opts ...fx.Option) {
 	rootCmd.PersistentFlags().String("consul", "", "Consul HTTP address to load config from (e.g. localhost:8500)")
 	rootCmd.PersistentFlags().String("consul-key", "", "Consul KV key holding YAML config; required with --consul")
 	rootCmd.AddCommand(buildServeCmd(opts))
+	rootCmd.AddCommand(buildOpenAPICmd(opts))
 	rootCmd.AddCommand(buildVersionCmd())
 
 	extraCommandsMu.Lock()
@@ -88,27 +90,35 @@ func buildServeCmd(opts []fx.Option) *cobra.Command {
 		Use:   "serve",
 		Short: "Start the HTTP service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			configFile, _ := cmd.Flags().GetString("config")
-			consulAddr, _ := cmd.Flags().GetString("consul")
-			consulKey, _ := cmd.Flags().GetString("consul-key")
-			port, _ := cmd.Flags().GetString("port")
-
-			app := fx.New(append([]fx.Option{
-				fx.StartTimeout(60 * time.Second),
-				fx.WithLogger(func() fxevent.Logger { return logx.NewFxLogger(os.Stderr) }),
-				fx.Supply(config.Options{
-					ConfigFile:      configFile,
-					ConsulAddress:   consulAddr,
-					ConsulConfigKey: consulKey,
-					Port:            port,
-				}),
-			}, opts...)...)
+			app := newFxApp(cmd, opts)
 			app.Run()
 			return nil
 		},
 	}
 	cmd.Flags().StringP("port", "p", "", "server port (overrides config)")
 	return cmd
+}
+
+func newFxApp(cmd *cobra.Command, opts []fx.Option, extra ...fx.Option) *fx.App {
+	configFile, _ := cmd.Flags().GetString("config")
+	consulAddr, _ := cmd.Flags().GetString("consul")
+	consulKey, _ := cmd.Flags().GetString("consul-key")
+	port, _ := cmd.Flags().GetString("port")
+
+	all := []fx.Option{
+		fx.StartTimeout(60 * time.Second),
+		fx.StopTimeout(15 * time.Second),
+		fx.WithLogger(func() fxevent.Logger { return logx.NewFxLogger(os.Stderr) }),
+		fx.Supply(config.Options{
+			ConfigFile:      configFile,
+			ConsulAddress:   consulAddr,
+			ConsulConfigKey: consulKey,
+			Port:            port,
+		}),
+	}
+	all = append(all, opts...)
+	all = append(all, extra...)
+	return fx.New(all...)
 }
 
 func buildVersionCmd() *cobra.Command {

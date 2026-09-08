@@ -1,0 +1,6 @@
+displayName: staticfiles
+type: middleware
+import: github.com/fitan/fxkit-example/staticfiles
+summary: Serve static files from a directory.
+testData:
+  root: /web

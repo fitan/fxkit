@@ -38,7 +38,7 @@ Claude Code：同样目录放到 `<project>/.claude/skills/`。
 | `fxkit-otel` | otelx | Trace/Metric/Log、采样、OTLP |
 | `fxkit-discovery` | consulx | Consul **自注册**、advertise、TTL |
 | `fxkit-reqx` | reqx | **出站** HTTP、按服务名调下游、failover |
-| `fxkit-docs` | docs, openapi | Scalar、base+Huma 合并 OpenAPI |
+| `fxkit-docs` | docs, openapi | Scalar、base+Huma 合并、`openapi` dump、`gen client` |
 
 每个目录下有独立 `SKILL.md`，按任务触发；不必把整个 README 塞进一个 skill。
 

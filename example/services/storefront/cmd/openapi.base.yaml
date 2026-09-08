@@ -1,0 +1,7 @@
+openapi: 3.1.0
+info:
+  title: storefront
+  version: "1.0.0"
+  description: |
+    fxkit showcase storefront. docs.MergedModule base; live Huma /digest is merged at serve time.
+paths: {}

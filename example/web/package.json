@@ -1,0 +1,19 @@
+{
+  "name": "fxkit-example-web",
+  "private": true,
+  "scripts": {
+    "bundle": "esbuild node_modules/@logto/browser/lib/index.js --bundle --format=esm --outfile=logto.js --legal-comments=none",
+    "gen": "openapi-typescript ../services/catalog/openapi.yaml -o src/catalog.d.ts && openapi-typescript ../services/storefront/openapi.yaml -o src/storefront.d.ts",
+    "build": "esbuild src/app.ts --bundle --format=esm --outfile=app.js --legal-comments=none",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@logto/browser": "3.0.13",
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.8",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3"
+  }
+}

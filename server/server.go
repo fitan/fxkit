@@ -87,12 +87,19 @@ func RegisterRoutes(p RouterParams) {
 	slog.Info("──── registration complete ────", "app_routes", len(p.Routes))
 }
 
+// Runtime 控制 HTTP listener 行为。通过 fx.Supply 注入；缺省则正常监听。
+// `openapi` 子命令会 Supply SkipListen=true，装配同一张 Fx 图但不绑端口。
+type Runtime struct {
+	SkipListen bool
+}
+
 // ServerParams 列出 [NewHTTPServer] 的输入。
 type ServerParams struct {
 	fx.In
 	Lifecycle fx.Lifecycle
 	Server    *Config
 	Mux       *chi.Mux
+	Runtime   *Runtime `optional:"true"`
 }
 
 // HTTPServer 是 [http.Server] 的薄封装，供需要显式引用绑定 server 的 Fx 图使用（例如测试或需要地址的模块）。
@@ -118,6 +125,11 @@ func NewHTTPServer(p ServerParams) *HTTPServer {
 	srv.Protocols = new(http.Protocols)
 	srv.Protocols.SetHTTP1(true)
 	srv.Protocols.SetUnencryptedHTTP2(true)
+
+	if p.Runtime != nil && p.Runtime.SkipListen {
+		slog.Info("http server listen skipped")
+		return &HTTPServer{Server: srv}
+	}
 
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(_ context.Context) error {

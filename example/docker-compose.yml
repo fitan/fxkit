@@ -1,0 +1,16 @@
+name: fxkit-example
+
+services:
+  traefik:
+    image: ${TRAEFIK_IMAGE:-docker.m.daocloud.io/library/traefik:v3.7.12}
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8880:80"    # 浏览器入口
+      - "8881:8080"  # Traefik dashboard / API
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/plugins-local:/plugins-local:ro
+      - ./web:/web:ro

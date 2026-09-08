@@ -1,0 +1,101 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1419;
+  --panel: #1a222c;
+  --text: #e8eef4;
+  --muted: #8b9aab;
+  --accent: #3d9cf0;
+  --line: #2a3542;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6f8;
+    --panel: #fff;
+    --text: #15202b;
+    --muted: #5b6b7c;
+    --accent: #1565c0;
+    --line: #dde3ea;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.auth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  max-width: 32rem;
+}
+#auth-status {
+  width: 100%;
+  text-align: right;
+  font-size: 0.8rem;
+}
+h1 { font-size: 1.25rem; margin: 0; }
+h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+.muted { color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
+label { font-size: 0.85rem; color: var(--muted); }
+input, button {
+  font: inherit;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+button {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  cursor: pointer;
+}
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+}
+@media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+@media (min-width: 1100px) { main { grid-template-columns: 1fr 1fr 1fr; } }
+section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem;
+}
+form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+form input { flex: 1; min-width: 8rem; }
+ul { list-style: none; padding: 0; margin: 0; }
+li {
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+pre {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  background: var(--bg);
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 0.8rem;
+  min-height: 6rem;
+}
+.hatchet-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }

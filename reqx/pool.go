@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,22 @@ func (p *endpointPool) replace(eps []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.endpoints = append([]string(nil), eps...)
+}
+
+func endpointsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]string(nil), a...)
+	bs := append([]string(nil), b...)
+	sort.Strings(as)
+	sort.Strings(bs)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *endpointPool) snapshot() []string {

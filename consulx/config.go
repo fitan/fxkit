@@ -15,6 +15,9 @@ type Config struct {
 	Register bool `yaml:"register"`
 	// AdvertiseAddress 写入 Consul catalog 的地址。空则自动探测本机非 VPN IPv4。
 	AdvertiseAddress string `yaml:"advertise_address"`
+	// Tags 额外 Consul 标签（与内置 fxkit/http 合并去重）。
+	// Traefik：PathPrefix(/{app.name}) + 在 file provider 里 StripPrefix，避免把每条 HTTP 路径写进 tag。
+	Tags []string `yaml:"tags"`
 }
 
 // SetDefaults 填入编译期默认值。

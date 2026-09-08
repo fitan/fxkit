@@ -29,7 +29,7 @@ Import 示例使用 `github.com/fitan/fxkit`——按消费方 `go.mod` / `repla
 | OTel / OTLP / 采样 / slog trace | `fxkit-otel` |
 | Consul **注册**（consulx） | `fxkit-discovery` |
 | 出站 HTTP / 调下游（reqx） | `fxkit-reqx` |
-| Scalar /docs、base+Huma OpenAPI 合并 | `fxkit-docs` |
+| Scalar /docs、openapi dump、`fxkit gen client` | `fxkit-docs` |
 
 ## 新服务最小路径
 
@@ -170,11 +170,14 @@ fxkit gen resource Article \
   --search title,body \
   --filter author_id \
   --sort 'created_at desc'
+
+fxkit gen client --spec openapi.yaml --out ./internal/clients/users
 ```
 
 `gen resource` 产出对齐 crudx + 显式 Service 方法；接 Huma 时再读 `fxkit-huma-crud`。
+`gen client` 读 OpenAPI（通常来自 `<svc> openapi`）生成 oapi-codegen SDK + `reqx` 封装；细节见 `fxkit-docs` / `fxkit-reqx`。
 
-宿主扩展 Cobra：在 `Run` 前 `cli.AddCommand(...)` / `cli.SetRootName(...)`。
+宿主扩展 Cobra：在 `Run` 前 `cli.AddCommand(...)` / `cli.SetRootName(...)`。内置：`serve`、`openapi`、`version`。
 
 ## logx / buildinfo（轻量）
 

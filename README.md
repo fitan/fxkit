@@ -78,6 +78,8 @@ func main() {
 ./myapp serve --config configs/config.yaml
 # 多服务改端口：
 ./myapp serve --port 8081
+# 离线导出 OpenAPI（不监听 HTTP；默认 3.0 YAML）：
+./myapp openapi > openapi.yaml
 ```
 
 内置探针：
@@ -97,7 +99,9 @@ func main() {
 |----|------|
 | `fxkit` | `Default` / `Minimal` / `Run` / `Service` |
 | `fxkit/config` | YAML + flag + 可选 Consul KV；`Load`/`Provide` 解各包 `Config` |
-| `fxkit/cli` | Cobra：`serve` / `version` |
+| `fxkit/cli` | Cobra：`serve` / `openapi` / `version` |
+| `fxkit/server` | chi mux、中间件、HTTP Server、健康检查 |
+| `fxkit/huma` | Huma v2 REST + `ListQueryInput`；可选 `RegisterResource` |
 | `fxkit/server` | chi mux、中间件、HTTP Server、健康检查 |
 | `fxkit/huma` | Huma v2 REST + `ListQueryInput`；可选 `RegisterResource` |
 | `fxkit/authz` | JWT/X-User 认人 + Casbin path/method RBAC（**仅 Huma**） |
@@ -113,7 +117,7 @@ func main() {
 | `fxkit/reqx` | 基于 `imroc/req` 的出站 HTTP（Consul healthy watch + failover + otel） |
 | `fxkit/buildinfo` | `-ldflags` 构建元数据 |
 | `fxkit/logx` | 彩色控制台 slog |
-| `fxkit/cmd/fxkit` | `fxkit init` / `fxkit new` / `fxkit gen resource` |
+| `fxkit/cmd/fxkit` | `fxkit init` / `fxkit new` / `fxkit gen resource` / `fxkit gen client` |
 
 ---
 
@@ -214,6 +218,7 @@ hatchet:
   namespace: ""
   worker_name: "fxkit-worker"
   outbox_publisher: true       # outbox relay 推 Hatchet events
+  otel: true                   # worker hatchet.start_step_run；复用 otelx TracerProvider
 
 auth:
   enabled: false
@@ -399,6 +404,29 @@ fxhuma.RegisterResource(api, svc, fxhuma.RegisterResourceInput[UpdateReq]{
 列表查询参数见 `huma.ListQueryInput`（limit、cursor、`q=` 等）。
 
 非 `*fxerrors.Error` 的返回值会映射为 **HTTP 500 + `"internal error"`**，不把内部 `err.Error()` 回给客户端。
+
+### OpenAPI 导出与 typed client
+
+Huma 会生成 OpenAPI。服务二进制自带 `openapi` 子命令：装配与 `serve` 相同的 Fx 图，**不监听 HTTP**，把 live spec 打到 stdout（日志在 stderr）。默认 **OpenAPI 3.0.3 YAML**（oapi-codegen 对 3.1 支持不完整）：
+
+```bash
+./myapp openapi > openapi.yaml
+./myapp openapi --spec 3.1 --format json -o openapi.json
+make openapi SVC=users   # 写入 services/users/openapi.yaml
+```
+
+在**调用方**生成 Go SDK，并用 `reqx` 做发现/重试（不要把实例 IP 写死）：
+
+```bash
+fxkit gen client --spec services/users/openapi.yaml --out ./internal/clients/users
+```
+
+```go
+cli, err := users.NewFromFactory(factory, reqx.ClientInput{Name: "users"})
+resp, err := cli.GreetWithResponse(ctx, "world")
+```
+
+`reqx.Factory.TransportClient` 也可手动塞进其它生成器（`WithHTTPClient`）。详见 [14. API 文档](#14-api-文档-docs--openapi)。
 
 ---
 
@@ -623,7 +651,10 @@ hatchet:
   host_port: "localhost:7077"
   worker_name: "my-worker"
   outbox_publisher: true
+  otel: true                   # worker 侧 span；需要同时开 otel.enabled
 ```
+
+SDK `Run()` 已会打 producer span（`hatchet.run_workflow`）。`hatchet.otel`（默认 true）在 worker 上挂 instrumentor，打 `hatchet.start_step_run`，并复用 **otelx** 的 TracerProvider（不另起 SDK、不 `Shutdown` 全局 provider、不向 Hatchet engine 再导一份）。otelx 未启用时自动跳过。
 
 环境变量（SDK 原生，yaml 会在未设置时注入）：
 
@@ -734,6 +765,20 @@ docs.MergedModule(embedOpenAPI)
 
 合并逻辑在 `openapi.MergeBaseHuma`（`FromHuma` + `MergeYAML`）。
 
+### 离线 dump 与 SDK
+
+`openapi.Encode` 支持 3.0/3.1 与 YAML/JSON。服务侧：
+
+```bash
+myapp openapi                      # 3.0.3 YAML → stdout
+myapp openapi --spec 3.1 -o spec.yaml
+myapp openapi --base docs/base.yaml -o merged.yaml
+```
+
+需要 `huma.Module`。会启动同一张 Fx 图（DB 等 OnStart 仍会跑），只跳过 HTTP listen。
+
+调用方：`fxkit gen client --spec spec.yaml --out ./internal/clients/<svc>` 写出 `client.gen.go`（oapi-codegen）、`reqx.go`（`NewFromFactory`）和 `//go:generate`。
+
 ---
 
 ## 15. 服务发现 consulx
@@ -796,9 +841,12 @@ fxkit gen resource Article \
   --search title,body \
   --filter author_id \
   --sort 'created_at desc'
+
+# 从服务 dump 的 OpenAPI 生成 typed Go client（oapi-codegen + reqx）
+fxkit gen client --spec services/orders/openapi.yaml --out ./internal/clients/orders
 ```
 
-`init` 产出根 Makefile：`make run SVC=orders`、`make build`、`make infra`（本地 Postgres / Hatchet / Consul / OTel）。`gen resource` 用 `crudx.List` 做列表（含 cursor），写方法显式生成并用 `RegisterResource` 挂上；`--search` 列会打上 GORM index（TEXT 除外）并把 ListSpec `Indexed` 设为 true。生成后从 `services/<svc>/cmd/main.go` 接入。
+`init` 产出根 Makefile：`make run SVC=orders`、`make openapi SVC=orders`、`make build`、`make infra`（本地 Postgres / Hatchet / Consul / OTel）。`gen resource` 用 `crudx.List` 做列表（含 cursor），写方法显式生成并用 `RegisterResource` 挂上；`--search` 列会打上 GORM index（TEXT 除外）并把 ListSpec `Indexed` 设为 true。生成后从 `services/<svc>/cmd/main.go` 接入。`gen client` 在调用方生成 oapi-codegen SDK，并用 `reqx.TransportClient` 发请求。
 
 ---
 
@@ -836,7 +884,7 @@ make run SVC=hello
 
 ```mermaid
 flowchart TB
-  CLI[cli serve] --> FX[Fx graph]
+  CLI[cli serve / openapi] --> FX[Fx graph]
   FX --> HTTP[server chi + Listener]
   HTTP --> MW[recover / CORS / OTel / body-log]
   MW --> Routes[routes group]

@@ -15,3 +15,10 @@ go run ./services/{{.AppName}}/cmd serve --config services/{{.AppName}}/configs/
 - `GET /greet/{name}` — sample Huma handler
 - `GET /docs` — Scalar API reference
 - `GET /healthz` — liveness
+
+Dump OpenAPI (no HTTP listen) and generate a typed Go client:
+
+```bash
+make openapi SVC={{.AppName}}
+fxkit gen client --spec services/{{.AppName}}/openapi.yaml --out ./internal/clients/{{.AppName}}
+```

@@ -26,9 +26,12 @@ hatchet:                       # fxkit/hatchetx；token 也可用 HATCHET_CLIENT
   enabled: false
   token: ""                    # compose 后 make hatchet-token
   host_port: "localhost:7077"  # loopback 默认 TLS none
+  server_url: ""               # REST cron/reminder；空则用 token 内 server_url
+  tls_strategy: ""             # none | tls | mtls；非 loopback 明文 gRPC 须显式 none
   namespace: ""
   worker_name: "{{.AppName}}"
   outbox_publisher: true
+  otel: true                   # worker spans；复用 otelx，otel.enabled=false 时自动跳过
 
 auth:                          # fxkit/authz，仅覆盖 Huma
   enabled: false
@@ -74,4 +77,5 @@ discovery:                     # consulx 注册 + reqx 发现
   consul_passing_only: true    # reqx 是否只取 healthy
   register: false              # true = 以 app.name TTL 自注册
   advertise_address: ""        # 空 = 自动本机 IP
+  tags: []                     # 额外 Consul 标签；Traefik：traefik.enable=true 等
 {{end}}

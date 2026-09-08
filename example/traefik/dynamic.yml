@@ -1,0 +1,24 @@
+# 静态前端优先低于 /catalog、/storefront（Consul Catalog + StripPrefix）。
+http:
+  routers:
+    web:
+      rule: PathPrefix(`/`)
+      entryPoints:
+        - web
+      service: noop@internal
+      priority: 1
+      middlewares:
+        - static
+  middlewares:
+    static:
+      plugin:
+        staticfiles:
+          root: /web
+    catalog-strip:
+      stripPrefix:
+        prefixes:
+          - /catalog
+    storefront-strip:
+      stripPrefix:
+        prefixes:
+          - /storefront

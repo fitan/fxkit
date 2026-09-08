@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -118,5 +120,62 @@ func TestRenderResource_listEngine(t *testing.T) {
 	if n := strings.Count(string(src), `"created_at":`); n != 2 {
 		// one in Fields, one in SortFields
 		t.Errorf("created_at map keys=%d want 2 (fields+sort)\n%s", n, src)
+	}
+}
+
+func TestGenerateClient_scaffold(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	spec := []byte("openapi: 3.0.3\ninfo:\n  title: t\n  version: 1.0.0\npaths: {}\n")
+	specPath := filepath.Join(dir, "in.yaml")
+	if err := os.WriteFile(specPath, spec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "users")
+	if err := generateClient(clientGenInput{
+		SpecPath:    specPath,
+		OutDir:      out,
+		SkipCodegen: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"openapi.yaml", "oapi-codegen.yaml", "generate.go", "reqx.go"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
+	}
+	reqxSrc, err := os.ReadFile(filepath.Join(out, "reqx.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"package users",
+		"NewFromFactory",
+		"TransportClient",
+		"*ClientWithResponses",
+	} {
+		if !bytes.Contains(reqxSrc, []byte(want)) {
+			t.Errorf("reqx.go missing %q\n%s", want, reqxSrc)
+		}
+	}
+	genSrc, err := os.ReadFile(filepath.Join(out, "generate.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(genSrc, []byte(oapiCodegenPkg)) {
+		t.Errorf("generate.go should pin %s\n%s", oapiCodegenPkg, genSrc)
+	}
+}
+
+func TestValidateGoPackageName(t *testing.T) {
+	t.Parallel()
+	if err := validateGoPackageName("users"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateGoPackageName("type"); err == nil {
+		t.Fatal("keyword")
+	}
+	if err := validateGoPackageName("123bad"); err == nil {
+		t.Fatal("leading digit")
 	}
 }

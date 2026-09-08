@@ -123,6 +123,9 @@ func TestScaffoldRepoAndService(t *testing.T) {
 	if !strings.Contains(string(mkBytes), "docker compose up") {
 		t.Fatal("Makefile missing infra target")
 	}
+	if !strings.Contains(string(mkBytes), "make openapi") && !strings.Contains(string(mkBytes), "openapi:") {
+		t.Fatal("Makefile missing openapi target")
+	}
 
 	svc := filepath.Join(dir, "services", "orders")
 	if err := os.MkdirAll(svc, 0o755); err != nil {

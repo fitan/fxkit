@@ -106,6 +106,8 @@ fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
 
 脚手架：`fxkit gen resource` 生成 `crudx.List` + 显式写方法 + `RegisterResource`。
 
+给其它服务生成 typed 客户端：先 `<svc> openapi` dump 3.0 spec，再 `fxkit gen client`（见 `fxkit-docs` / `fxkit-reqx`）。不要在本服务再生成一份自己的 Go SDK。
+
 ## 可选：Repo[T]
 
 兼容薄封装（Create/GetByID/List/Update/Delete）。新代码不必嵌入 `*crudx.Repo[T]`；领域查询直接 `Conn(ctx).Where(...)`。已有 Repo 代码可继续用。

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fxkit showcase</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>fxkit showcase</h1>
+      <p class="muted">Traefik → Consul Catalog → catalog / storefront · 全栈探测见 <code>make verify</code></p>
+    </div>
+    <div class="auth">
+      <div id="auth-status" class="muted">正在检查登录…</div>
+      <button id="sign-in" type="button" hidden>Logto 登录</button>
+      <button id="sign-out" type="button" hidden>退出</button>
+      <button id="bind-admin" type="button" hidden>把 JWT sub 绑到 admin</button>
+      <label>X-User 兜底
+        <input id="user" value="alice" autocomplete="username" />
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>Articles</h2>
+      <form id="create">
+        <input id="title" placeholder="标题" required />
+        <input id="body" placeholder="正文（可选）" />
+        <button type="submit">创建</button>
+      </form>
+      <p id="list-status" class="muted"></p>
+      <ul id="articles"></ul>
+    </section>
+
+    <section>
+      <h2>Storefront digest</h2>
+      <p class="muted">经 Traefik <code>/storefront/digest</code>，storefront 用 <code>reqx.NewFromFactory</code> 调 catalog。</p>
+      <button id="digest-btn" type="button">拉取 digest</button>
+      <pre id="digest"></pre>
+    </section>
+
+    <section>
+      <h2>Hatchet</h2>
+      <p class="muted">outbox → <code>article-created</code> → inbox 标 indexed；fan-out 第二消费者；<code>NewActor</code> 计数；<code>CreateReminder</code> heartbeat。</p>
+      <div class="hatchet-actions">
+        <button id="counter-btn" type="button">计数 +2</button>
+        <button id="heartbeat-btn" type="button">读 heartbeat</button>
+        <button id="fanout-btn" type="button">读 fan-out</button>
+      </div>
+      <pre id="hatchet"></pre>
+    </section>
+
+    <section>
+      <h2>其它探针</h2>
+      <p class="muted">匿名 <code>/catalog/public/ping</code>、身份 <code>/catalog/me</code>、裸 chi <code>/catalog/chi/echo</code>（不经 authz）。</p>
+      <button id="probe-btn" type="button">跑探针</button>
+      <pre id="probes"></pre>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

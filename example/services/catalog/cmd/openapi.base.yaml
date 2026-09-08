@@ -1,0 +1,8 @@
+openapi: 3.1.0
+info:
+  title: catalog
+  version: "1.0.0"
+  description: |
+    fxkit showcase catalog. This file is the docs.MergedModule base overlay;
+    live Huma paths (articles, comments, authz, …) are merged at serve time.
+paths: {}

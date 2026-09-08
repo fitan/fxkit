@@ -1,0 +1,89 @@
+server:
+  port: "8082"
+  log_payloads: false
+  cors_allowed_origins:
+    - "http://127.0.0.1:8880"
+    - "http://localhost:8880"
+
+app:
+  name: "storefront"
+
+db:
+  driver: "postgres"
+  dsn: "host=10.170.34.223 user=hatchet password=hatchet dbname=fxkit port=5435 sslmode=disable TimeZone=UTC"
+  log_level: "warn"
+  max_idle_conns: 5
+  max_open_conns: 20
+  conn_max_lifetime: 1h
+
+outbox:
+  enabled: false
+  poll_interval: 1s
+  batch_size: 50
+  max_retries: 10
+  claim_timeout: 30s
+
+hatchet:
+  enabled: false
+  token: ""
+  host_port: "10.170.34.223:7077"
+  tls_strategy: "none"
+  namespace: ""
+  worker_name: "storefront"
+  outbox_publisher: true
+  otel: true
+
+auth:
+  enabled: true
+  issuer: "https://10.170.34.223:3001/oidc"
+  audience: "https://fxkit.showcase/api"
+  jwks_url: "https://10.170.34.223:3001/oidc/jwks"
+  org_claim: "organization_id"
+  require_org: false
+  deny_unregistered: false
+  dev_header_user: true
+  tls_insecure: true
+  casbin:
+    enabled: true
+    table_name: "casbin_rule"
+    auto_register_routes: true
+    bootstrap_role: "admin"
+    bootstrap_users: ["alice"]
+    auto_bind_bootstrap: false
+    reload_interval: 5s
+
+otel:
+  enabled: true
+  service_name: "storefront"
+  service_version: "0.1.0"
+  environment: "development"
+  endpoint: "10.170.34.223:4318"
+  protocol: "http"
+  insecure: true
+  sampling: "always_on"
+  traces:
+    enabled: true
+    exporter: "otlp"
+  metrics:
+    enabled: true
+    exporter: "otlp"
+    runtime_metrics: true
+  logs:
+    enabled: true
+    exporter: "otlp"
+
+discovery:
+  consul_address: "http://localhost:8500"
+  consul_passing_only: true
+  register: true
+  advertise_address: ""
+  tags:
+    - "traefik.enable=true"
+    - "traefik.http.routers.storefront.entrypoints=web"
+    - "traefik.http.routers.storefront.priority=100"
+    - "traefik.http.routers.storefront.rule=PathPrefix(`/storefront`)"
+    - "traefik.http.routers.storefront.middlewares=storefront-strip@file"
+
+storefront:
+  catalog_name: "catalog"
+  catalog_seed: "127.0.0.1:8081"

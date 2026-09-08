@@ -13,7 +13,17 @@ import (
 	"go.uber.org/fx"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout = 30 * time.Second
+
+	// defaultWatchWait is Consul's blocking-query default. It is a max idle
+	// hold: an index change returns immediately, so a longer wait does not
+	// delay endpoint discovery.
+	defaultWatchWait = 5 * time.Minute
+
+	// maxWatchWait is Consul's blocking-query wait ceiling (10 minutes).
+	maxWatchWait = 10 * time.Minute
+)
 
 // Factory builds [req.Client] instances that resolve targets via Consul watch
 // (and/or static Seeds). Provided by [Module] (included in fxkit.Default).
@@ -60,7 +70,9 @@ type ClientInput struct {
 	// BaseTransport is an optional underlying RoundTripper (before otel + resolve).
 	BaseTransport http.RoundTripper
 
-	// WatchWait is the Consul blocking query wait (default 55s, capped at 60s).
+	// WatchWait is the Consul blocking query wait (default 5m, capped at 10m).
+	// Longer waits do not delay change detection; Consul returns as soon as
+	// the catalog index changes. Wait is only how long an idle query may hang.
 	WatchWait time.Duration
 
 	// MaxFailover is max distinct endpoints to try on failure (default 5).
@@ -172,6 +184,30 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	httpClient.Timeout = timeout
 
 	return cli, nil
+}
+
+// TransportClient returns the stdlib [http.Client] whose Transport resolves
+// Consul endpoints (failover + OTel) and the logical server URL
+// (`scheme://service-name`, or `scheme://static` when only Seeds are set).
+//
+// Use with OpenAPI-generated clients (oapi-codegen `WithHTTPClient`):
+//
+//	httpClient, server, err := factory.TransportClient(reqx.ClientInput{Name: "users"})
+//	sdk, err := users.NewClientWithResponses(server, users.WithHTTPClient(httpClient))
+func (f *Factory) TransportClient(in ClientInput) (*http.Client, string, error) {
+	cli, err := f.Client(in)
+	if err != nil {
+		return nil, "", err
+	}
+	scheme := strings.ToLower(strings.TrimSpace(in.Scheme))
+	if scheme == "" {
+		scheme = "http"
+	}
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = "static"
+	}
+	return cli.GetClient(), scheme + "://" + name, nil
 }
 
 type ensurePoolInput struct {

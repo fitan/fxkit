@@ -6,7 +6,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// FromHuma 返回 Huma API 实时 OpenAPI 文档的 YAML 字节。
+// FromHuma 返回 Huma API 实时 OpenAPI 3.1 文档的 YAML 字节。
+// 需要 3.0（oapi-codegen）或 JSON 时用 [Encode]。
 func FromHuma(api huma.API) ([]byte, error) {
 	if api == nil {
 		return nil, nil

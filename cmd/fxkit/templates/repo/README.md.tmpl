@@ -39,6 +39,15 @@ Visit:
 - `GET /docs` — Scalar API reference
 - `GET /healthz` — liveness
 
+OpenAPI dump (does not bind HTTP) and typed client:
+
+```bash
+make openapi SVC=mysvc
+fxkit gen client --spec services/mysvc/openapi.yaml --out ./internal/clients/mysvc
+```
+
+`NewFromFactory` wires the generated SDK onto `reqx` (Consul / failover / OTel).
+
 Local ports default to `8080` per service; change `server.port` or pass `--port` when running more than one.
 
 ## Local middleware

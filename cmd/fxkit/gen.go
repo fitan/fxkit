@@ -9,15 +9,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// genCmd 是代码生成器的父命令。当前包含 `resource`。
+// genCmd 是代码生成器的父命令。当前包含 `resource` 与 `client`。
 //
 //	fxkit gen resource Article --field title:string:required --field body:text
+//	fxkit gen client --spec openapi.yaml --out ./internal/clients/users
 func genCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gen",
 		Short: "Generate code (resources, clients, ...)",
 	}
 	cmd.AddCommand(genResourceCmd())
+	cmd.AddCommand(genClientCmd())
 	return cmd
 }
 

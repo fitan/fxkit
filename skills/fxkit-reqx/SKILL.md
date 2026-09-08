@@ -2,11 +2,12 @@
 name: fxkit-reqx
 description: >-
   Call downstream HTTP services with fxkit/reqx: Factory.Client, Consul healthy
-  watch, Seeds fallback, failover on 502/503/504, and otelhttp tracing. Use when
-  the user mentions reqx, imroc/req, Factory.Client, calling another service by
-  Consul name, outbound HTTP, Seeds, MaxFailover, or "调下游" / "服务间 HTTP" on
-  an fxkit app — even without saying Consul. Prefer this over raw http.Client or
-  ad-hoc service discovery for fxkit services. For Consul self-register see
+  watch, Seeds fallback, failover on 502/503/504, otelhttp tracing, and
+  TransportClient for OpenAPI-generated SDKs. Use when the user mentions reqx,
+  imroc/req, Factory.Client, calling another service by Consul name, outbound
+  HTTP, Seeds, MaxFailover, typed client, oapi-codegen, or "调下游" / "服务间 HTTP"
+  on an fxkit app — even without saying Consul. Prefer this over raw http.Client
+  or ad-hoc service discovery for fxkit services. For Consul self-register see
   fxkit-discovery.
 ---
 
@@ -43,7 +44,7 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 | `PassingOnly` | true | 仅 healthy；`ptr(false)` 可放宽 |
 | `OTel` | true | `otelhttp` 包装；`ptr(false)` 关闭 |
 | `SpanName` | — | 可选覆盖 span 名 |
-| `WatchWait` | 55s（上限 60s） | Consul blocking query wait |
+| `WatchWait` | 5m（上限 10m） | Consul blocking query 最长空闲挂起；index 变化立刻返回 |
 | `MaxFailover` | 5 | 失败时最多尝试几个不同端点 |
 | `BaseTransport` | — | 可选底层 RoundTripper |
 
@@ -55,6 +56,17 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 4. 无 Consul 时可用 `Seeds` alone 跑通本地。
 
 依赖配置：`discovery.consul_address`（见 `fxkit-discovery` / config checklist）。ACL：`CONSUL_HTTP_TOKEN`。
+
+## Typed OpenAPI client
+
+Huma 服务先 dump spec（`myapp openapi` / `make openapi SVC=…`），再在**调用方** `fxkit gen client`。`Factory.TransportClient` 返回 `*http.Client` + 逻辑 server URL（`http://<Name>`），transport 仍改写 Host。生成物带 `NewFromFactory`；也可手写：
+
+```go
+httpClient, server, err := factory.TransportClient(reqx.ClientInput{Name: "users"})
+sdk, err := users.NewClientWithResponses(server, users.WithHTTPClient(httpClient))
+```
+
+不要用生成 SDK 替换本包：生成器没有 Consul watch / 502–504 failover。
 
 ## 与 consulx 的分工
 
@@ -70,3 +82,4 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 - [ ] 每次请求 `SetContext(ctx)`。
 - [ ] 需要 https 时显式 `Scheme: "https"`。
 - [ ] Consul 地址未配且无 Seeds → `Client` 会失败，先查 `discovery.consul_address`。
+- [ ] 调用 Huma 下游的 typed SDK 用 `TransportClient` / `NewFromFactory`，不要把 base URL 写成实例 IP。

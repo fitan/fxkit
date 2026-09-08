@@ -82,6 +82,9 @@ func TestRegisterSelf_WritesBuildinfoAndToken(t *testing.T) {
 	if !sawPass || !sawToken {
 		t.Fatal("expected TTL pass with token")
 	}
+	if len(got.Tags) < 2 || got.Tags[0] != "fxkit" || got.Tags[1] != "http" {
+		t.Fatalf("tags=%v", got.Tags)
+	}
 }
 
 func TestRegisterSelf_HTTPError(t *testing.T) {
@@ -101,5 +104,52 @@ func TestRegisterSelf_HTTPError(t *testing.T) {
 	}
 	if isRegisterConfigError(err) {
 		t.Fatalf("HTTP error should not be config error: %v", err)
+	}
+}
+
+func TestRegisterSelf_MergesExtraTags(t *testing.T) {
+	var got registerServiceRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/v1/agent/service/register" {
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/agent/check/pass/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := &Config{
+		Register:         true,
+		ConsulAddress:    srv.URL,
+		AdvertiseAddress: "10.0.0.9",
+		Tags:             []string{"traefik.enable=true", "http", " fxkit "},
+	}
+	_, err := registerSelf(context.Background(), cfg, &config.App{Name: "orders"}, &server.Config{Port: "8080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"fxkit", "http", "traefik.enable=true"}
+	if len(got.Tags) != len(want) {
+		t.Fatalf("tags=%v", got.Tags)
+	}
+	for i, tname := range want {
+		if got.Tags[i] != tname {
+			t.Fatalf("tags=%v", got.Tags)
+		}
+	}
+}
+
+func TestMergeRegisterTags(t *testing.T) {
+	got := mergeRegisterTags(nil)
+	if len(got) != 2 || got[0] != "fxkit" || got[1] != "http" {
+		t.Fatalf("%v", got)
 	}
 }

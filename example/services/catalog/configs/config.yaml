@@ -1,0 +1,94 @@
+server:
+  port: "8081"
+  log_payloads: false
+  cors_allowed_origins:
+    - "http://127.0.0.1:8880"
+    - "http://localhost:8880"
+
+app:
+  name: "catalog"
+
+db:
+  driver: "postgres"
+  dsn: "host=10.170.34.223 user=hatchet password=hatchet dbname=fxkit port=5435 sslmode=disable TimeZone=UTC"
+  log_level: "warn"
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 1h
+
+outbox:
+  enabled: true
+  poll_interval: 1s
+  batch_size: 50
+  max_retries: 10
+  claim_timeout: 30s
+
+hatchet:
+  enabled: true
+  token: "" # HATCHET_CLIENT_TOKEN or example/tmp/hatchet.token (gitignored)
+  host_port: "10.170.34.223:7077" # live engine; token JWT may still say localhost:7077
+  server_url: "http://10.170.34.223:8088" # REST for CreateReminder (token often says localhost:8080)
+  tls_strategy: "none" # non-loopback hatchet-lite plaintext gRPC
+  namespace: ""
+  worker_name: "catalog"
+  outbox_publisher: true
+  otel: true # worker hatchet.start_step_run；复用 otelx TracerProvider
+
+auth:
+  enabled: true
+  issuer: "https://10.170.34.223:3001/oidc"
+  audience: "https://fxkit.showcase/api"
+  jwks_url: "https://10.170.34.223:3001/oidc/jwks"
+  org_claim: "organization_id"
+  require_org: false
+  deny_unregistered: false
+  dev_header_user: true # showcase only; production must be false
+  tls_insecure: true # Logto serves HTTPS on a raw IP (self-signed)
+  casbin:
+    enabled: true
+    table_name: "casbin_rule"
+    auto_register_routes: true
+    bootstrap_role: "admin"
+    bootstrap_users: ["alice"]
+    auto_bind_bootstrap: false
+    reload_interval: 5s
+
+otel:
+  enabled: true
+  service_name: "catalog"
+  service_version: "0.1.0"
+  environment: "development"
+  endpoint: "10.170.34.223:4318"
+  protocol: "http"
+  insecure: true
+  sampling: "always_on"
+  traces:
+    enabled: true
+    exporter: "otlp"
+  metrics:
+    enabled: true
+    exporter: "otlp"
+    runtime_metrics: true
+  logs:
+    enabled: true
+    exporter: "otlp"
+
+discovery:
+  consul_address: "http://localhost:8500"
+  consul_passing_only: true
+  register: true
+  # 留空则登记本机非 loopback IPv4（宿主机 reqx + Docker 里的 Traefik 都能打到）。
+  # 不要写 127.0.0.1：Traefik 容器会打到自己。不要写 host.docker.internal：宿主机常无此 DNS。
+  advertise_address: ""
+  tags:
+    - "traefik.enable=true"
+    - "traefik.http.routers.catalog.entrypoints=web"
+    - "traefik.http.routers.catalog.priority=100"
+    - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
+    - "traefik.http.routers.catalog.middlewares=catalog-strip@file"
+
+catalog:
+  reminder_period: "15s"
+
+comments:
+  page_size: 10
