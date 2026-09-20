@@ -285,17 +285,23 @@ func (l *consulLock) renewLoop(sessionID string, stop <-chan struct{}, done chan
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	failures := 0
 	for {
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
 			if err := l.renewSession(sessionID); err != nil {
-				slog.Warn("consul lock session renew failed", "session", sessionID, "error", err)
-				l.mu.Lock()
-				l.lockLost = true
-				l.mu.Unlock()
-				return
+				failures++
+				slog.Warn("consul lock session renew failed", "session", sessionID, "failures", failures, "error", err)
+				if failures >= 2 {
+					l.mu.Lock()
+					l.lockLost = true
+					l.mu.Unlock()
+					return
+				}
+			} else {
+				failures = 0
 			}
 		}
 	}

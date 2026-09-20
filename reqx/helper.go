@@ -44,3 +44,56 @@ func GetJSON[Resp any](client *req.Client, ctx context.Context, path string) (Re
 	}
 	return result, nil
 }
+
+// PutJSON 发送 PUT 请求并将 body 序列化为 JSON，成功时反序列化为 Resp 返回。
+func PutJSON[Req, Resp any](client *req.Client, ctx context.Context, path string, body Req) (Resp, error) {
+	var zero Resp
+	var result Resp
+	resp, err := client.R().
+		SetContext(ctx).
+		SetBody(body).
+		SetSuccessResult(&result).
+		Put(path)
+	if err != nil {
+		return zero, err
+	}
+	if !resp.IsSuccessState() {
+		return zero, fmt.Errorf("reqx: PUT %s returned status %d: %s", path, resp.StatusCode, resp.String())
+	}
+	return result, nil
+}
+
+// PatchJSON 发送 PATCH 请求并将 body 序列化为 JSON，成功时反序列化为 Resp 返回。
+func PatchJSON[Req, Resp any](client *req.Client, ctx context.Context, path string, body Req) (Resp, error) {
+	var zero Resp
+	var result Resp
+	resp, err := client.R().
+		SetContext(ctx).
+		SetBody(body).
+		SetSuccessResult(&result).
+		Patch(path)
+	if err != nil {
+		return zero, err
+	}
+	if !resp.IsSuccessState() {
+		return zero, fmt.Errorf("reqx: PATCH %s returned status %d: %s", path, resp.StatusCode, resp.String())
+	}
+	return result, nil
+}
+
+// DeleteJSON 发送 DELETE 请求并将 JSON 响应反序列化为 Resp 返回。
+func DeleteJSON[Resp any](client *req.Client, ctx context.Context, path string) (Resp, error) {
+	var zero Resp
+	var result Resp
+	resp, err := client.R().
+		SetContext(ctx).
+		SetSuccessResult(&result).
+		Delete(path)
+	if err != nil {
+		return zero, err
+	}
+	if !resp.IsSuccessState() {
+		return zero, fmt.Errorf("reqx: DELETE %s returned status %d: %s", path, resp.StatusCode, resp.String())
+	}
+	return result, nil
+}

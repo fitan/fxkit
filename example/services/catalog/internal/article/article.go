@@ -150,14 +150,13 @@ func (s *Service) Create(ctx context.Context, req CreateArticleReq) (ArticleDeta
 	if subj, ok := authz.SubjectFromContext(ctx); ok {
 		author = subj.ID
 	}
-	var out ArticleDetail
-	err := s.client.Transaction(ctx, func(txCtx context.Context) error {
+	return s.client.WithTxResult(ctx, func(txCtx context.Context) (ArticleDetail, error) {
 		var n int64
 		if err := s.client.Conn(txCtx).Model(&Article{}).Where("title = ?", title).Count(&n).Error; err != nil {
-			return crudx.MapDBError(err)
+			return ArticleDetail{}, crudx.MapDBError(err)
 		}
 		if n > 0 {
-			return fxerrors.Conflict("article title already exists")
+			return ArticleDetail{}, fxerrors.Conflict("article title already exists")
 		}
 		u := Article{
 			Title:  title,
@@ -167,7 +166,7 @@ func (s *Service) Create(ctx context.Context, req CreateArticleReq) (ArticleDeta
 		}
 		crudx.ZeroPrimaryKey(&u)
 		if err := s.client.Conn(txCtx).Create(&u).Error; err != nil {
-			return crudx.MapDBError(err)
+			return ArticleDetail{}, crudx.MapDBError(err)
 		}
 		if s.outbox != nil && s.outbox.Enabled {
 			if err := outbox.EnqueueTopicMsg(txCtx, outbox.EnqueueTopicInput[ArticleCreatedEvent]{
@@ -180,16 +179,11 @@ func (s *Service) Create(ctx context.Context, req CreateArticleReq) (ArticleDeta
 				},
 				IdempotencyKey: fmt.Sprintf("%s:%d", articleCreatedTopic, u.ID),
 			}); err != nil {
-				return fxerrors.Wrap(err)
+				return ArticleDetail{}, fxerrors.Wrap(err)
 			}
 		}
-		out = toArticleDetail(u)
-		return nil
+		return toArticleDetail(u), nil
 	})
-	if err != nil {
-		return ArticleDetail{}, err
-	}
-	return out, nil
 }
 
 func (s *Service) Update(ctx context.Context, req UpdateArticleReq) (ArticleDetail, error) {
@@ -197,21 +191,23 @@ func (s *Service) Update(ctx context.Context, req UpdateArticleReq) (ArticleDeta
 	if title == "" {
 		return ArticleDetail{}, fxerrors.Validation(map[string]string{"title": "required"})
 	}
-	existing, err := crudx.FirstByID[Article](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return ArticleDetail{}, err
-	}
-	next := *existing
-	next.Title = title
-	next.Body = req.Body
-	if err := s.client.Conn(ctx).Select("title", "body").Updates(&next).Error; err != nil {
-		return ArticleDetail{}, crudx.MapDBError(err)
-	}
-	out, err := crudx.FirstByID[Article](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return ArticleDetail{}, err
-	}
-	return toArticleDetail(*out), nil
+	return s.client.WithTxResult(ctx, func(txCtx context.Context) (ArticleDetail, error) {
+		existing, err := crudx.FirstByID[Article](txCtx, s.client.Conn(txCtx), req.ID)
+		if err != nil {
+			return ArticleDetail{}, err
+		}
+		next := *existing
+		next.Title = title
+		next.Body = req.Body
+		if err := s.client.Conn(txCtx).Select("title", "body").Updates(&next).Error; err != nil {
+			return ArticleDetail{}, crudx.MapDBError(err)
+		}
+		out, err := crudx.FirstByID[Article](txCtx, s.client.Conn(txCtx), req.ID)
+		if err != nil {
+			return ArticleDetail{}, err
+		}
+		return toArticleDetail(*out), nil
+	})
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {
