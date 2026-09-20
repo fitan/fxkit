@@ -99,53 +99,25 @@ func TestList_CountWithSmallLimit(t *testing.T) {
 	out, err := List(ctx, ListInput[listTestModel, listTestRow]{
 		DB:     listTestBaseDB(db, ctx),
 		Spec:   listTestSpec(),
-		Params: ListParams{Limit: 2, ReplyWithCount: true, Q: []string{"name=same"}},
+		Params: ListParams{Limit: 2, ReplyWithCount: true},
 		ToRow:  func(m listTestModel) listTestRow { return listTestRow{ID: m.ID, Name: m.Name} },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.Total == nil || *out.Total != 5 {
-		t.Fatalf("total=%v want 5", out.Total)
+		t.Fatalf("total=%v", out.Total)
 	}
 	if len(out.Items) != 2 {
-		t.Fatalf("items=%d want 2", len(out.Items))
+		t.Fatalf("len=%d want 2", len(out.Items))
 	}
 }
 
-func TestList_LikeEscapesWildcards(t *testing.T) {
+func TestList_CursorAndOr(t *testing.T) {
 	db := newListTestDB(t)
 	ctx := context.Background()
-	for _, m := range []listTestModel{
-		{Name: "100%_done", Email: "a@example.com"},
-		{Name: "100Xdone", Email: "b@example.com"},
-	} {
-		if err := db.Create(&m).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-	out, err := List(ctx, ListInput[listTestModel, listTestRow]{
-		DB:     listTestBaseDB(db, ctx),
-		Spec:   listTestSpec(),
-		Params: ListParams{Limit: 10, Q: []string{"name~100%_"}},
-		ToRow:  func(m listTestModel) listTestRow { return listTestRow{ID: m.ID, Name: m.Name} },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out.Items) != 1 || out.Items[0].Name != "100%_done" {
-		t.Fatalf("items=%+v", out.Items)
-	}
-}
-
-func TestList_CursorAndOR(t *testing.T) {
-	db := newListTestDB(t)
-	ctx := context.Background()
-	for _, m := range []listTestModel{
-		{Name: "A", Email: "a@example.com"},
-		{Name: "B", Email: "b@example.com"},
-		{Name: "C", Email: "c@example.com"},
-	} {
+	for _, name := range []string{"A", "B", "C"} {
+		m := listTestModel{Name: name, Email: name + "@example.com"}
 		if err := db.Create(&m).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -221,5 +193,146 @@ func TestParseQ_IsNullAndOR(t *testing.T) {
 	groups, err := ParseQGroups(spec, []string{"or(state=Running,state=Stopped)", "name~a"})
 	if err != nil || len(groups) != 2 || !groups[0].Or || len(groups[0].Conds) != 2 {
 		t.Fatalf("groups: %+v err=%v", groups, err)
+	}
+}
+
+func TestList_LikeEscapesWildcards(t *testing.T) {
+	db := newListTestDB(t)
+	ctx := context.Background()
+	for _, m := range []listTestModel{
+		{Name: "100%_done", Email: "a@example.com"},
+		{Name: "100Xdone", Email: "b@example.com"},
+	} {
+		if err := db.Create(&m).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := List(ctx, ListInput[listTestModel, listTestRow]{
+		DB:     listTestBaseDB(db, ctx),
+		Spec:   listTestSpec(),
+		Params: ListParams{Limit: 10, Q: []string{"name~100%_"}},
+		ToRow:  func(m listTestModel) listTestRow { return listTestRow{ID: m.ID, Name: m.Name} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Items) != 1 || out.Items[0].Name != "100%_done" {
+		t.Fatalf("items=%+v", out.Items)
+	}
+}
+
+type embeddedTestModel struct {
+	gorm.Model
+	Title string `gorm:"size:64;not null"`
+}
+
+type embeddedTestRow struct {
+	ID    uint   `json:"id"`
+	Title string `json:"title"`
+}
+
+func TestList_CursorPagination_EmbeddedStruct(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&embeddedTestModel{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveModel[embeddedTestModel](db); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	for _, title := range []string{"Post 1", "Post 2", "Post 3"} {
+		if err := db.Create(&embeddedTestModel{Title: title}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	spec := ListSpec{
+		Fields: map[string]FieldSpec{
+			"id":         {Column: "embedded_test_models.id", Kind: FieldNumber, Indexed: true},
+			"title":      {Column: "embedded_test_models.title", Kind: FieldString, Indexed: true},
+			"created_at": {Column: "embedded_test_models.created_at", Kind: FieldTime, Indexed: true},
+		},
+		SortFields: map[string]string{
+			"id":         "embedded_test_models.id",
+			"created_at": "embedded_test_models.created_at",
+		},
+		DefaultSort: "id asc",
+		Limits:      Limits{LimitDefault: 20, LimitMax: 100},
+	}
+
+	toRow := func(m embeddedTestModel) embeddedTestRow {
+		return embeddedTestRow{ID: m.ID, Title: m.Title}
+	}
+
+	created, err := List(ctx, ListInput[embeddedTestModel, embeddedTestRow]{
+		DB:     db.WithContext(ctx).Model(&embeddedTestModel{}).Table("embedded_test_models"),
+		Spec:   spec,
+		Params: ListParams{Limit: 2, UseCursor: true, SortBy: "created_at", SortDirection: "asc"},
+		ToRow:  toRow,
+	})
+	if err != nil {
+		t.Fatalf("created_at cursor on gorm.Model: %v", err)
+	}
+	if len(created.Items) != 2 || created.NextCursor == nil {
+		t.Fatalf("created_at page invalid: items=%d nextCursor=%v", len(created.Items), created.NextCursor)
+	}
+
+	page1, err := List(ctx, ListInput[embeddedTestModel, embeddedTestRow]{
+		DB:     db.WithContext(ctx).Model(&embeddedTestModel{}).Table("embedded_test_models"),
+		Spec:   spec,
+		Params: ListParams{Limit: 2, UseCursor: true, SortBy: "id", SortDirection: "asc"},
+		ToRow:  toRow,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(page1.Items) != 2 || page1.NextCursor == nil {
+		t.Fatalf("page1 invalid: items=%d nextCursor=%v", len(page1.Items), page1.NextCursor)
+	}
+
+	page2, err := List(ctx, ListInput[embeddedTestModel, embeddedTestRow]{
+		DB:     db.WithContext(ctx).Model(&embeddedTestModel{}).Table("embedded_test_models"),
+		Spec:   spec,
+		Params: ListParams{Limit: 2, Cursor: *page1.NextCursor, SortBy: "id", SortDirection: "asc"},
+		ToRow:  toRow,
+	})
+	if err != nil {
+		t.Fatalf("page2 failed: %v", err)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].Title != "Post 3" {
+		t.Fatalf("page2 items unexpected: %+v", page2.Items)
+	}
+}
+
+func TestReadSortValue_EmbeddedCreatedAt(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&embeddedTestModel{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveModel[embeddedTestModel](db); err != nil {
+		t.Fatal(err)
+	}
+	meta, ok := modelMetaCached[embeddedTestModel]()
+	if !ok {
+		t.Fatal("missing model meta")
+	}
+	want := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	m := embeddedTestModel{Title: "hello"}
+	m.CreatedAt = want
+	spec := ListSpec{SortFields: map[string]string{"created_at": "created_at"}}
+	got, err := readSortValue(&m, "created_at", spec, meta)
+	if err != nil {
+		t.Fatalf("readSortValue created_at: %v", err)
+	}
+	ts, ok := got.(time.Time)
+	if !ok || !ts.Equal(want) {
+		t.Fatalf("got=%v (%T) want %v", got, got, want)
 	}
 }

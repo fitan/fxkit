@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fitan/fxkit/otelx"
 	"go.opentelemetry.io/otel"
@@ -78,7 +79,7 @@ func TestRequestBodyLogMiddleware_DoesNotDropByte(t *testing.T) {
 }
 
 func TestCORS_AllowsPATCH(t *testing.T) {
-	h := corsMiddleware([]string{"http://localhost:3000"})
+	h := corsMiddleware(&Config{CORSAllowedOrigins: []string{"http://localhost:3000"}})
 	req := httptest.NewRequest(http.MethodOptions, "/x", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
 	req.Header.Set("Access-Control-Request-Method", "PATCH")
@@ -90,6 +91,63 @@ func TestCORS_AllowsPATCH(t *testing.T) {
 	allow := rec.Header().Get("Access-Control-Allow-Methods")
 	if !strings.Contains(allow, "PATCH") {
 		t.Fatalf("Allow-Methods=%q", allow)
+	}
+}
+
+func TestCORS_CustomHeadersCredentialsMaxAge(t *testing.T) {
+	h := corsMiddleware(&Config{
+		CORSAllowedOrigins:   []string{"http://localhost:3000"},
+		CORSAllowedHeaders:   []string{"Content-Type", "Authorization", "X-Request-Id"},
+		CORSAllowCredentials: true,
+		CORSMaxAge:           10 * time.Minute,
+	})
+	req := httptest.NewRequest(http.MethodOptions, "/x", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	h(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("credentials=%q", rec.Header().Get("Access-Control-Allow-Credentials"))
+	}
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), "X-Request-Id") {
+		t.Fatalf("headers=%q", rec.Header().Get("Access-Control-Allow-Headers"))
+	}
+	if rec.Header().Get("Access-Control-Max-Age") != "600" {
+		t.Fatalf("max-age=%q", rec.Header().Get("Access-Control-Max-Age"))
+	}
+}
+
+func TestCORS_WildcardWithCredentialsEchoesOrigin(t *testing.T) {
+	h := corsMiddleware(&Config{
+		CORSAllowedOrigins:   []string{"*"},
+		CORSAllowCredentials: true,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Origin", "http://app.example")
+	rec := httptest.NewRecorder()
+	h(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "http://app.example" {
+		t.Fatalf("origin=%q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatal("expected credentials")
+	}
+}
+
+func TestIsSSERequest(t *testing.T) {
+	pathReq := httptest.NewRequest(http.MethodGet, "/api/sse/stream", nil)
+	if !isSSERequest(pathReq) {
+		t.Fatal("path /sse/ should match")
+	}
+	acceptReq := httptest.NewRequest(http.MethodGet, "/events", nil)
+	acceptReq.Header.Set("Accept", "text/event-stream")
+	if !isSSERequest(acceptReq) {
+		t.Fatal("Accept text/event-stream should match")
+	}
+	plain := httptest.NewRequest(http.MethodGet, "/api/v1/sse", nil)
+	if isSSERequest(plain) {
+		t.Fatal("/sse without slash or Accept should not match")
 	}
 }
 

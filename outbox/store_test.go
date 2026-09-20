@@ -69,6 +69,34 @@ func TestEnqueue_RollbackDiscardsRow(t *testing.T) {
 	}
 }
 
+func TestEnqueue_IdempotencyKeyDedupsInTransaction(t *testing.T) {
+	client := testDB(t)
+	store := outbox.NewStore(client)
+	ctx := context.Background()
+	msg := outbox.Message{
+		Pubsub:         "pubsub",
+		Topic:          "user-created",
+		Payload:        []byte(`{"user_id":"1"}`),
+		IdempotencyKey: "user-created:1",
+	}
+	err := client.Transaction(ctx, func(txCtx context.Context) error {
+		if err := store.Enqueue(txCtx, msg); err != nil {
+			return err
+		}
+		return store.Enqueue(txCtx, msg)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := client.Conn(ctx).Model(&outbox.OutboxEvent{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row after duplicate enqueue in tx, got %d", count)
+	}
+}
+
 func TestEnqueue_IdempotencyKeyDedups(t *testing.T) {
 	client := testDB(t)
 	store := outbox.NewStore(client)
@@ -180,6 +208,42 @@ func TestEnqueue_IdempotencyKeyRequeuesFailed(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("count=%d want 1", count)
+	}
+}
+
+func TestEnqueue_IdempotencyKeyRequeuesFailedInTransaction(t *testing.T) {
+	client := testDB(t)
+	store := outbox.NewStore(client)
+	ctx := context.Background()
+	key := "user-created:tx"
+	row := outbox.OutboxEvent{
+		Pubsub:         "hatchet",
+		Topic:          "user-created",
+		Payload:        []byte(`{"user_id":"old"}`),
+		IdempotencyKey: &key,
+		Status:         outbox.StatusFailed,
+		Attempts:       10,
+	}
+	if err := client.Conn(ctx).Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	err := client.Transaction(ctx, func(txCtx context.Context) error {
+		return store.Enqueue(txCtx, outbox.Message{
+			Pubsub:         "hatchet",
+			Topic:          "user-created",
+			Payload:        []byte(`{"user_id":"new"}`),
+			IdempotencyKey: key,
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got outbox.OutboxEvent
+	if err := client.Conn(ctx).First(&got, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != outbox.StatusPending {
+		t.Fatalf("status=%q want pending", got.Status)
 	}
 }
 

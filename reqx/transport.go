@@ -13,11 +13,14 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-const defaultMaxFailover = 5
+const (
+	defaultMaxFailover       = 5
+	defaultMaxRewindBodySize = 4 * 1024 * 1024 // 4MB ceiling for buffering request body
+)
 
 // resolveTransport picks a discovered endpoint and rewrites the request host,
 // then delegates to the next RoundTripper (typically otelhttp → base transport).
-// On transport / selected 5xx failures it tries another endpoint.
+// On transport / selected 5xx failures it tries another endpoint, for any method.
 type resolveTransport struct {
 	pool        *endpointPool
 	scheme      string
@@ -50,6 +53,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	var lastErr error
 	tried := make(map[string]struct{}, attempts)
+	hasUnrewindableBody := req.Body != nil && req.Body != http.NoBody && req.GetBody == nil
 
 	for i := 0; i < attempts; i++ {
 		ep, err := t.pool.next()
@@ -74,6 +78,10 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		resp, err := t.next.RoundTrip(r2)
 		if err == nil {
 			if shouldFailoverStatus(resp.StatusCode) && i+1 < attempts && len(tried) < n {
+				if hasUnrewindableBody {
+					// Cannot rewind large or streaming body safely; do not retry with empty body
+					return resp, nil
+				}
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
 				lastErr = fmt.Errorf("reqx(%s): endpoint %s status %d", t.name, ep, resp.StatusCode)
@@ -83,7 +91,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 
 		lastErr = err
-		if !isFailoverError(err) || i+1 >= attempts {
+		if !isFailoverError(err) || i+1 >= attempts || hasUnrewindableBody {
 			return nil, fmt.Errorf("reqx(%s): endpoint %s: %w", t.name, ep, err)
 		}
 	}
@@ -115,14 +123,35 @@ func cloneForEndpoint(req *http.Request, ep, scheme string) (*http.Request, erro
 }
 
 func ensureRewindableBody(req *http.Request) error {
+	return rewindBody(req, defaultMaxRewindBodySize)
+}
+
+func rewindBody(req *http.Request, max int64) error {
 	if req == nil || req.GetBody != nil || req.Body == nil || req.Body == http.NoBody {
 		return nil
 	}
-	buf, err := io.ReadAll(req.Body)
-	_ = req.Body.Close()
+	if max <= 0 {
+		return nil
+	}
+	if req.ContentLength > max {
+		// Body exceeds rewind buffer limit; avoid OOM by keeping stream as-is without GetBody
+		return nil
+	}
+
+	orig := req.Body
+	buf, err := io.ReadAll(io.LimitReader(orig, max+1))
 	if err != nil {
+		_ = orig.Close()
 		return err
 	}
+	if int64(len(buf)) > max {
+		// Chunked / unknown length exceeded the buffer. Keep the original
+		// closer so the remainder is still readable; do not set GetBody.
+		req.Body = &readCloser{Reader: io.MultiReader(bytes.NewReader(buf), orig), Closer: orig}
+		return nil
+	}
+	_ = orig.Close()
+
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(buf)), nil
 	}
@@ -132,6 +161,11 @@ func ensureRewindableBody(req *http.Request) error {
 	}
 	req.ContentLength = int64(len(buf))
 	return nil
+}
+
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func shouldFailoverStatus(code int) bool {
@@ -166,7 +200,7 @@ func buildTransport(in buildTransportInput) http.RoundTripper {
 		base = http.DefaultTransport
 	}
 
-	var next http.RoundTripper = base
+	next := base
 	if in.OTel {
 		opts := []otelhttp.Option{
 			otelhttp.WithTracerProvider(otel.GetTracerProvider()),

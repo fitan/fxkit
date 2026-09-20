@@ -58,6 +58,7 @@ func qualifiedColumn(table, column string) string {
 func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpts) (*gorm.DB, int, error) {
 	spec = deriveSortFields(spec)
 	spec.Normalize(params)
+
 	groups, err := ParseQGroups(spec, params.Q)
 	if err != nil {
 		return nil, 0, err
@@ -141,7 +142,7 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 			return nil, joinCount, err
 		}
 		tx = tx.Order(fmt.Sprintf("%s %s", col, dir))
-		if opts.PKColumn != "" && opts.PKColumn != col {
+		if opts.PKColumn != "" && !isSameColumn(opts.PKColumn, col) {
 			tx = tx.Order(fmt.Sprintf("%s %s", opts.PKColumn, dir))
 		}
 	}
@@ -188,6 +189,19 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		}
 	}
 	return tx, joinCount, nil
+}
+
+func isSameColumn(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if idx := strings.LastIndex(a, "."); idx >= 0 && a[idx+1:] == b {
+		return true
+	}
+	if idx := strings.LastIndex(b, "."); idx >= 0 && b[idx+1:] == a {
+		return true
+	}
+	return false
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -258,8 +272,14 @@ func applyCondition(tx *gorm.DB, col string, c Condition) (*gorm.DB, error) {
 		cmp := map[Operator]string{OpGT: " > ?", OpGTE: " >= ?", OpLT: " < ?", OpLTE: " <= ?"}
 		return tx.Where(col+cmp[c.Op], c.Values[0]), nil
 	case OpIn:
+		if len(c.Values) == 0 {
+			return tx.Where("1 = 0"), nil
+		}
 		return tx.Where(col+" IN ?", c.Values), nil
 	case OpNotIn:
+		if len(c.Values) == 0 {
+			return tx, nil
+		}
 		return tx.Where(col+" NOT IN ?", c.Values), nil
 	default:
 		return tx, nil

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -47,6 +48,41 @@ func TestCollectOpenAPI_liveSpec(t *testing.T) {
 	}
 	if !strings.Contains(s, "get-greeting") {
 		t.Fatalf("missing operation:\n%s", s)
+	}
+}
+
+func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
+	// Simulate an environment where DB or Hatchet fails in OnStart, but OpenAPI can still be generated offline
+	b, err := collectOpenAPI([]fx.Option{
+		config.Module,
+		server.Module,
+		server.ListenerModule,
+		fxhuma.Module,
+		fxhuma.ProvideRegistrar(func() fxhuma.Registrar {
+			return fxhuma.FuncRegistrar(func(api huma.API) {
+				fxhuma.Register(api, huma.Operation{
+					OperationID: "offline-endpoint",
+					Method:      http.MethodGet,
+					Path:        "/offline",
+				}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
+					return nil, nil
+				})
+			})
+		}),
+		fx.Invoke(func(lc fx.Lifecycle) {
+			lc.Append(fx.Hook{
+				OnStart: func(_ context.Context) error {
+					return errors.New("database connection refused (offline)")
+				},
+			})
+		}),
+	}, config.Options{}, openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML})
+	if err != nil {
+		t.Fatalf("expected offline export to succeed, got %v", err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "offline-endpoint") {
+		t.Fatalf("missing operation in offline spec:\n%s", s)
 	}
 }
 

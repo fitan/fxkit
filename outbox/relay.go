@@ -9,25 +9,20 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/gormx"
-	"github.com/fitan/fxkit/hatchetx"
 	"go.uber.org/fx"
 )
 
 // EventPublisher publishes raw payload bytes to a topic (Hatchet event key = topic name).
+// Inject implementations with [ProvidePublisher] (Hatchet is provided by hatchetx
+// when hatchet.outbox_publisher is true). Last non-nil publisher wins.
 type EventPublisher interface {
 	PublishEvent(ctx context.Context, pubsubName, topicName string, data []byte, metadata map[string]string) error
 }
 
-// hatchetPublisher pushes outbox rows as Hatchet events (event key = topic name).
-type hatchetPublisher struct {
-	client *hatchetx.Client
-}
-
-func (p *hatchetPublisher) PublishEvent(ctx context.Context, _, topicName string, data []byte, metadata map[string]string) error {
-	if p == nil || p.client == nil || !p.client.Enabled() {
-		return errors.New("outbox: nil hatchet client")
-	}
-	return p.client.PushEventJSON(ctx, topicName, data, metadata)
+// ProvidePublisher publishes an [EventPublisher] into the outbox_publishers fx group.
+// Use this to drive the relay with Kafka / NATS / RabbitMQ instead of (or after) Hatchet.
+func ProvidePublisher(fn any) fx.Option {
+	return fx.Provide(fx.Annotate(fn, fx.As(new(EventPublisher)), fx.ResultTags(`group:"outbox_publishers"`)))
 }
 
 // Relay polls the outbox table and publishes pending events.
@@ -39,6 +34,7 @@ type Relay struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	notify chan struct{}
 }
 
 // NewRelayParams is the Fx-friendly constructor input for [NewRelay].
@@ -46,27 +42,36 @@ type NewRelayParams struct {
 	fx.In
 
 	Client     *gormx.Client
-	Hatchet    *hatchetx.Client `optional:"true"`
 	Outbox     *Config
-	HatchetCfg *hatchetx.Config `optional:"true"`
+	Publishers []EventPublisher `group:"outbox_publishers"`
 }
 
-// NewRelay builds a Relay that publishes via Hatchet when hatchet.outbox_publisher is enabled.
+// NewRelay builds a Relay. The last non-nil [EventPublisher] in the fx group is used.
 func NewRelay(p NewRelayParams) *Relay {
 	outboxCfg := Config{}
 	if p.Outbox != nil {
 		outboxCfg = *p.Outbox
 	}
-	var pub EventPublisher
-	if p.HatchetCfg != nil && p.HatchetCfg.Enabled && p.HatchetCfg.OutboxPublisher && p.Hatchet != nil && p.Hatchet.Enabled() {
-		pub = &hatchetPublisher{client: p.Hatchet}
-		slog.Info("outbox: using Hatchet event publisher")
+	pub := pickPublisher(p.Publishers)
+	if pub != nil {
+		slog.Info("outbox: using EventPublisher")
 	}
 	return &Relay{
 		client:    p.Client,
 		publisher: pub,
 		cfg:       outboxCfg,
+		notify:    make(chan struct{}, 1),
 	}
+}
+
+func pickPublisher(pubs []EventPublisher) EventPublisher {
+	var pub EventPublisher
+	for _, p := range pubs {
+		if p != nil {
+			pub = p
+		}
+	}
+	return pub
 }
 
 // SetPublisher replaces the publisher (for tests).
@@ -83,6 +88,17 @@ func (r *Relay) getPublisher() EventPublisher {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.publisher
+}
+
+// Notify wakes up the relay polling loop immediately to process new events without waiting for the ticker.
+func (r *Relay) Notify() {
+	if r == nil {
+		return
+	}
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
 }
 
 // batchResult is the outcome of one [Relay.processBatch] call.
@@ -258,7 +274,34 @@ func (r *Relay) markFailed(ctx context.Context, ev OutboxEvent, maxRetries int, 
 	return res.RowsAffected, res.Error
 }
 
-// Run polls until Stop is called or ctx is cancelled.
+// Start begins the polling loop in a background goroutine.
+// It sets up cancellation and waitgroup before returning, avoiding goroutine leaks on fast shutdown.
+func (r *Relay) Start(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	interval := r.cfg.PollInterval
+	if interval <= 0 {
+		return fmt.Errorf("outbox: poll_interval must be > 0")
+	}
+	r.mu.Lock()
+	if r.cancel != nil {
+		r.mu.Unlock()
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	r.cancel = cancel
+	r.wg.Add(1)
+	r.mu.Unlock()
+
+	go func() {
+		defer r.wg.Done()
+		r.runLoop(runCtx, interval)
+	}()
+	return nil
+}
+
+// Run polls synchronously until Stop is called or ctx is cancelled.
 func (r *Relay) Run(ctx context.Context) {
 	if r == nil {
 		return
@@ -268,13 +311,21 @@ func (r *Relay) Run(ctx context.Context) {
 		slog.Error("outbox: poll_interval must be > 0")
 		return
 	}
-	runCtx, cancel := context.WithCancel(ctx)
 	r.mu.Lock()
+	if r.cancel != nil {
+		r.mu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.wg.Add(1)
 	r.mu.Unlock()
 	defer r.wg.Done()
 
+	r.runLoop(runCtx, interval)
+}
+
+func (r *Relay) runLoop(runCtx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -291,6 +342,7 @@ func (r *Relay) Run(ctx context.Context) {
 		select {
 		case <-runCtx.Done():
 			return
+		case <-r.notify:
 		case <-ticker.C:
 		}
 	}

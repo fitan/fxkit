@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,9 +20,30 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// corsMiddleware 根据 server.cors_allowed_origins 设置 CORS 头并短路 OPTIONS 预检。
-// 空列表表示不设置 CORS（非允许全部）。显式 ["*"] 才允许任意 origin。
-func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+// corsMiddleware 根据 server CORS 配置设置响应头并短路 OPTIONS 预检。
+// 空 origins 表示不设置 CORS（非允许全部）。显式 ["*"] 才允许任意 origin。
+func corsMiddleware(cfg *Config) func(http.Handler) http.Handler {
+	var allowedOrigins []string
+	allowCreds := false
+	headers := defaultCORSAllowedHeaders
+	methods := defaultCORSAllowedMethods
+	expose := defaultCORSExposeHeaders
+	var maxAge time.Duration
+	if cfg != nil {
+		allowedOrigins = cfg.CORSAllowedOrigins
+		allowCreds = cfg.CORSAllowCredentials
+		if len(cfg.CORSAllowedHeaders) > 0 {
+			headers = cfg.CORSAllowedHeaders
+		}
+		if len(cfg.CORSAllowedMethods) > 0 {
+			methods = cfg.CORSAllowedMethods
+		}
+		if len(cfg.CORSExposeHeaders) > 0 {
+			expose = cfg.CORSExposeHeaders
+		}
+		maxAge = cfg.CORSMaxAge
+	}
+
 	allowAll := false
 	origins := make(map[string]struct{})
 	for _, o := range allowedOrigins {
@@ -36,21 +58,41 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 		origins[o] = struct{}{}
 	}
 
+	allowMethods := strings.Join(methods, ", ")
+	allowHeaders := strings.Join(headers, ", ")
+	exposeHeaders := strings.Join(expose, ", ")
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
+			allowed := false
 			if allowAll {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
+				if allowCreds && origin != "" {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Add("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				} else {
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+				}
+				allowed = true
 			} else if origin != "" {
 				if _, ok := origins[origin]; ok {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 					w.Header().Add("Vary", "Origin")
+					if allowCreds {
+						w.Header().Set("Access-Control-Allow-Credentials", "true")
+					}
+					allowed = true
 				}
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			// X-User is intentionally omitted; use Authorization (Bearer) in production.
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
+			if allowed {
+				w.Header().Set("Access-Control-Allow-Methods", allowMethods)
+				w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
+				w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
+				if maxAge > 0 {
+					w.Header().Set("Access-Control-Max-Age", strconv.Itoa(int(maxAge.Seconds())))
+				}
+			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusOK)
 				return
@@ -60,11 +102,11 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// sseWriteDeadlineMiddleware clears the server WriteTimeout for SSE paths so
+// sseWriteDeadlineMiddleware clears the server WriteTimeout for SSE so
 // long-lived streams are not killed at http.Server.WriteTimeout.
 func sseWriteDeadlineMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isSSERequestPath(r.URL.Path) {
+		if isSSERequest(r) {
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 		}
 		next.ServeHTTP(w, r)
@@ -73,12 +115,12 @@ func sseWriteDeadlineMiddleware(next http.Handler) http.Handler {
 
 // otelMiddleware 用 otelhttp 包装每个请求。初始 span 名为 METHOD + 原始路径；
 // [routePatternMiddleware] 在路由匹配后改成 METHOD + chi pattern，避免高基数。
-// 跳过 Server-Sent-Event 路径，避免 trace context 占满长连接流。
+// 跳过 Server-Sent-Event 请求，避免 trace context 占满长连接流。
 func otelMiddleware(next http.Handler) http.Handler {
 	return otelhttp.NewMiddleware("",
 		otelhttp.WithSpanNameFormatter(httpSpanName),
 		otelhttp.WithFilter(func(r *http.Request) bool {
-			return !isSSERequestPath(r.URL.Path)
+			return !isSSERequest(r)
 		}),
 	)(next)
 }
@@ -137,7 +179,7 @@ func recoverMiddleware(next http.Handler) http.Handler {
 func requestBodyLogMiddleware(next http.Handler) http.Handler {
 	const maxLoggedBytes = 8 * 1024
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isSSERequestPath(r.URL.Path) ||
+		if isSSERequest(r) ||
 			r.Method == http.MethodGet ||
 			r.Body == nil {
 			next.ServeHTTP(w, r)
@@ -285,6 +327,16 @@ func isJSONContentType(contentType string) bool {
 	}
 	mediaType = strings.ToLower(mediaType)
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
+func isSSERequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.URL != nil && isSSERequestPath(r.URL.Path) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
 }
 
 func isSSERequestPath(path string) bool {

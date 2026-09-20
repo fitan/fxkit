@@ -137,7 +137,7 @@ func FirstByID[T any](ctx context.Context, db *gorm.DB, idStr string, scopes ...
 	if err != nil {
 		return nil, fxerrors.BadRequest("invalid %s: %v", meta.Column, err)
 	}
-	tx := db.WithContext(ctx).Where(meta.Column+" = ?", id)
+	tx := db.WithContext(ctx).Where(qualifiedColumn(meta.Table, meta.Column)+" = ?", id)
 	for _, sc := range scopes {
 		if sc != nil {
 			tx = sc(tx)

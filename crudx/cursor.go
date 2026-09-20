@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fitan/fxkit/fxerrors"
 )
@@ -68,6 +69,14 @@ func normalizeCursorValue(v any) any {
 			return f
 		}
 		return t.String()
+	case string:
+		if tm, err := time.Parse(time.RFC3339Nano, t); err == nil {
+			return tm
+		}
+		if tm, err := time.Parse(time.RFC3339, t); err == nil {
+			return tm
+		}
+		return t
 	default:
 		return v
 	}

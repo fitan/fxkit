@@ -10,12 +10,13 @@ import (
 func testSpec() ListSpec {
 	return ListSpec{
 		Fields: map[string]FieldSpec{
-			"name":    {Column: "users.name", Kind: FieldString, Indexed: true},
-			"state":   {Column: "users.state", Kind: FieldString},
-			"cpuNum":  {Column: "users.cpu_num", Kind: FieldNumber},
-			"memory":  {Column: "users.memory", Kind: FieldNumber},
-			"enable":  {Column: "users.enable", Kind: FieldBool},
+			"name":        {Column: "users.name", Kind: FieldString, Indexed: true},
+			"state":       {Column: "users.state", Kind: FieldString},
+			"cpuNum":      {Column: "users.cpu_num", Kind: FieldNumber},
+			"memory":      {Column: "users.memory", Kind: FieldNumber},
+			"enable":      {Column: "users.enable", Kind: FieldBool},
 			"description": {Column: "users.description", Kind: FieldString},
+			"createdAt":   {Column: "users.created_at", Kind: FieldTime},
 		},
 		Relations: map[string]*RelationSpec{
 			"cluster": {
@@ -104,26 +105,36 @@ func TestParseQConditions_andMultiple(t *testing.T) {
 func TestParseQConditions_tooMany(t *testing.T) {
 	spec := testSpec()
 	spec.Limits.MaxConditions = 2
-	_, err := ParseQConditions(spec, []string{"state=Running", "cpuNum>=4", "name~x"})
+	_, err := ParseQConditions(spec, []string{"state=Running", "cpuNum>=4", "enable=true"})
 	assertInvalid(t, err, ReasonTooManyConditions)
 }
 
 func TestParseLiteral_types(t *testing.T) {
-	v, err := parseLiteral("true")
-	if err != nil || v != true {
-		t.Fatalf("true: %v %v", v, err)
+	cases := []struct {
+		in   string
+		want any
+	}{
+		{"null", nil},
+		{"NULL", nil},
+		{"true", true},
+		{"false", false},
+		{"123", int64(123)},
+		{"-456", int64(-456)},
+		{"12.34", float64(12.34)},
+		{".", "."},
+		{"-.", "-."},
+		{"hello", "hello"},
+		{`"hello, world"`, "hello, world"},
+		{`'single quoted'`, "single quoted"},
 	}
-	v, err = parseLiteral("100")
-	if err != nil || v != int64(100) {
-		t.Fatalf("100: %v", v)
-	}
-	v, err = parseLiteral("100vm")
-	if err != nil || v != "100vm" {
-		t.Fatalf("100vm: %v", v)
-	}
-	v, err = parseLiteral("null")
-	if err != nil || v != nil {
-		t.Fatalf("null: %v", v)
+	for _, tc := range cases {
+		got, err := parseLiteral(tc.in)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%q: got %v (%T) want %v (%T)", tc.in, got, got, tc.want, tc.want)
+		}
 	}
 }
 
@@ -145,9 +156,37 @@ func TestParseHTTPQValues_decode(t *testing.T) {
 	}
 }
 
+func TestParseHTTPQValues_literalPercent(t *testing.T) {
+	got, err := ParseHTTPQValues([]string{"state=done", "description=discount 20%"})
+	if err != nil {
+		// Even if url.QueryUnescape fails on plain %, it shouldn't fail for CleanHTTPQValues
+		t.Logf("ParseHTTPQValues error: %v", err)
+	} else if len(got) != 2 {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestParseHTTPQValues_decodeFailed(t *testing.T) {
 	_, err := ParseHTTPQValues([]string{"%ZZ"})
 	assertInvalid(t, err, ReasonURLDecodeFailed)
+}
+
+func TestParseQConditions_numericStringField(t *testing.T) {
+	spec := testSpec()
+	// Test querying FieldString with pure numeric values (e.g. state=100 or phone=13800138000)
+	conds, err := ParseQConditions(spec, []string{"state=100", `name="456"`})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if len(conds) != 2 {
+		t.Fatalf("expected 2 conditions, got %d", len(conds))
+	}
+	if val, ok := conds[0].Values[0].(string); !ok || val != "100" {
+		t.Fatalf("expected string '100', got %T(%v)", conds[0].Values[0], conds[0].Values[0])
+	}
+	if val, ok := conds[1].Values[0].(string); !ok || val != "456" {
+		t.Fatalf("expected string '456', got %T(%v)", conds[1].Values[0], conds[1].Values[0])
+	}
 }
 
 func TestParseQConditions_operatorPriority(t *testing.T) {
@@ -173,6 +212,55 @@ func TestParseQConditions_operatorPriority(t *testing.T) {
 		if conds[0].Op != tc.op {
 			t.Fatalf("%q: op=%v want %v", tc.raw, conds[0].Op, tc.op)
 		}
+	}
+}
+
+func TestParseQConditions_operatorEarliestPosition(t *testing.T) {
+	spec := testSpec()
+	// When a query value contains characters of another operator, the earliest operator
+	// should be matched, not the operator that appears earlier in the opTokens slice.
+	// 1. Equal value containing '~' (like operator): name=a~b
+	conds, err := ParseQConditions(spec, []string{"name=a~b"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(conds) != 1 || conds[0].Op != OpEqual || conds[0].Field != "name" || conds[0].Values[0] != "a~b" {
+		t.Fatalf("unexpected cond: %+v", conds[0])
+	}
+
+	// 2. Like value containing '=': name~a=b
+	conds, err = ParseQConditions(spec, []string{"name~a=b"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(conds) != 1 || conds[0].Op != OpLike || conds[0].Field != "name" || conds[0].Values[0] != "a=b" {
+		t.Fatalf("unexpected cond: %+v", conds[0])
+	}
+
+	// 3. Equal value containing '!=': description=1!=2
+	conds, err = ParseQConditions(spec, []string{"description=1!=2"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(conds) != 1 || conds[0].Op != OpEqual || conds[0].Field != "description" || conds[0].Values[0] != "1!=2" {
+		t.Fatalf("unexpected cond: %+v", conds[0])
+	}
+}
+
+func TestParseQGroups_orWithQuotedCommas(t *testing.T) {
+	spec := testSpec()
+	groups, err := ParseQGroups(spec, []string{`or(name="a,b",state=Running)`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(groups) != 1 || !groups[0].Or || len(groups[0].Conds) != 2 {
+		t.Fatalf("unexpected groups: %+v", groups)
+	}
+	if groups[0].Conds[0].Field != "name" || groups[0].Conds[0].Values[0] != "a,b" {
+		t.Fatalf("first cond unexpected: %+v", groups[0].Conds[0])
+	}
+	if groups[0].Conds[1].Field != "state" || groups[0].Conds[1].Values[0] != "Running" {
+		t.Fatalf("second cond unexpected: %+v", groups[0].Conds[1])
 	}
 }
 

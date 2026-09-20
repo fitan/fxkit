@@ -107,6 +107,16 @@ func TestConfigValidate_TLSStrategy(t *testing.T) {
 	}
 }
 
+func TestProvideOutboxPublisher_Disabled(t *testing.T) {
+	c, err := NewClient(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := provideOutboxPublisher(c, &Config{Enabled: false, OutboxPublisher: true}); p != nil {
+		t.Fatal("expected nil publisher when disabled")
+	}
+}
+
 func TestNewClient_Disabled(t *testing.T) {
 	c, err := NewClient(nil)
 	if err != nil {

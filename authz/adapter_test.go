@@ -207,3 +207,44 @@ func TestSetSubjectRoles_PersistsForReload(t *testing.T) {
 		t.Fatalf("enforce=%v err=%v", ok, err)
 	}
 }
+
+func TestGormAdapter_RemoveFilteredPolicy(t *testing.T) {
+	db := openSQLite(t, "file:casbin_remove_filtered?mode=memory&cache=shared")
+	adapter, err := newGormAdapter(db, "casbin_rule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := model.NewModelFromString(defaultRBACModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := casbin.NewEnforcer(m, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.EnableAutoSave(true)
+
+	if _, err := e.AddPolicy("admin", "/users", "GET"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.AddPolicy("editor", "/orders", "GET"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove with fieldIndex = 1 (matching obj="/users")
+	if _, err := e.RemoveFilteredPolicy(1, "/users"); err != nil {
+		t.Fatal(err)
+	}
+
+	// admin, /users, GET should be removed
+	ok, err := e.Enforce("admin", "/users", "GET")
+	if err != nil || ok {
+		t.Fatalf("expected admin /users removed, got ok=%v err=%v", ok, err)
+	}
+
+	// editor, /orders, GET MUST still be present
+	ok, err = e.Enforce("editor", "/orders", "GET")
+	if err != nil || !ok {
+		t.Fatalf("expected editor /orders preserved, got ok=%v err=%v", ok, err)
+	}
+}

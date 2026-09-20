@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/otelx"
@@ -32,11 +31,7 @@ func NewMux(p MuxParams) *chi.Mux {
 	// recover must be outermost so panics in CORS/OTel/body-log are caught.
 	r.Use(recoverMiddleware)
 	r.Use(sseWriteDeadlineMiddleware)
-	origins := []string{}
-	if p.Server != nil {
-		origins = p.Server.CORSAllowedOrigins
-	}
-	r.Use(corsMiddleware(origins))
+	r.Use(corsMiddleware(p.Server))
 	if p.Otel != nil && p.Otel.HTTPEnabled() {
 		r.Use(otelMiddleware)
 		r.Use(routePatternMiddleware)
@@ -114,13 +109,14 @@ func NewHTTPServer(p ServerParams) *HTTPServer {
 	}
 	port := p.Server.Port
 
+	cfg := p.Server
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           p.Mux,
-		ReadHeaderTimeout: 30 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: durationOr(cfg.ReadHeaderTimeout, defaultReadHeaderTimeout),
+		ReadTimeout:       durationOr(cfg.ReadTimeout, defaultReadTimeout),
+		WriteTimeout:      durationOr(cfg.WriteTimeout, defaultWriteTimeout),
+		IdleTimeout:       durationOr(cfg.IdleTimeout, defaultIdleTimeout),
 	}
 	srv.Protocols = new(http.Protocols)
 	srv.Protocols.SetHTTP1(true)

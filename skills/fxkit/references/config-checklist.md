@@ -18,6 +18,7 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `server.port` | HTTP 端口 |
 | `server.log_payloads` | 记录请求/响应体（含脱敏启发式）；生产慎开 |
 | `server.cors_allowed_origins` | 空 = 无 CORS（默认）；`["*"]` 才任意源 |
+| `server.shutdown_timeout` | 优雅停机超时时间；默认 `10s` |
 
 ## app / db
 
@@ -27,6 +28,7 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `db.driver` | `mysql` / `postgres` / `sqlite`；空 = 不连库 |
 | `db.dsn` | DSN；sqlite 会补 `_busy_timeout` / WAL / `_fk`（不覆盖已有值） |
 | `db.log_level` | `silent` / `error` / `warn` / `info`；默认 **warn** |
+| `db.slow_threshold` | 慢查询日志告警阈值；默认 `200ms`（超过则输出 WARN 慢查询日志） |
 | `db.max_idle_conns` / `max_open_conns` / `conn_max_lifetime` | 池参数；lifetime 如 `1h` |
 
 ## outbox / hatchet

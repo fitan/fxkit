@@ -19,10 +19,10 @@ func TestKindStatus(t *testing.T) {
 	}
 }
 
-func TestWrapHidesInternalMessage(t *testing.T) {
+func TestWrapPreservesMessageAndCause(t *testing.T) {
 	cause := errors.New("secret db failure")
 	err := fxerrors.Wrap(cause)
-	if err.Message != "internal error" {
+	if err.Message != "secret db failure" {
 		t.Fatalf("message=%q", err.Message)
 	}
 	if !errors.Is(err, cause) {
@@ -30,6 +30,17 @@ func TestWrapHidesInternalMessage(t *testing.T) {
 	}
 	if !fxerrors.Is(err, fxerrors.KindInternal) {
 		t.Fatal("expected KindInternal")
+	}
+
+	// When serialized for HTTP clients, WriteError sanitizes KindInternal to "internal error"
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	fxerrors.WriteError(rec, req, err)
+	if strings.Contains(rec.Body.String(), "secret db failure") {
+		t.Fatalf("leaked internal message to client: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"message":"internal error"`) {
+		t.Fatalf("body=%s", rec.Body.String())
 	}
 }
 

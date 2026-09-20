@@ -434,7 +434,7 @@ func TestWatch_EmptyConsulClearsPool(t *testing.T) {
 	t.Fatalf("watch never fetched, hits=%d pool=%v", hits.Load(), pool.snapshot())
 }
 
-func TestResolveTransport_POSTFailoverRewindsBody(t *testing.T) {
+func TestResolveTransport_PUTFailoverRewindsBody(t *testing.T) {
 	t.Parallel()
 	var first, second string
 	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +463,7 @@ func TestResolveTransport_POSTFailoverRewindsBody(t *testing.T) {
 		next:        http.DefaultTransport,
 	}
 	body := []byte(`{"hello":"world"}`)
-	req, err := http.NewRequest(http.MethodPost, "http://test/v1", io.NopCloser(bytes.NewReader(body)))
+	req, err := http.NewRequest(http.MethodPut, "http://test/v1", io.NopCloser(bytes.NewReader(body)))
 	if err != nil {
 		t.Fatal(err)
 	}

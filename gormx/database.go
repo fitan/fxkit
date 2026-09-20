@@ -8,6 +8,7 @@ package gormx
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -72,7 +73,7 @@ func openPool(c *Config) (*gorm.DB, error) {
 	}
 
 	gormCfg := &gorm.Config{
-		Logger:         newSlogAdapter(c.LogLevel),
+		Logger:         newSlogAdapter(c.LogLevel, c.SlowThreshold),
 		TranslateError: true,
 	}
 
@@ -141,10 +142,11 @@ func sqlDriverName(driver string) (string, error) {
 
 // slogAdapter 将 GORM 的 logger.Interface 转发到全局 slog handler。
 type slogAdapter struct {
-	level slog.Level
+	level         slog.Level
+	slowThreshold time.Duration
 }
 
-func newSlogAdapter(level string) logger.Interface {
+func newSlogAdapter(level string, slowThreshold time.Duration) logger.Interface {
 	var l slog.Level
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "silent":
@@ -156,7 +158,7 @@ func newSlogAdapter(level string) logger.Interface {
 	default:
 		l = slog.LevelWarn
 	}
-	return &slogAdapter{level: l}
+	return &slogAdapter{level: l, slowThreshold: slowThreshold}
 }
 
 func (a *slogAdapter) LogMode(level logger.LogLevel) logger.Interface {
@@ -196,9 +198,20 @@ func (a *slogAdapter) Trace(ctx context.Context, begin time.Time, fc func() (sql
 	elapsed := time.Since(begin)
 	sqlStr, rows := fc()
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return
+		}
 		if slog.LevelError >= a.level {
 			slog.ErrorContext(ctx, "database error",
 				"error", err, "duration", elapsed, "rows", rows, "sql", sqlStr,
+			)
+		}
+		return
+	}
+	if a.slowThreshold > 0 && elapsed >= a.slowThreshold {
+		if slog.LevelWarn >= a.level {
+			slog.WarnContext(ctx, "database slow query",
+				"duration", elapsed, "threshold", a.slowThreshold, "rows", rows, "sql", sqlStr,
 			)
 		}
 		return

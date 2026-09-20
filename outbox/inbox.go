@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/gormx"
+	"gorm.io/gorm/clause"
 )
 
 // InboxEvent records a successfully processed consumer idempotency key.
@@ -66,7 +67,7 @@ func (in *Inbox) Once(ctx context.Context, inp OnceInput) error {
 	}
 
 	// Insert-then-Fn in one transaction: the unique PK is the claim.
-	// Concurrent losers hit unique violation and skip Fn (at-most-once).
+	// ON CONFLICT DO NOTHING so a duplicate key does not abort PostgreSQL.
 	// If Fn fails, the insert rolls back so the key can be retried.
 	return in.client.Transaction(ctx, func(txCtx context.Context) error {
 		row := InboxEvent{
@@ -74,11 +75,12 @@ func (in *Inbox) Once(ctx context.Context, inp OnceInput) error {
 			Topic:       inp.Topic,
 			ProcessedAt: time.Now().UTC(),
 		}
-		if err := in.client.Conn(txCtx).Create(&row).Error; err != nil {
-			if isUniqueViolation(err) {
-				return nil
-			}
-			return err
+		res := in.client.Conn(txCtx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil
 		}
 		return inp.Fn(txCtx)
 	})

@@ -24,23 +24,36 @@ fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 
 ```go
 page, err := crudx.List(ctx, crudx.ListInput[User, UserRow]{
-	DB:   client.Conn(ctx).Model(&User{}),
-	Spec: userListSpec,
-	Params: crudx.ListParams{
-		Limit:     20,
-		UseCursor: true,
-		SortBy:    "id",
-		Q:         []string{"name~alice", "or(status=active,status=pending)"},
+	DB:       client.Conn(ctx).Model(&User{}),
+	Spec:     userListSpec,
+	Params:   params,
+	Preloads: []string{"Profile"}, // 声明式预加载，避免 N+1
+	ToRow: func(u User) UserRow {
+		return UserRow{ID: u.ID, Name: u.Name, Status: u.Status, CreatedAt: u.CreatedAt}
 	},
-	ToRow: func(u User) UserRow { return UserRow{ID: u.ID, Name: u.Name} },
 })
 ```
 
-能力：受控 `q=`（`or(...)`、`.isnull` / `.notnull`；比较运算不能配 null）、keyset cursor（**不能**按关联字段排序）、JOIN 时根表 `DISTINCT` + Count Distinct(PK)、LIKE 转义 `%`/`_`。软删：`gorm.DeletedAt`。
+### 查询能力与安全护栏
+- **受控 `q=`**：
+  - 支持操作符：`=`、`!=`、`~`（LIKE，需 `Indexed: true`）、`!~`、`>`、`>=`、`<`、`<=`、`.in:`、`.notin:`、`.isnull`、`.notnull`；
+  - 表达式按最早出现的操作符精准切分，字段值内包含特殊字符或等号不影响切分；
+  - 支持单/双引号字面量保护，如 `q=name="Doe, John"` 或 `q=tag='a,b'`（避免逗号误切）；
+  - 支持受控 OR：`q=or(status=active,status=pending)`；
+  - 空枚举防护：`.in:` 为空数组时自动翻译为 `1 = 0`，防止 SQL 语法报错；
+- **键集游标分页（Keyset Cursor）**：
+  - 基于排序值与主键组合编码为安全 token（`NextCursor`）；
+  - 递归支持内嵌结构体排序（如 `gorm.Model` 中的 `CreatedAt`、`ID`）；
+  - 自动识别并解析 RFC3339 时间戳对象，天然适配各类数据库驱动 timestamp 比较；
+  - **不能**按跨表关联字段（Relation）进行游标分页（会报 400）；
+- **关联查询**：
+  - 支持多表按需 `LEFT JOIN`；根表自动 `DISTINCT` + `Count Distinct(PK)`；
+  - LIKE 关键字自动转义 `%`、`_` 与 `\`。
+- **软删除**：自动适配 `gorm.DeletedAt`。
 
 HTTP 入参嵌入 `fxhuma.ListQueryInput`，再 `ListParamsFromInput`。Huma 级中间件：`fxhuma.ProvideMiddleware(...)`（与 `server.ProvideMiddleware` 不同层）。
 
-### 单个 list operation
+### 单个 list operation 示例
 
 ```go
 fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
@@ -106,7 +119,7 @@ fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
 
 脚手架：`fxkit gen resource` 生成 `crudx.List` + 显式写方法 + `RegisterResource`。
 
-给其它服务生成 typed 客户端：先 `<svc> openapi` dump 3.0 spec，再 `fxkit gen client`（见 `fxkit-docs` / `fxkit-reqx`）。不要在本服务再生成一份自己的 Go SDK。
+给其它服务生成 typed 客户端：先 `<svc> openapi` dump 3.0 spec，再 `fxkit gen client`（见 `fxkit-docs` / `fxkit-reqx`）。不要在本服务再生存一份自己的 Go SDK。
 
 ## 可选：Repo[T]
 
@@ -127,8 +140,9 @@ fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
 - [ ] `huma.Module` 已进 `fxkit.Run`。
 - [ ] Registrar 经 `fxhuma.ProvideRegistrar`。
 - [ ] 列表走 `crudx.List` + `ListSpec` 白名单，不要自写 q= parser。
+- [ ] 预加载使用 `Preloads: []string{...}` 或 `Preload` 钩子，防范 N+1 查询。
 - [ ] LIKE 字段 `Indexed: true`；`fxkit gen resource --search` 会给非 TEXT 列加 GORM index。
-- [ ] 不要对 `ApplyList` 结果 `Count`；JOIN 列表会 Distinct。
+- [ ] 不要对 `ApplyList` 结果 `Count`；JOIN 列表会自动 Distinct。
 - [ ] 写操作显式 `Select` 列，避免 `Save` 全列更新。
 - [ ] 需要五条 REST 时才用 `RegisterResource`；Update 路径 id 经 `BindUpdate` 写入 body。
 - [ ] 需要权限时同步登记 `authz.HTTPRoute`，或依赖 OpenAPI 刮取。

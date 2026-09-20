@@ -60,3 +60,15 @@ func TestSkipAuthzPath(t *testing.T) {
 		t.Fatal("/users should not skip authz")
 	}
 }
+
+func TestAdminHTTPRoutesRequirePermission(t *testing.T) {
+	routes := adminHTTPRoutes()
+	if len(routes) == 0 {
+		t.Fatal("expected admin routes")
+	}
+	for _, r := range routes {
+		if r.Permission != AdminPermission {
+			t.Fatalf("route %s %s permission=%q want %q", r.Method, r.Path, r.Permission, AdminPermission)
+		}
+	}
+}

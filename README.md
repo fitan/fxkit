@@ -539,27 +539,23 @@ func (s *Svc) Save(ctx context.Context, u *User) error {
 | `Transaction(ctx, fn)` | 事务；回调内继续用 `Conn(txCtx)` |
 | `Pool()` | 长生命周期 `*gorm.DB`（适配器 / ping） |
 
-`log_level` 默认 `warn`（空/未知也按 warn）。`TranslateError` 始终打开，便于把唯一约束映射成 Conflict。SQLite DSN 会补 `_busy_timeout=5000`、`_journal_mode=WAL`、`_fk=1`（已有同名 pragma 不覆盖）。
+`log_level` 默认 `warn`（空/未知也按 warn）。`slow_threshold` 默认 `200ms`（超出阈值的 SQL 自动输出 `database slow query` WARN 告警日志）。`TranslateError` 始终打开，便于把唯一约束映射成 Conflict。SQLite DSN 会补 `_busy_timeout=5000`、`_journal_mode=WAL`、`_fk=1`（已有同名 pragma 不覆盖）。
 
 ---
 
 ## 9. 列表查询 crudx
 
-`crudx` 是受控 **list 查询引擎**（统一 `q=` / cursor / 字段白名单），不是泛型 CRUD 框架。写操作在 Service 里显式写；`fxkit gen resource` 生成同款形态。
+`crudx` 是受控 **list 查询引擎**（统一 `q=` / cursor / 字段白名单），不是泛型 CRUD 框架。写操作在 Service 里显式写；`fxkit gen resource` 生成同款形态。完整文档详见 [`crudx/README.md`](./crudx/README.md)。
 
 `ListSpec` 是过滤/排序白名单——多服务共用同一种列表协议，避免每张表发明一套 query。
 
 ```go
 page, err := crudx.List(ctx, crudx.ListInput[User, UserRow]{
-	DB:   client.Conn(ctx).Model(&User{}),
-	Spec: userListSpec,
-	Params: crudx.ListParams{
-		Limit:     20,
-		UseCursor: true,
-		SortBy:    "id",
-		Q:         []string{"name~alice", "or(status=active,status=pending)"},
-	},
-	ToRow: func(u User) UserRow { return UserRow{ID: u.ID, Name: u.Name} },
+	DB:       client.Conn(ctx).Model(&User{}),
+	Spec:     userListSpec,
+	Params:   params,
+	Preloads: []string{"Profile"}, // 声明式预加载
+	ToRow:    func(u User) UserRow { return UserRow{ID: u.ID, Name: u.Name} },
 })
 // page.NextCursor → 下一页 Cursor
 ```
@@ -567,7 +563,9 @@ page, err := crudx.List(ctx, crudx.ListInput[User, UserRow]{
 常用能力：
 
 - `q=` 过滤、受控 OR、`.isnull` / `.notnull`（`>`/`>=`/`<`/`<=` 不能配 null）
-- offset 或 keyset cursor（JSON 数字用 `UseNumber`，避免 int64 精度丢失；**不能**按关联字段排序再 cursor）
+- offset 或 keyset cursor（自动兼容 `time.Time` 与 RFC3339 还原；递归支持 `gorm.Model` 内嵌字段排序；**不能**按关联字段排序再 cursor）
+- 操作符支持最早位置优先扫描；支持引号包裹字面量保护逗号（如 `q=name="Doe, John"`）
+- 空集合查询防护（空 `IN` 自动转为 `1 = 0`，防止 SQL 语法报错）
 - JOIN 场景列表 `SELECT DISTINCT` 根表，Count 使用 Distinct(PK)，避免 1:N 膨胀
 - `GetByID` / `FirstByID` / `Preload` / `MapDBError` / `ZeroPrimaryKey`
 - 需要五条 REST 时用可选的 `fxhuma.RegisterResource`（`ResourceOperations` 可导出对应 Huma op）；不要默认上 `NewRepo`

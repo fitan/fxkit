@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,11 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
+)
+
+const (
+	defaultStartTimeout = 60 * time.Second
+	defaultStopTimeout  = 30 * time.Second
 )
 
 var (
@@ -90,13 +96,43 @@ func buildServeCmd(opts []fx.Option) *cobra.Command {
 		Use:   "serve",
 		Short: "Start the HTTP service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			startTO, stopTO := timeoutsFromCmd(cmd)
 			app := newFxApp(cmd, opts)
-			app.Run()
+			startCtx, cancel := context.WithTimeout(context.Background(), startTO)
+			defer cancel()
+			if err := app.Start(startCtx); err != nil {
+				return err
+			}
+			sig := <-app.Wait()
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), stopTO)
+			defer stopCancel()
+			if err := app.Stop(stopCtx); err != nil {
+				return err
+			}
+			if sig.ExitCode != 0 {
+				return fmt.Errorf("fx shutdown with exit code %d", sig.ExitCode)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringP("port", "p", "", "server port (overrides config)")
+	cmd.Flags().Duration("start-timeout", defaultStartTimeout, "Fx OnStart timeout (config load, DB ping, bind)")
+	cmd.Flags().Duration("stop-timeout", defaultStopTimeout, "Fx OnStop / HTTP Shutdown timeout")
 	return cmd
+}
+
+func timeoutsFromCmd(cmd *cobra.Command) (start, stop time.Duration) {
+	start, stop = defaultStartTimeout, defaultStopTimeout
+	if cmd == nil {
+		return
+	}
+	if v, err := cmd.Flags().GetDuration("start-timeout"); err == nil && v > 0 {
+		start = v
+	}
+	if v, err := cmd.Flags().GetDuration("stop-timeout"); err == nil && v > 0 {
+		stop = v
+	}
+	return
 }
 
 func newFxApp(cmd *cobra.Command, opts []fx.Option, extra ...fx.Option) *fx.App {
@@ -104,10 +140,11 @@ func newFxApp(cmd *cobra.Command, opts []fx.Option, extra ...fx.Option) *fx.App 
 	consulAddr, _ := cmd.Flags().GetString("consul")
 	consulKey, _ := cmd.Flags().GetString("consul-key")
 	port, _ := cmd.Flags().GetString("port")
+	startTO, stopTO := timeoutsFromCmd(cmd)
 
 	all := []fx.Option{
-		fx.StartTimeout(60 * time.Second),
-		fx.StopTimeout(15 * time.Second),
+		fx.StartTimeout(startTO),
+		fx.StopTimeout(stopTO),
 		fx.WithLogger(func() fxevent.Logger { return logx.NewFxLogger(os.Stderr) }),
 		fx.Supply(config.Options{
 			ConfigFile:      configFile,

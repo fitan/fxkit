@@ -3,11 +3,48 @@ package gormx
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
 
 	"gorm.io/gorm"
 )
 
 type txKey struct{}
+
+type afterCommitKey struct{}
+
+type afterCommitHooks struct {
+	mu  sync.Mutex
+	fns []func()
+}
+
+func (h *afterCommitHooks) add(fn func()) {
+	if h == nil || fn == nil {
+		return
+	}
+	h.mu.Lock()
+	h.fns = append(h.fns, fn)
+	h.mu.Unlock()
+}
+
+func (h *afterCommitHooks) run() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	fns := append([]func(){}, h.fns...)
+	h.mu.Unlock()
+	for _, fn := range fns {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("gormx AfterCommit panic", "error", r)
+				}
+			}()
+			fn()
+		}()
+	}
+}
 
 // WithTx 返回携带活跃 GORM 事务句柄的子 context。与 [Client.Conn] 配合，使嵌套逻辑在同一 tx 上执行。
 func WithTx(ctx context.Context, tx *gorm.DB) context.Context {
@@ -18,6 +55,21 @@ func WithTx(ctx context.Context, tx *gorm.DB) context.Context {
 func TxFromContext(ctx context.Context) (*gorm.DB, bool) {
 	tx, ok := ctx.Value(txKey{}).(*gorm.DB)
 	return tx, ok && tx != nil
+}
+
+// AfterCommit 在 ctx 所属事务成功提交后运行 fn。无外层 [Client.Transaction] 时立即执行。
+// 嵌套 Transaction 共用外层 hook 列表，全部在最外层 commit 之后按注册顺序运行。
+func AfterCommit(ctx context.Context, fn func()) {
+	if fn == nil {
+		return
+	}
+	if ctx != nil {
+		if h, ok := ctx.Value(afterCommitKey{}).(*afterCommitHooks); ok && h != nil {
+			h.add(fn)
+			return
+		}
+	}
+	fn()
 }
 
 // Client 包装根连接池。应用代码应使用 [Client.Conn] 做请求级访问（trace/cancel），
@@ -58,7 +110,13 @@ func (c *Client) Transaction(ctx context.Context, fn func(ctx context.Context) e
 	if _, ok := TxFromContext(ctx); ok {
 		return fn(ctx)
 	}
-	return c.pool.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	hooks := &afterCommitHooks{}
+	ctx = context.WithValue(ctx, afterCommitKey{}, hooks)
+	if err := c.pool.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(WithTx(ctx, tx))
-	})
+	}); err != nil {
+		return err
+	}
+	hooks.run()
+	return nil
 }

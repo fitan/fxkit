@@ -11,7 +11,7 @@ import (
 
 // Module wires [Store], [Inbox], and when outbox.enabled is true, migrates tables and starts [Relay].
 // Included in [github.com/fitan/fxkit.Default]; relay stays off until outbox.enabled=true.
-// Publisher is Hatchet when hatchet.outbox_publisher is true — see [NewRelay].
+// Publisher is an [EventPublisher] from hatchetx (hatchet.outbox_publisher) or [ProvidePublisher].
 var Module = fx.Module("fxkit/outbox",
 	config.Provide[Config]("outbox"),
 	fx.Provide(NewStore),
@@ -29,7 +29,7 @@ func registerLifecycle(lc fx.Lifecycle, cfg *Config, client *gormx.Client, relay
 		return
 	}
 	if relay == nil || relay.publisher == nil {
-		slog.Warn("outbox enabled but no Hatchet publisher (set hatchet.enabled + outbox_publisher); relay not started")
+		slog.Warn("outbox enabled but no EventPublisher (enable hatchet.outbox_publisher or outbox.ProvidePublisher); relay not started")
 		return
 	}
 
@@ -49,8 +49,7 @@ func registerLifecycle(lc fx.Lifecycle, cfg *Config, client *gormx.Client, relay
 				"max_retries", cfg.MaxRetries,
 				"claim_timeout", cfg.ClaimTimeout,
 			)
-			go relay.Run(context.Background())
-			return nil
+			return relay.Start(context.Background())
 		},
 		OnStop: func(_ context.Context) error {
 			relay.Stop()

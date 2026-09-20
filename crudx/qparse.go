@@ -13,7 +13,7 @@ type opToken struct {
 	op     Operator
 }
 
-// Longer operators must appear first.
+// Longer and more specific operators must appear first.
 var opTokens = []opToken{
 	{".notin:", OpNotIn},
 	{".in:", OpIn},
@@ -29,12 +29,30 @@ var opTokens = []opToken{
 	{"<", OpLT},
 }
 
-// ParseHTTPQValues URL-decodes each raw q query value.
+// CleanHTTPQValues trims and removes empty elements from already decoded query parameter slices.
+func CleanHTTPQValues(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// ParseHTTPQValues safely decodes raw q query values.
+// If an element contains percent-encoded escape sequences, it unescapes them.
+// If it is already unescaped plain text, it preserves the literal string.
 func ParseHTTPQValues(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	for _, r := range raw {
 		r = strings.TrimSpace(r)
 		if r == "" {
+			continue
+		}
+		if !strings.Contains(r, "%") {
+			out = append(out, r)
 			continue
 		}
 		decoded, err := url.QueryUnescape(r)
@@ -72,7 +90,7 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 	likeCount := 0
 
 	addCond := func(c Condition, or bool) error {
-		if err := validateCondition(spec, lim, c); err != nil {
+		if err := validateCondition(spec, lim, &c); err != nil {
 			return err
 		}
 		totalConds++
@@ -114,7 +132,7 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 				if err != nil {
 					return nil, err
 				}
-				if err := validateCondition(spec, lim, c); err != nil {
+				if err := validateCondition(spec, lim, &c); err != nil {
 					return nil, err
 				}
 				totalConds++
@@ -164,31 +182,31 @@ func parseOneCondition(raw string) (Condition, error) {
 }
 
 func splitFieldOpValue(expr string) (field string, op Operator, valueRaw string, err error) {
+	bestIdx := -1
+	var bestTok opToken
+
 	for _, tok := range opTokens {
 		idx := strings.Index(expr, tok.suffix)
-		if idx < 0 {
+		if idx <= 0 {
+			// idx < 0: not found; idx == 0: field would be empty
 			continue
 		}
-		if tok.op == OpIn || tok.op == OpNotIn {
-			field = strings.TrimSpace(expr[:idx])
-			return field, tok.op, expr[idx+len(tok.suffix):], nil
+		// The earliest operator in the expression is the one that divides the field from the value.
+		// When two operators start at the exact same index (e.g. ">=" vs ">", or ".notin:" vs ".in:"),
+		// the one appearing earlier in opTokens is more specific and takes precedence.
+		if bestIdx < 0 || idx < bestIdx {
+			bestIdx = idx
+			bestTok = tok
 		}
-		if tok.op == OpIsNull || tok.op == OpNotNull {
-			field = strings.TrimSpace(expr[:idx])
-			if field == "" {
-				continue
-			}
-			// allow field.isnull or field.isnull:
-			rest := expr[idx+len(tok.suffix):]
-			return field, tok.op, rest, nil
-		}
-		field = strings.TrimSpace(expr[:idx])
-		if field == "" {
-			continue
-		}
-		return field, tok.op, expr[idx+len(tok.suffix):], nil
 	}
-	return "", 0, "", InvalidQueryCondition(expr, ReasonNoOperator)
+
+	if bestIdx < 0 {
+		return "", 0, "", InvalidQueryCondition(expr, ReasonNoOperator)
+	}
+
+	field = strings.TrimSpace(expr[:bestIdx])
+	valueRaw = expr[bestIdx+len(bestTok.suffix):]
+	return field, bestTok.op, valueRaw, nil
 }
 
 func parseValues(op Operator, valueRaw, raw string) ([]any, error) {
@@ -249,12 +267,26 @@ func parseValues(op Operator, valueRaw, raw string) ([]any, error) {
 func splitList(s string, sep byte) []string {
 	var parts []string
 	start := 0
+	inSingleQuote := false
+	inDoubleQuote := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == sep {
-			if p := strings.TrimSpace(s[start:i]); p != "" {
-				parts = append(parts, p)
+		c := s[i]
+		switch c {
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
 			}
-			start = i + 1
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		default:
+			if c == sep && !inSingleQuote && !inDoubleQuote {
+				if p := strings.TrimSpace(s[start:i]); p != "" {
+					parts = append(parts, p)
+				}
+				start = i + 1
+			}
 		}
 	}
 	if p := strings.TrimSpace(s[start:]); p != "" {
@@ -265,6 +297,12 @@ func splitList(s string, sep byte) []string {
 
 func parseLiteral(s string) (any, error) {
 	s = strings.TrimSpace(s)
+	// Quoted strings: "hello", 'hello'
+	if (strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`)) || (strings.HasPrefix(s, `'`) && strings.HasSuffix(s, `'`)) {
+		if len(s) >= 2 {
+			return s[1 : len(s)-1], nil
+		}
+	}
 	if strings.EqualFold(s, "null") {
 		return nil, nil
 	}
@@ -304,6 +342,7 @@ func isNumberLiteral(s string) bool {
 		return false
 	}
 	dot := false
+	hasDigit := false
 	for ; i < len(s); i++ {
 		if s[i] == '.' {
 			if dot {
@@ -315,11 +354,12 @@ func isNumberLiteral(s string) bool {
 		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
+		hasDigit = true
 	}
-	return true
+	return hasDigit
 }
 
-func validateCondition(spec ListSpec, lim Limits, c Condition) error {
+func validateCondition(spec ListSpec, lim Limits, c *Condition) error {
 	fs, err := resolveFieldSpec(spec, c.Field)
 	if err != nil {
 		return InvalidQueryCondition(c.RawQ, ReasonFieldNotExist)
@@ -344,7 +384,7 @@ func validateCondition(spec ListSpec, lim Limits, c Condition) error {
 	return nil
 }
 
-func validateValueTypes(c Condition, fs FieldSpec) error {
+func validateValueTypes(c *Condition, fs FieldSpec) error {
 	if c.Op == OpIsNull || c.Op == OpNotNull {
 		return nil
 	}
@@ -352,7 +392,7 @@ func validateValueTypes(c Condition, fs FieldSpec) error {
 	if c.Op == OpEqual && len(c.Values) > 1 {
 		effectiveOp = OpIn
 	}
-	checkOne := func(v any) error {
+	checkAndCoerce := func(idx int, v any) error {
 		if v == nil {
 			switch effectiveOp {
 			case OpGT, OpGTE, OpLT, OpLTE:
@@ -363,7 +403,19 @@ func validateValueTypes(c Condition, fs FieldSpec) error {
 		}
 		switch effectiveOp {
 		case OpLike, OpNotLike:
-			if _, ok := v.(string); !ok {
+			switch x := v.(type) {
+			case string:
+				return nil
+			case int64:
+				c.Values[idx] = strconv.FormatInt(x, 10)
+				return nil
+			case float64:
+				c.Values[idx] = strconv.FormatFloat(x, 'f', -1, 64)
+				return nil
+			case bool:
+				c.Values[idx] = strconv.FormatBool(x)
+				return nil
+			default:
 				return errInvalid
 			}
 		case OpGT, OpGTE, OpLT, OpLTE:
@@ -392,7 +444,19 @@ func validateValueTypes(c Condition, fs FieldSpec) error {
 					return errInvalid
 				}
 			case FieldString:
-				if _, ok := v.(string); !ok {
+				switch x := v.(type) {
+				case string:
+					return nil
+				case int64:
+					c.Values[idx] = strconv.FormatInt(x, 10)
+					return nil
+				case float64:
+					c.Values[idx] = strconv.FormatFloat(x, 'f', -1, 64)
+					return nil
+				case bool:
+					c.Values[idx] = strconv.FormatBool(x)
+					return nil
+				default:
 					return errInvalid
 				}
 			case FieldTime:
@@ -401,8 +465,8 @@ func validateValueTypes(c Condition, fs FieldSpec) error {
 		}
 		return nil
 	}
-	for _, v := range c.Values {
-		if err := checkOne(v); err != nil {
+	for i, v := range c.Values {
+		if err := checkAndCoerce(i, v); err != nil {
 			return err
 		}
 	}
@@ -496,11 +560,14 @@ func resolveField(spec ListSpec, path string) (resolvedField, error) {
 		Alias: nested.Alias,
 		SQL:   "LEFT JOIN " + nested.Table + " AS " + nested.Alias + " ON " + nested.On,
 	}
-	f, ok := nested.Fields[parts[2]]
-	if !ok {
-		return resolvedField{}, errInvalid
+	if len(parts) == 3 {
+		f, ok := nested.Fields[parts[2]]
+		if !ok {
+			return resolvedField{}, errInvalid
+		}
+		return resolvedField{Column: f.Column, Joins: []joinPlan{join, join2}}, nil
 	}
-	return resolvedField{Column: f.Column, Joins: []joinPlan{join, join2}}, nil
+	return resolvedField{}, errInvalid
 }
 
 // NormalizeEqualToIn converts = with multiple values to OpIn for SQL building.

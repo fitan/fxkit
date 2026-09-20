@@ -148,15 +148,16 @@ func (r *Repo[T]) Update(ctx context.Context, in UpdateInput[T]) error {
 		return fxerrors.Internal("crudx.Repo.Update: no UpdateColumns configured")
 	}
 
+	pkCol := qualifiedColumn(r.meta.Table, r.meta.Column)
 	var n int64
-	if err := r.DB(ctx).Where(r.meta.Column+" = ?", pk).Limit(1).Count(&n).Error; err != nil {
+	if err := r.DB(ctx).Where(pkCol+" = ?", pk).Limit(1).Count(&n).Error; err != nil {
 		return MapDBError(err)
 	}
 	if n == 0 {
 		return fxerrors.NotFound(r.meta.Resource, "%s=%v", r.meta.Column, pk)
 	}
 
-	res := r.DB(ctx).Select(cols).Where(r.meta.Column+" = ?", pk).Updates(in.Entity)
+	res := r.DB(ctx).Select(cols).Where(pkCol+" = ?", pk).Updates(in.Entity)
 	if res.Error != nil {
 		return MapDBError(res.Error)
 	}
@@ -170,7 +171,8 @@ func (r *Repo[T]) Delete(ctx context.Context, id string) error {
 		return fxerrors.BadRequest("invalid %s: %v", r.meta.Column, err)
 	}
 	var zero T
-	res := r.DB(ctx).Where(r.meta.Column+" = ?", idVal).Delete(&zero)
+	pkCol := qualifiedColumn(r.meta.Table, r.meta.Column)
+	res := r.DB(ctx).Where(pkCol+" = ?", idVal).Delete(&zero)
 	if res.Error != nil {
 		return MapDBError(res.Error)
 	}

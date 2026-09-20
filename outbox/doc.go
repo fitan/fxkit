@@ -2,9 +2,11 @@
 //
 // Enqueue outbox rows inside the same [gormx.Client.Transaction] as business writes;
 // [Store.Enqueue] and [EnqueueTopic] / [EnqueueTopicMsg] use [gormx.Client.Conn] so they
-// join the active tx. After commit, [Relay] polls pending rows and publishes via:
+// join the active tx. After commit, [Relay] polls pending rows and publishes via
+// an [EventPublisher]:
 //
-//   - Hatchet Events (default when hatchet.enabled && hatchet.outbox_publisher)
+//   - Hatchet Events (hatchetx, when hatchet.enabled && hatchet.outbox_publisher)
+//   - or a custom driver registered with [ProvidePublisher] (Kafka, NATS, …)
 //
 // Crash recovery (multi-replica): claiming a row sets status=processing, a LeaseID,
 // LockedAt, and increments Attempts. The claiming relay heartbeats LockedAt while

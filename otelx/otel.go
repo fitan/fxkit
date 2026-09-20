@@ -93,6 +93,9 @@ func Setup(lc fx.Lifecycle, otelCfg *Config, app *config.App) error {
 		}
 	}
 
+	consoleHandler := logx.NewConsoleHandler(os.Stderr, nil)
+	var rootHandler slog.Handler = consoleHandler
+
 	if cfg.Logs.Enabled {
 		lp, err := newLoggerProvider(ctx, cfg, res)
 		if err != nil {
@@ -101,13 +104,14 @@ func Setup(lc fx.Lifecycle, otelCfg *Config, app *config.App) error {
 		shutdowns = append(shutdowns, lp.Shutdown)
 
 		otelHandler := otelslog.NewHandler("", otelslog.WithLoggerProvider(lp))
-		consoleHandler := logx.NewConsoleHandler(os.Stderr, nil)
-		slog.SetDefault(slog.New(&traceHandler{
-			inner: &fanoutHandler{
-				handlers: []slog.Handler{consoleHandler, otelHandler},
-			},
-		}))
+		rootHandler = &fanoutHandler{
+			handlers: []slog.Handler{consoleHandler, otelHandler},
+		}
 	}
+
+	slog.SetDefault(slog.New(&traceHandler{
+		inner: rootHandler,
+	}))
 
 	lc.Append(fx.Hook{
 		OnStop: func(ctx context.Context) error {

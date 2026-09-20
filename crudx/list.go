@@ -26,12 +26,13 @@ type ListResult[T any] struct {
 //
 // ToRow projects each fetched model into the API list row.
 type ListInput[M, Row any] struct {
-	DB      *gorm.DB                // scoped base query (Model+Table already set)
-	Spec    ListSpec                // ZStack-style filter/sort registry
-	Params  ListParams              // request params (offset or cursor)
-	ToRow   func(M) Row             // required projection
-	Select  []string                // optional SQL column whitelist for SELECT
-	Preload func(*gorm.DB) *gorm.DB // optional preload applied before Find
+	DB       *gorm.DB                // scoped base query (Model+Table already set)
+	Spec     ListSpec                // ZStack-style filter/sort registry
+	Params   ListParams              // request params (offset or cursor)
+	ToRow    func(M) Row             // required projection
+	Select   []string                // optional SQL column whitelist for SELECT
+	Preload  func(*gorm.DB) *gorm.DB // optional preload applied before Find
+	Preloads []string                // optional association names to preload e.g. []string{"Profile"}
 }
 
 // List runs a ZStack-style list query (filters, sort, offset or keyset cursor),
@@ -91,6 +92,12 @@ func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row
 		tx = tx.Offset(params.Start)
 	}
 
+	for _, p := range in.Preloads {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			tx = tx.Preload(p)
+		}
+	}
 	if in.Preload != nil {
 		tx = in.Preload(tx)
 	}
@@ -159,6 +166,36 @@ func nextCursor[M any](last *M, params ListParams, spec ListSpec, meta *ModelMet
 	return EncodeCursor(sortBy, sortDir, sv, pk)
 }
 
+func findFieldValueByColumn(v reflect.Value, base string) (any, bool) {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return nil, false
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil, false
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		sf := t.Field(i)
+		if !sf.IsExported() {
+			continue
+		}
+		fv := v.Field(i)
+		dbName := gormColumnName(sf.Name, sf.Tag.Get("gorm"))
+		if dbName == base || strings.EqualFold(sf.Name, base) {
+			return fv.Interface(), true
+		}
+		if sf.Anonymous {
+			if val, ok := findFieldValueByColumn(fv, base); ok {
+				return val, true
+			}
+		}
+	}
+	return nil, false
+}
+
 func readSortValue[M any](entity *M, sortBy string, spec ListSpec, meta *ModelMeta) (any, error) {
 	col := spec.SortFields[sortBy]
 	if col == "" {
@@ -174,19 +211,11 @@ func readSortValue[M any](entity *M, sortBy string, spec ListSpec, meta *ModelMe
 		base = col[i+1:]
 	}
 	v := reflect.ValueOf(entity).Elem()
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		sf := t.Field(i)
-		if !sf.IsExported() {
-			continue
-		}
-		dbName := gormColumnName(sf.Name, sf.Tag.Get("gorm"))
-		if dbName == base || strings.EqualFold(sf.Name, base) {
-			return v.Field(i).Interface(), nil
-		}
+	if val, ok := findFieldValueByColumn(v, base); ok {
+		return val, nil
 	}
 	if meta != nil && (base == meta.Column || strings.EqualFold(meta.FieldName, base)) {
-		f := reflect.ValueOf(entity).Elem().FieldByName(meta.FieldName)
+		f := v.FieldByName(meta.FieldName)
 		if f.IsValid() {
 			return f.Interface(), nil
 		}

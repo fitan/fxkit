@@ -8,7 +8,8 @@
 // [Factory.Client] 按服务名阻塞式 watch Consul `/v1/health/service/{name}?passing=true`
 // （wait 默认 5m、上限 10m；超时或 index 变化都会返回，端点列表不变则不替换、不打 updated 日志）。
 // 从 Service.Address（空则 Node.Address）+ Port 得到 IP 或域名端点；
-// 请求使用相对路径，round-robin 选节点，传输失败或 502/503/504 时换节点重试；
+// 请求使用相对路径，round-robin 选节点，任意方法在传输失败或 502/503/504 时换节点重试。
+// 请求体超过 4MB 时不缓冲、不重试。
 // 出站 Transport 经 otelhttp 包装。Scheme 默认 http，可设 https。
 //
 // OpenAPI 生成客户端（oapi-codegen）请用 [Factory.TransportClient] 或

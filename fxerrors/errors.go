@@ -1,47 +1,21 @@
-// Package fxerrors 是 fxkit 的统一错误类型。错误序列化为 JSON 供 HTTP handler 使用（见 [WriteError]），
-// 字段风格类似 RFC 9457 Problem Details。
-//
-// 错误模型（对应 RFC 9457 Problem Details）：
-//
-//	{
-//	  "code":    "not_found",
-//	  "status":  404,
-//	  "message": "user not found (id=42)",
-//	  "details": {"id": 42},
-//	  "trace_id": "..."   // OTel span 活跃时自动填充
-//	}
-//
-// 使用 [Wrap] 包装第三方错误，在 fxkit 日志/中间件栈中保留 trace，且不丢失底层 cause：
-//
-//	if err := repo.Save(ctx, u); err != nil {
-//	    return nil, fxerrors.Wrap(err)
-//	}
-//
-// 使用 [Is] / [errors.As] 匹配 kind：
-//
-//	if fxerrors.Is(err, fxerrors.KindNotFound) { ... }
 package fxerrors
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
-
-	"go.opentelemetry.io/otel/trace"
 )
 
-// Kind 是机器可读的错误类别。新增 kind 应在 [Kind.Status] 中映射到稳定 HTTP 状态码。
+// Kind 表示错误的领域分类，决定默认的 HTTP 状态码。
 type Kind string
 
 const (
-	KindUnknown          Kind = "unknown"
 	KindBadRequest       Kind = "bad_request"
-	KindValidation       Kind = "validation"
 	KindUnauthorized     Kind = "unauthorized"
 	KindPermissionDenied Kind = "permission_denied"
 	KindNotFound         Kind = "not_found"
 	KindConflict         Kind = "conflict"
+	KindValidation       Kind = "validation"
 	KindUnprocessable    Kind = "unprocessable"
 	KindTooManyRequests  Kind = "too_many_requests"
 	KindInternal         Kind = "internal"
@@ -122,80 +96,69 @@ func (e *Error) WithDetails(d map[string]any) *Error {
 	return &out
 }
 
-// WithContext 将活跃 OTel trace id 写入错误，使其与 slog 的 `trace_id` 属性一并出现在响应体中。
-func (e *Error) WithContext(ctx context.Context) *Error {
-	if e == nil {
-		return nil
+func new_(k Kind, format string, args ...any) *Error {
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
 	}
-	out := *e
-	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
-		out.TraceID = sc.TraceID().String()
-	}
-	return &out
-}
-
-// new_ 是下方公开辅助函数使用的唯一构造函数。
-func new_(kind Kind, format string, args ...any) *Error {
 	return &Error{
-		Kind:    kind,
-		Status:  kind.Status(),
-		Message: fmt.Sprintf(format, args...),
+		Kind:    k,
+		Status:  k.Status(),
+		Message: msg,
 	}
 }
 
-// BadRequest 表示格式错误或不符合约定的请求（HTTP 400）。
+// BadRequest 表示客户端输入在语法上有效但语义上有误（HTTP 400）。
 func BadRequest(format string, args ...any) *Error { return new_(KindBadRequest, format, args...) }
 
-// Validation 表示一个或多个字段级校验失败（HTTP 400）。
-// 将 field/message map 作为 Details —— 客户端可在表单 UI 中展示。
-func Validation(fields map[string]string) *Error {
-	e := new_(KindValidation, "validation failed")
-	if len(fields) > 0 {
-		d := make(map[string]any, len(fields))
-		for k, v := range fields {
-			d[k] = v
-		}
-		e.Details = d
-	}
-	return e
+// Unauthorized 表示缺少认证或认证无效（HTTP 401）。
+func Unauthorized(format string, args ...any) *Error {
+	return new_(KindUnauthorized, format, args...)
 }
 
-// Unauthorized 表示缺失或无效凭证（HTTP 401）。
-func Unauthorized(format string, args ...any) *Error { return new_(KindUnauthorized, format, args...) }
-
-// PermissionDenied 表示已认证用户缺少所需授权（HTTP 403）。
+// PermissionDenied 表示认证主体无权执行此操作（HTTP 403）。
 func PermissionDenied(format string, args ...any) *Error {
 	return new_(KindPermissionDenied, format, args...)
 }
 
-// NotFound 表示指定资源不存在（HTTP 404）。
-//
-//	fxerrors.NotFound("user", "id=%d", id)
-//	fxerrors.NotFound("topic", "%s/%s", pubsub, topic)
+// NotFound 表示指定资源不存在（HTTP 404）。resource 形如 "user"、"team"。
 func NotFound(resource string, format string, args ...any) *Error {
-	msg := resource + " not found"
+	msg := fmt.Sprintf("%s not found", resource)
 	if format != "" {
-		msg += " (" + fmt.Sprintf(format, args...) + ")"
+		detail := format
+		if len(args) > 0 {
+			detail = fmt.Sprintf(format, args...)
+		}
+		msg = fmt.Sprintf("%s not found: %s", resource, detail)
 	}
-	e := new_(KindNotFound, "%s", msg)
-	e.Details = map[string]any{"resource": resource}
-	return e
+	return &Error{
+		Kind:    KindNotFound,
+		Status:  http.StatusNotFound,
+		Message: msg,
+		Details: map[string]any{"resource": resource},
+	}
 }
 
-// Conflict 表示唯一性或状态冲突（HTTP 409）。
+// Conflict 表示因状态冲突而失败，如唯一约束冲突（HTTP 409）。
 func Conflict(format string, args ...any) *Error { return new_(KindConflict, format, args...) }
 
-// Unprocessable 表示语义无效但已通过语法校验的输入（HTTP 422）。
+// Validation 表示字段级校验失败（HTTP 400）。
+//
+//	fxerrors.Validation("invalid payload").WithDetails(map[string]any{"fields": errs})
+func Validation(format string, args ...any) *Error { return new_(KindValidation, format, args...) }
+
+// Unprocessable 表示语义正确但业务规则拒绝（HTTP 422）。
 func Unprocessable(format string, args ...any) *Error {
 	return new_(KindUnprocessable, format, args...)
 }
 
-// TooManyRequests 表示限流（HTTP 429）。
+// TooManyRequests 表示超出限流配额（HTTP 429）。
 func TooManyRequests(format string, args ...any) *Error {
 	return new_(KindTooManyRequests, format, args...)
 }
 
-// Internal 表示意外的服务端故障（HTTP 500）。向上传递第三方错误时优先 [Wrap]。
+// Internal 表示未预期的系统内部错误（HTTP 500）。
+// 敏感信息应放入日志，Message 会在生产环境对外屏蔽。
 func Internal(format string, args ...any) *Error { return new_(KindInternal, format, args...) }
 
 // Unavailable 表示服务当前无法处理请求（HTTP 503）。
@@ -217,7 +180,7 @@ func Wrap(err error) *Error {
 	return &Error{
 		Kind:    KindInternal,
 		Status:  KindInternal.Status(),
-		Message: "internal error",
+		Message: err.Error(),
 		cause:   err,
 	}
 }

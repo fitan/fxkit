@@ -3,8 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
-	"time"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/config"
@@ -23,31 +24,32 @@ func buildOpenAPICmd(opts []fx.Option) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "openapi",
-		Short: "Print the live Huma OpenAPI spec (does not listen HTTP)",
-		Long: `Start the same Fx graph as serve, skip the HTTP listener, and print the
-Huma OpenAPI document to stdout (or --output).
+		Short: "Print the application OpenAPI specification to stdout or a file",
+		Long: `Starts the Fx graph without listening on HTTP, captures the Huma OpenAPI
+document, and encodes it as YAML or JSON.
 
-Default is OpenAPI 3.0.3 YAML so oapi-codegen can consume it. Use --spec 3.1
-for native Huma 3.1. Requires huma.Module in fxkit.Run.
+Supported --spec versions:
+  3.0  OpenAPI 3.0.3 (default; recommended for oapi-codegen and older generators)
+  3.1  OpenAPI 3.1.0 (native Huma / JSON Schema dialect)
 
-Logs go to stderr so the spec can be piped:
+Supported --format values:
+  yaml (default)
+  json
 
-  myapp openapi > openapi.yaml
-  myapp openapi --spec 3.1 --format json -o openapi.json
-  fxkit gen client --spec openapi.yaml --out ./internal/clients/users
-`,
+Merge static YAML (e.g. from an existing legacy swagger) using --base path.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ver, err := openapi.ParseSpecVersion(spec)
-			if err != nil {
-				return err
+			ver := openapi.Spec30
+			if strings.TrimSpace(spec) == "3.1" {
+				ver = openapi.Spec31
 			}
-			fmtVal, err := openapi.ParseFormat(format)
-			if err != nil {
-				return err
+			fmtVal := openapi.FormatYAML
+			if strings.EqualFold(strings.TrimSpace(format), "json") {
+				fmtVal = openapi.FormatJSON
 			}
 			var baseYAML []byte
-			if base != "" {
-				baseYAML, err = os.ReadFile(base)
+			if strings.TrimSpace(base) != "" {
+				var err error
+				baseYAML, err = os.ReadFile(strings.TrimSpace(base))
 				if err != nil {
 					return fmt.Errorf("openapi --base: %w", err)
 				}
@@ -93,8 +95,8 @@ func flagString(cmd *cobra.Command, name string) string {
 func collectOpenAPI(opts []fx.Option, cfg config.Options, in openapi.EncodeInput) ([]byte, error) {
 	var api huma.API
 	app := fx.New(append([]fx.Option{
-		fx.StartTimeout(60 * time.Second),
-		fx.StopTimeout(15 * time.Second),
+		fx.StartTimeout(defaultStartTimeout),
+		fx.StopTimeout(defaultStopTimeout),
 		fx.NopLogger,
 		fx.Supply(cfg),
 		fx.Supply(&server.Runtime{SkipListen: true}),
@@ -109,13 +111,17 @@ func collectOpenAPI(opts []fx.Option, cfg config.Options, in openapi.EncodeInput
 		return nil, fmt.Errorf("openapi: fx graph: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultStartTimeout)
 	defer cancel()
 	if err := app.Start(ctx); err != nil {
+		if api != nil {
+			slog.Warn("openapi: app.Start failed but huma.API is available; generating spec offline", "error", err)
+			return openapi.Encode(api, in)
+		}
 		return nil, fmt.Errorf("openapi: start: %w", err)
 	}
 	defer func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), defaultStopTimeout)
 		defer stopCancel()
 		_ = app.Stop(stopCtx)
 	}()

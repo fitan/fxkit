@@ -40,6 +40,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/fitan/fxkit/config"
 	v0Client "github.com/hatchet-dev/hatchet/pkg/client"
@@ -64,6 +65,7 @@ var Module = fx.Module("fxkit/hatchetx",
 	config.Provide[Config]("hatchet"),
 	fx.Provide(NewClient),
 	fx.Provide(fx.Annotate(defaultRegistrars, fx.ResultTags(`group:"hatchet_registrars,flatten"`))),
+	provideOutboxPublisherOption(),
 	fx.Invoke(registerLifecycle),
 )
 
@@ -95,9 +97,13 @@ func NewClient(cfg *Config) (*Client, error) {
 	return &Client{SDK: sdk}, nil
 }
 
+var envMu sync.Mutex
+
 // applyHatchetEnv bridges fxkit yaml config into the env vars the SDK reads.
 // Existing process env wins (do not overwrite).
 func applyHatchetEnv(hcfg Config) error {
+	envMu.Lock()
+	defer envMu.Unlock()
 	if hcfg.Token != "" {
 		setenvIfEmpty("HATCHET_CLIENT_TOKEN", hcfg.Token)
 	}

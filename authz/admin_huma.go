@@ -89,14 +89,22 @@ var (
 	}
 )
 
+// AdminPermission is the fallback Subject.Has key for /authz/* when Casbin is off.
+// Casbin-on authorization still uses Enforce(sub, path, method) and ignores this.
+const AdminPermission = "authz:admin"
+
 func adminHTTPRoutes() []HTTPRoute {
-	return HTTPRoutesFromOperations(
+	routes := HTTPRoutesFromOperations(
 		opListPermissions, opCreatePermission, opGetPermission, opUpdatePermission, opDeletePermission,
 		opListRoles, opCreateRole, opGetRole, opDeleteRole,
 		opListRolePermissions, opSetRolePermissions, opAddRolePermission, opRemoveRolePermission,
 		opListSubjectRoles, opSetSubjectRoles, opAddSubjectRole, opRemoveSubjectRole,
 		opListBindings, opListPolicies,
 	)
+	for i := range routes {
+		routes[i].Permission = AdminPermission
+	}
+	return routes
 }
 
 // Unique named types so Huma OpenAPI registry does not collide on Body schema names.

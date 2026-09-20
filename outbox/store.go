@@ -3,12 +3,12 @@ package outbox
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/fitan/fxkit/gormx"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Message is a single outbox entry to publish after commit.
@@ -61,13 +61,18 @@ func (s *Store) Enqueue(ctx context.Context, msg Message) error {
 }
 
 // enqueueIdempotent inserts a keyed row, or resets it only when the existing
-// row is failed. Portable across Postgres / SQLite / MySQL: GORM's OnConflict
-// WHERE is ignored by the MySQL dialect (ON DUPLICATE KEY UPDATE).
+// row is failed. Uses ON CONFLICT DO NOTHING so a unique violation does not
+// abort a PostgreSQL transaction (Create-then-Updates would).
 func enqueueIdempotent(db *gorm.DB, row OutboxEvent) error {
-	if err := db.Create(&row).Error; err == nil {
+	res := db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "idempotency_key"}},
+		DoNothing: true,
+	}).Create(&row)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected > 0 {
 		return nil
-	} else if !isUniqueViolation(err) {
-		return err
 	}
 	key := ""
 	if row.IdempotencyKey != nil {
@@ -113,15 +118,4 @@ func EnqueueTopicMsg[T any](ctx context.Context, in EnqueueTopicInput[T]) error 
 		Payload:        raw,
 		IdempotencyKey: in.IdempotencyKey,
 	})
-}
-
-func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return true
-	}
-	low := strings.ToLower(err.Error())
-	return strings.Contains(low, "unique") || strings.Contains(low, "duplicate")
 }

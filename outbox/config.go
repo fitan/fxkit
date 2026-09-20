@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Config 事务性 outbox relay（yaml: outbox）。需同时开 hatchet.enabled + outbox_publisher 才真正投递。
+// Config 事务性 outbox relay（yaml: outbox）。需有 [EventPublisher]（hatchet.outbox_publisher 或 [ProvidePublisher]）才真正投递。
 type Config struct {
 	// Enabled 启动 relay。默认 false。
 	Enabled bool `yaml:"enabled"`

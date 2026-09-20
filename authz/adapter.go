@@ -101,13 +101,13 @@ func (a *gormAdapter) RemovePolicy(_ string, ptype string, rule []string) error 
 
 func (a *gormAdapter) RemoveFilteredPolicy(_ string, ptype string, fieldIndex int, fieldValues ...string) error {
 	q := a.table().Where("ptype = ?", ptype)
-	values := padFields(fieldValues, 6)
 	cols := []string{"v0", "v1", "v2", "v3", "v4", "v5"}
-	for i, v := range values {
-		if i < fieldIndex || v == "" {
+	for i, v := range fieldValues {
+		colIdx := fieldIndex + i
+		if colIdx < 0 || colIdx >= len(cols) || v == "" {
 			continue
 		}
-		q = q.Where(cols[i]+" = ?", v)
+		q = q.Where(cols[colIdx]+" = ?", v)
 	}
 	return q.Delete(&casbinRule{}).Error
 }

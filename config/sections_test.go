@@ -30,6 +30,12 @@ func TestLoad_DefaultsMatchComponents(t *testing.T) {
 	if srv.Port != "8080" {
 		t.Fatalf("port=%q", srv.Port)
 	}
+	if srv.WriteTimeout != 120*time.Second {
+		t.Fatalf("write_timeout=%v", srv.WriteTimeout)
+	}
+	if len(srv.CORSAllowedHeaders) == 0 || srv.CORSAllowedHeaders[0] != "Content-Type" {
+		t.Fatalf("cors headers=%v", srv.CORSAllowedHeaders)
+	}
 	if len(srv.CORSAllowedOrigins) != 0 {
 		t.Fatalf("cors default must be empty, got %v", srv.CORSAllowedOrigins)
 	}

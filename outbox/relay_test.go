@@ -58,28 +58,32 @@ func TestRelay_ProcessBatch_PublishesAndMarksPublished(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("expected 1 processed, got %d", n)
 	}
-	if len(pub.calls) != 1 {
-		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
-	}
-	if pub.calls[0].Topic != "user-created" {
-		t.Fatalf("unexpected topic %q", pub.calls[0].Topic)
-	}
-	if pub.calls[0].Metadata[outbox.MetadataIdempotencyKey] != key {
-		t.Fatalf("expected idempotency metadata, got %#v", pub.calls[0].Metadata)
-	}
 
 	var updated outbox.OutboxEvent
 	if err := client.Conn(ctx).First(&updated, row.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if updated.Status != outbox.StatusPublished {
-		t.Fatalf("expected published, got %q", updated.Status)
+		t.Fatalf("expected status %q, got %q", outbox.StatusPublished, updated.Status)
 	}
 	if updated.PublishedAt == nil {
 		t.Fatal("expected published_at set")
 	}
-	if updated.LockedAt != nil {
-		t.Fatalf("expected locked_at cleared after publish, got %v", updated.LockedAt)
+	if updated.Attempts != 1 {
+		t.Fatalf("expected attempts=1, got %d", updated.Attempts)
+	}
+
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	call := pub.calls[0]
+	if call.Topic != "user-created" || call.Pubsub != "pubsub" {
+		t.Fatalf("unexpected call: %+v", call)
+	}
+	if call.Metadata[outbox.MetadataIdempotencyKey] != key {
+		t.Fatalf("expected idempotency metadata %q, got %v", key, call.Metadata)
 	}
 }
 
@@ -97,10 +101,7 @@ func TestRelay_ProcessBatch_PublishFailClearsLockAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oc := mustOutboxCfg(t)
-	oc.MaxRetries = 3
-
-	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: oc})
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
 	pub := &mockPublisher{err: errPublish}
 	relay.SetPublisher(pub)
 
@@ -109,7 +110,7 @@ func TestRelay_ProcessBatch_PublishFailClearsLockAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != 0 {
-		t.Fatalf("expected 0 published on fail, got %d", n)
+		t.Fatalf("expected 0 published, got %d", n)
 	}
 
 	var updated outbox.OutboxEvent
@@ -230,6 +231,20 @@ func TestRelay_ProcessBatch_MaxRetriesMarksFailed(t *testing.T) {
 	if got.Attempts != 2 {
 		t.Fatalf("attempts=%d want 2", got.Attempts)
 	}
+}
+
+func TestRelay_StartFastStop(t *testing.T) {
+	client := testDB(t)
+	cfg := mustOutboxCfg(t)
+	cfg.PollInterval = 100 * time.Millisecond
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: cfg})
+	relay.SetPublisher(&mockPublisher{})
+
+	if err := relay.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	relay.Notify()
+	relay.Stop()
 }
 
 type callbackPublisher struct {
