@@ -45,6 +45,10 @@ gen-client:
 	@test -f services/catalog/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
 	go run ../cmd/fxkit gen client --spec services/catalog/openapi.yaml --out services/storefront/internal/clients/catalog
 
+gen-mcp:
+	@test -f services/catalog/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
+	go run ../cmd/fxkit gen mcp --spec services/catalog/openapi.yaml --out cmd/catalog-mcp --name catalog-mcp --base-url http://127.0.0.1:8080
+
 gen-web:
 	@test -f services/catalog/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
 	@test -f services/storefront/openapi.yaml || (echo "run: make openapi SVC=storefront"; exit 1)

@@ -1,0 +1,1650 @@
+components:
+  schemas:
+    AddRolePermissionBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/AddRolePermissionBody.json
+          format: uri
+          readOnly: true
+          type: string
+        method:
+          minLength: 1
+          type: string
+        path:
+          minLength: 1
+          type: string
+      required:
+        - path
+        - method
+      type: object
+    AddSubjectRoleBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/AddSubjectRoleBody.json
+          format: uri
+          readOnly: true
+          type: string
+        role:
+          minLength: 1
+          type: string
+      required:
+        - role
+      type: object
+    ArticleDetail:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ArticleDetail.json
+          format: uri
+          readOnly: true
+          type: string
+        author:
+          type: string
+        body:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        status:
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - id
+        - title
+        - status
+        - createdAt
+        - updatedAt
+      type: object
+    ArticleFanout:
+      additionalProperties: false
+      properties:
+        ArticleID:
+          format: int64
+          type: integer
+        CreatedAt:
+          format: date-time
+          type: string
+        ID:
+          format: int64
+          type: integer
+        Title:
+          type: string
+      required:
+        - ID
+        - ArticleID
+        - Title
+        - CreatedAt
+      type: object
+    ArticleListRow:
+      additionalProperties: false
+      properties:
+        author:
+          type: string
+        id:
+          format: int64
+          type: integer
+        status:
+          type: string
+        title:
+          type: string
+      required:
+        - id
+        - title
+        - status
+      type: object
+    CommentRow:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/CommentRow.json
+          format: uri
+          readOnly: true
+          type: string
+        articleId:
+          format: int64
+          type: integer
+        author:
+          type: string
+        body:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        note:
+          type: string
+      required:
+        - id
+        - articleId
+        - body
+        - createdAt
+      type: object
+    CreateArticleReq:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/CreateArticleReq.json
+          format: uri
+          readOnly: true
+          type: string
+        body:
+          type: string
+        title:
+          type: string
+      required:
+        - title
+      type: object
+    CreateCommentReq:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/CreateCommentReq.json
+          format: uri
+          readOnly: true
+          type: string
+        articleId:
+          format: int64
+          type: integer
+        body:
+          type: string
+        note:
+          type: string
+      required:
+        - articleId
+        - body
+      type: object
+    CreateRoleBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/CreateRoleBody.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          type: string
+        display_name:
+          type: string
+        name:
+          description: 角色名，如 admin
+          minLength: 1
+          type: string
+      required:
+        - name
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          example: Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          nullable: true
+          type: array
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          example: https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          example: 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          example: Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          example: https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    FanoutBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/FanoutBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/ArticleFanout"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
+    HeartbeatOut:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/HeartbeatOut.json
+          format: uri
+          readOnly: true
+          type: string
+        lastTick:
+          format: date-time
+          type: string
+        ticks:
+          format: int64
+          type: integer
+      required:
+        - ticks
+        - lastTick
+      type: object
+    IncInBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/IncInBody.json
+          format: uri
+          readOnly: true
+          type: string
+        delta:
+          format: int64
+          type: integer
+        holdMs:
+          format: int64
+          type: integer
+      required:
+        - delta
+      type: object
+    IncOutput:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/IncOutput.json
+          format: uri
+          readOnly: true
+          type: string
+        actorInflight:
+          format: int32
+          type: integer
+        inflight:
+          format: int32
+          type: integer
+        value:
+          format: int64
+          type: integer
+      required:
+        - value
+        - inflight
+        - actorInflight
+      type: object
+    ListBindingsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListBindingsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/RoleBinding"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
+    ListPermissionsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListPermissionsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/PermissionView"
+          nullable: true
+          type: array
+        limit:
+          format: int64
+          type: integer
+        start:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+      required:
+        - items
+        - start
+        - limit
+      type: object
+    ListPoliciesBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListPoliciesBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/Policy"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
+    ListResultArticleListRow:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListResultArticleListRow.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/ArticleListRow"
+          nullable: true
+          type: array
+        limit:
+          format: int64
+          type: integer
+        nextCursor:
+          type: string
+        start:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+      required:
+        - items
+        - start
+        - limit
+      type: object
+    ListResultCommentRow:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListResultCommentRow.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/CommentRow"
+          nullable: true
+          type: array
+        limit:
+          format: int64
+          type: integer
+        nextCursor:
+          type: string
+        start:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+      required:
+        - items
+        - start
+        - limit
+      type: object
+    ListRolesBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListRolesBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/RoleRecord"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
+    PermissionBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/PermissionBody.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          type: string
+        method:
+          description: HTTP 方法，如 GET
+          minLength: 1
+          type: string
+        operation_id:
+          type: string
+        path:
+          description: Huma 路径，如 /users/{id}
+          minLength: 1
+          type: string
+        summary:
+          type: string
+        tags:
+          items:
+            type: string
+          nullable: true
+          type: array
+      required:
+        - method
+        - path
+      type: object
+    PermissionView:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/PermissionView.json
+          format: uri
+          readOnly: true
+          type: string
+        description:
+          type: string
+        id:
+          format: int64
+          minimum: 0
+          type: integer
+        method:
+          type: string
+        operation_id:
+          type: string
+        path:
+          type: string
+        pattern:
+          type: string
+        summary:
+          type: string
+        tags:
+          items:
+            type: string
+          nullable: true
+          type: array
+      required:
+        - id
+        - method
+        - path
+        - pattern
+        - operation_id
+        - summary
+        - description
+        - tags
+      type: object
+    Policy:
+      additionalProperties: false
+      properties:
+        Act:
+          type: string
+        Obj:
+          type: string
+        Sub:
+          type: string
+      required:
+        - Sub
+        - Obj
+        - Act
+      type: object
+    RoleBinding:
+      additionalProperties: false
+      properties:
+        Role:
+          type: string
+        User:
+          type: string
+      required:
+        - User
+        - Role
+      type: object
+    RolePermission:
+      additionalProperties: false
+      properties:
+        method:
+          type: string
+        path:
+          type: string
+      required:
+        - path
+        - method
+      type: object
+    RolePermissionsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/RolePermissionsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/RolePermission"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
+    RoleRecord:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/RoleRecord.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        description:
+          type: string
+        display_name:
+          type: string
+        name:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - name
+        - display_name
+        - description
+        - created_at
+        - updated_at
+      type: object
+    SetRolePermissionsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SetRolePermissionsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/RolePermission"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
+    SetSubjectRolesBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SetSubjectRolesBody.json
+          format: uri
+          readOnly: true
+          type: string
+        roles:
+          items:
+            type: string
+          nullable: true
+          type: array
+      required:
+        - roles
+      type: object
+    SubjectRolesBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SubjectRolesBody.json
+          format: uri
+          readOnly: true
+          type: string
+        roles:
+          items:
+            type: string
+          nullable: true
+          type: array
+      required:
+        - roles
+      type: object
+    UpdateArticleReq:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/UpdateArticleReq.json
+          format: uri
+          readOnly: true
+          type: string
+        body:
+          type: string
+        id:
+          type: string
+        title:
+          type: string
+      required:
+        - id
+        - title
+      type: object
+info:
+  title: catalog
+  version: 1.0.0
+openapi: 3.0.3
+paths:
+  /article-fanout:
+    get:
+      operationId: listArticleFanout
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FanoutBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Second Hatchet consumer of article-created (fan-out)
+      tags:
+        - Articles
+  /articles:
+    get:
+      operationId: listarticles
+      parameters:
+        - description: "Filter conditions (AND). Example: state=Running. OR group: or(a=1,b=2)"
+          explode: true
+          in: query
+          name: q
+          schema:
+            description: "Filter conditions (AND). Example: state=Running. OR group: or(a=1,b=2)"
+            items:
+              type: string
+            nullable: true
+            type: array
+        - description: Max rows per page
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 100
+            description: Max rows per page
+            format: int64
+            maximum: 1000
+            minimum: 1
+            type: integer
+        - description: Offset from 0 (ignored when cursor is set)
+          explode: false
+          in: query
+          name: start
+          schema:
+            default: 0
+            description: Offset from 0 (ignored when cursor is set)
+            format: int64
+            minimum: 0
+            type: integer
+        - description: Sort field, supports relation paths e.g. cluster.name
+          explode: false
+          in: query
+          name: sortBy
+          schema:
+            description: Sort field, supports relation paths e.g. cluster.name
+            type: string
+        - explode: false
+          in: query
+          name: sortDirection
+          schema:
+            default: asc
+            enum:
+              - asc
+              - desc
+            type: string
+        - description: Include total count (not with cursor)
+          explode: false
+          in: query
+          name: replyWithCount
+          schema:
+            default: false
+            description: Include total count (not with cursor)
+            type: boolean
+        - description: Opaque keyset cursor from previous nextCursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque keyset cursor from previous nextCursor
+            type: string
+        - description: Return nextCursor on first page
+          explode: false
+          in: query
+          name: useCursor
+          schema:
+            default: false
+            description: Return nextCursor on first page
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResultArticleListRow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List articles (q= / cursor)
+      tags:
+        - Articles
+    post:
+      operationId: createarticles
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateArticleReq"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleDetail"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create
+      tags:
+        - Articles
+  /articles/{id}:
+    delete:
+      operationId: deletearticles
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Delete
+      tags:
+        - Articles
+    get:
+      operationId: getarticles
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleDetail"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get
+      tags:
+        - Articles
+    put:
+      operationId: updatearticles
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateArticleReq"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleDetail"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update
+      tags:
+        - Articles
+  /authz/bindings:
+    get:
+      operationId: listAuthzBindings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBindingsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 列出全部用户→角色绑定
+      tags:
+        - Authz
+  /authz/permissions:
+    get:
+      description: 返回已登记的 path/method + Huma 元数据
+      operationId: listAuthzPermissions
+      parameters:
+        - description: 模糊搜索 method/path/summary 等
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: 模糊搜索 method/path/summary 等
+            type: string
+        - explode: false
+          in: query
+          name: start
+          schema:
+            default: 0
+            format: int64
+            minimum: 0
+            type: integer
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            format: int64
+            maximum: 1000
+            minimum: 1
+            type: integer
+        - explode: false
+          in: query
+          name: replyWithCount
+          schema:
+            default: true
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPermissionsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 列出 API 权限目录
+      tags:
+        - Authz
+    post:
+      operationId: createAuthzPermission
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PermissionBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionView"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 创建权限目录项
+      tags:
+        - Authz
+  /authz/permissions/{id}:
+    delete:
+      description: 仅删除目录元数据，不删除 Casbin 策略
+      operationId: deleteAuthzPermission
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 删除权限目录项
+      tags:
+        - Authz
+    get:
+      operationId: getAuthzPermission
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionView"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 获取权限目录项
+      tags:
+        - Authz
+    put:
+      operationId: updateAuthzPermission
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            minimum: 0
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PermissionBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionView"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 更新权限目录项
+      tags:
+        - Authz
+  /authz/policies:
+    get:
+      operationId: listAuthzPolicies
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPoliciesBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 列出全部 Casbin 策略
+      tags:
+        - Authz
+  /authz/roles:
+    get:
+      operationId: listAuthzRoles
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRolesBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 列出角色
+      tags:
+        - Authz
+    post:
+      operationId: createAuthzRole
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoleBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleRecord"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 创建/更新角色
+      tags:
+        - Authz
+  /authz/roles/{role}:
+    delete:
+      description: 删除角色元数据及其全部权限与用户绑定
+      operationId: deleteAuthzRole
+      parameters:
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 删除角色
+      tags:
+        - Authz
+    get:
+      operationId: getAuthzRole
+      parameters:
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleRecord"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 获取角色
+      tags:
+        - Authz
+  /authz/roles/{role}/permissions:
+    delete:
+      operationId: removeAuthzRolePermission
+      parameters:
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: path
+          schema:
+            minLength: 1
+            type: string
+        - explode: false
+          in: query
+          name: method
+          schema:
+            minLength: 1
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 移除角色权限
+      tags:
+        - Authz
+    get:
+      operationId: listAuthzRolePermissions
+      parameters:
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RolePermissionsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 列出角色权限
+      tags:
+        - Authz
+    post:
+      operationId: addAuthzRolePermission
+      parameters:
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddRolePermissionBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 为角色追加权限
+      tags:
+        - Authz
+    put:
+      description: 全量替换该角色的 path/method 授权
+      operationId: setAuthzRolePermissions
+      parameters:
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetRolePermissionsBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RolePermissionsBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 覆盖角色权限
+      tags:
+        - Authz
+  /authz/subjects/{id}/roles:
+    get:
+      operationId: listAuthzSubjectRoles
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRolesBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 列出用户角色
+      tags:
+        - Authz
+    post:
+      operationId: addAuthzSubjectRole
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSubjectRoleBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 为用户追加角色
+      tags:
+        - Authz
+    put:
+      operationId: setAuthzSubjectRoles
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSubjectRolesBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRolesBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 覆盖用户角色
+      tags:
+        - Authz
+  /authz/subjects/{id}/roles/{role}:
+    delete:
+      operationId: removeAuthzSubjectRole
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: role
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: 移除用户角色
+      tags:
+        - Authz
+  /comments:
+    get:
+      operationId: listComments
+      parameters:
+        - description: "Filter conditions (AND). Example: state=Running. OR group: or(a=1,b=2)"
+          explode: true
+          in: query
+          name: q
+          schema:
+            description: "Filter conditions (AND). Example: state=Running. OR group: or(a=1,b=2)"
+            items:
+              type: string
+            nullable: true
+            type: array
+        - description: Max rows per page
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 100
+            description: Max rows per page
+            format: int64
+            maximum: 1000
+            minimum: 1
+            type: integer
+        - description: Offset from 0 (ignored when cursor is set)
+          explode: false
+          in: query
+          name: start
+          schema:
+            default: 0
+            description: Offset from 0 (ignored when cursor is set)
+            format: int64
+            minimum: 0
+            type: integer
+        - description: Sort field, supports relation paths e.g. cluster.name
+          explode: false
+          in: query
+          name: sortBy
+          schema:
+            description: Sort field, supports relation paths e.g. cluster.name
+            type: string
+        - explode: false
+          in: query
+          name: sortDirection
+          schema:
+            default: asc
+            enum:
+              - asc
+              - desc
+            type: string
+        - description: Include total count (not with cursor)
+          explode: false
+          in: query
+          name: replyWithCount
+          schema:
+            default: false
+            description: Include total count (not with cursor)
+            type: boolean
+        - description: Opaque keyset cursor from previous nextCursor
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque keyset cursor from previous nextCursor
+            type: string
+        - description: Return nextCursor on first page
+          explode: false
+          in: query
+          name: useCursor
+          schema:
+            default: false
+            description: Return nextCursor on first page
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResultCommentRow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List comments (q= / cursor / JOIN article.title)
+      tags:
+        - Comments
+    post:
+      operationId: createComment
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommentReq"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentRow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create a comment
+      tags:
+        - Comments
+  /comments/{id}:
+    delete:
+      operationId: deleteComment
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Soft-delete a comment
+      tags:
+        - Comments
+  /counters/{id}:
+    get:
+      operationId: getCounter
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncOutput"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Read actor-backed counter (DB, no Hatchet call)
+      tags:
+        - Platform
+    post:
+      operationId: incCounter
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncInBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncOutput"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Increment via hatchetx.NewActor
+      tags:
+        - Platform
+  /heartbeat:
+    get:
+      operationId: getHeartbeat
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeartbeatOut"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Last hatchetx reminder tick
+      tags:
+        - Platform
+  /me:
+    get:
+      operationId: getMe
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Current authz subject
+      tags:
+        - Platform
+  /public/ping:
+    get:
+      operationId: publicPing
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Anonymous ping (authz.public)
+      tags:
+        - Platform
