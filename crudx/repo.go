@@ -107,6 +107,32 @@ func (r *Repo[T]) GetByID(ctx context.Context, id string) (*T, error) {
 	return FirstByID[T](ctx, r.DB(ctx), id)
 }
 
+// ListTo runs ZStack-style list against T and maps each entity to row DTO type R.
+// Leverages Go 1.27+ generic methods on types.
+func (r *Repo[T]) ListTo[R any](ctx context.Context, params ListParams, toRow func(T) R, opts ...ListOpt) (ListResult[R], error) {
+	var opt ListOpt
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	in := ListInput[T, R]{
+		DB:     r.DB(ctx),
+		Spec:   r.spec,
+		Params: params,
+		Select: opt.Select,
+		ToRow:  toRow,
+	}
+	if len(opt.Preload) > 0 {
+		in.Preload = Preload(opt.Preload...)
+	}
+	return List(ctx, in)
+}
+
+// GetByIDTo loads one row by primary key and maps it to target type R.
+// Leverages Go 1.27+ generic methods on types.
+func (r *Repo[T]) GetByIDTo[R any](ctx context.Context, id string, toRow func(T) R) (R, error) {
+	return GetByID[T, R](ctx, r.DB(ctx), id, toRow)
+}
+
 // List runs ZStack-style list against T and returns model rows.
 func (r *Repo[T]) List(ctx context.Context, params ListParams, opts ...ListOpt) (ListResult[T], error) {
 	var opt ListOpt

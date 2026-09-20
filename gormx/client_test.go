@@ -74,3 +74,28 @@ func TestAfterCommit_NestedSharesOuterHooks(t *testing.T) {
 		t.Fatalf("order=%v", order)
 	}
 }
+
+func TestWithTxResult(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewTestClient(db)
+	ctx := context.Background()
+
+	// 成功提交并返回泛型值
+	val, err := client.WithTxResult(ctx, func(txCtx context.Context) (int, error) {
+		return 42, nil
+	})
+	if err != nil || val != 42 {
+		t.Fatalf("expected 42, got %d (err: %v)", val, err)
+	}
+
+	// 失败回滚并返回错误与零值
+	val, err = client.WithTxResult(ctx, func(txCtx context.Context) (int, error) {
+		return 100, errors.New("tx failure")
+	})
+	if err == nil || val != 0 {
+		t.Fatalf("expected error and zero value, got %d %v", val, err)
+	}
+}

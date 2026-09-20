@@ -119,3 +119,22 @@ func ProvideLocker(disc *Config) Locker {
 	}
 	return l
 }
+
+// WithLockResult 快捷在分布式锁临界区执行 fn 并返回计算结果 R。
+// 利用 Go 1.27+ 泛型函数/方法，免除在外部定义临时变量。
+func WithLockResult[R any](l Locker, ctx context.Context, key string, fn func(ctx context.Context) (R, error), opts ...LockOption) (R, error) {
+	var zero R
+	var res R
+	err := l.WithLock(ctx, key, func(ctx context.Context) error {
+		val, err := fn(ctx)
+		if err != nil {
+			return err
+		}
+		res = val
+		return nil
+	}, opts...)
+	if err != nil {
+		return zero, err
+	}
+	return res, nil
+}

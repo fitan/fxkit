@@ -120,3 +120,18 @@ func (c *Client) Transaction(ctx context.Context, fn func(ctx context.Context) e
 	hooks.run()
 	return nil
 }
+
+// WithTxResult 在事务中运行 fn 并直接返回结果 R。
+// 利用 Go 1.27+ 泛型方法能力，避免外部在闭包外声明临时变量。
+func (c *Client) WithTxResult[R any](ctx context.Context, fn func(txCtx context.Context) (R, error)) (R, error) {
+	var result R
+	err := c.Transaction(ctx, func(txCtx context.Context) error {
+		res, err := fn(txCtx)
+		if err != nil {
+			return err
+		}
+		result = res
+		return nil
+	})
+	return result, err
+}

@@ -2,6 +2,7 @@ package consulx_test
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -320,5 +321,24 @@ func TestProvideLocker_DisabledFallback(t *testing.T) {
 	err = locker.WithLock(ctx, "any", func(c context.Context) error { return nil })
 	if err != consulx.ErrConsulDisabled {
 		t.Fatalf("expected ErrConsulDisabled on WithLock, got: %v", err)
+	}
+}
+
+func TestWithLockResult(t *testing.T) {
+	mem := consulx.NewMemoryLocker()
+	ctx := context.Background()
+
+	res, err := consulx.WithLockResult(mem, ctx, "calc-key", func(c context.Context) (int, error) {
+		return 999, nil
+	})
+	if err != nil || res != 999 {
+		t.Fatalf("expected 999, got %d %v", res, err)
+	}
+
+	res, err = consulx.WithLockResult(mem, ctx, "calc-key-err", func(c context.Context) (int, error) {
+		return 0, errors.New("computation failed")
+	})
+	if err == nil || res != 0 {
+		t.Fatalf("expected error and 0, got %d %v", res, err)
 	}
 }

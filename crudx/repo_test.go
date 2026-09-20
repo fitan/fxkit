@@ -2,6 +2,7 @@ package crudx_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -117,5 +118,43 @@ func TestRepoUpdateMissing(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected not found")
+	}
+}
+
+type demoUserDTO struct {
+	ID    int64
+	Name  string
+	Email string
+}
+
+func TestRepo_GenericMethods_ListTo_GetByIDTo(t *testing.T) {
+	repo := newDemoRepo(t)
+	ctx := context.Background()
+
+	u := &demoUser{Name: "bob", Email: "bob@example.com"}
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	// 验证 Repo.GetByIDTo[demoUserDTO]
+	dto, err := repo.GetByIDTo(ctx, fmt.Sprintf("%d", u.ID), func(row demoUser) demoUserDTO {
+		return demoUserDTO{ID: row.ID, Name: row.Name, Email: row.Email}
+	})
+	if err != nil {
+		t.Fatalf("GetByIDTo failed: %v", err)
+	}
+	if dto.Name != "bob" || dto.Email != "bob@example.com" {
+		t.Fatalf("unexpected dto: %+v", dto)
+	}
+
+	// 验证 Repo.ListTo[demoUserDTO]
+	res, err := repo.ListTo(ctx, crudx.ListParams{Limit: 10}, func(row demoUser) demoUserDTO {
+		return demoUserDTO{ID: row.ID, Name: row.Name, Email: row.Email}
+	})
+	if err != nil {
+		t.Fatalf("ListTo failed: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Name != "bob" {
+		t.Fatalf("unexpected list items: %+v", res.Items)
 	}
 }
