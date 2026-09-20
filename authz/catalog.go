@@ -228,7 +228,7 @@ func (e *Enforcer) CreateAPIPermission(ctx context.Context, in CreateAPIPermissi
 	if err == nil {
 		return nil, fxerrors.Conflict("permission already exists (method=%s path=%s)", row.Method, row.Path)
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	if err := e.db.Create(&row).Error; err != nil {
@@ -265,7 +265,7 @@ func (e *Enforcer) UpdateAPIPermission(ctx context.Context, in UpdateAPIPermissi
 	if err == nil {
 		return nil, fxerrors.Conflict("permission already exists (method=%s path=%s)", row.Method, row.Path)
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	existing.Method = row.Method

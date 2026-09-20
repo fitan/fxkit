@@ -24,7 +24,7 @@ func TestClaim_SingleBatchClaimsAll(t *testing.T) {
 		row := outbox.OutboxEvent{
 			Pubsub:  "pubsub",
 			Topic:   "user-created",
-			Payload: []byte(fmt.Sprintf(`{"i":%d}`, i)),
+			Payload: fmt.Appendf(nil, `{"i":%d}`, i),
 			Status:  outbox.StatusPending,
 		}
 		if err := client.Conn(ctx).Create(&row).Error; err != nil {

@@ -142,10 +142,21 @@ func NotFound(resource string, format string, args ...any) *Error {
 // Conflict 表示因状态冲突而失败，如唯一约束冲突（HTTP 409）。
 func Conflict(format string, args ...any) *Error { return new_(KindConflict, format, args...) }
 
-// Validation 表示字段级校验失败（HTTP 400）。
+// Validation 表示一个或多个字段级校验失败（HTTP 400）。
+// 将 field/message map 作为 Details —— 客户端可在表单 UI 中展示。
 //
-//	fxerrors.Validation("invalid payload").WithDetails(map[string]any{"fields": errs})
-func Validation(format string, args ...any) *Error { return new_(KindValidation, format, args...) }
+//	fxerrors.Validation(map[string]string{"email": "invalid format"})
+func Validation(fields map[string]string) *Error {
+	e := new_(KindValidation, "validation failed")
+	if len(fields) > 0 {
+		d := make(map[string]any, len(fields))
+		for k, v := range fields {
+			d[k] = v
+		}
+		e.Details = d
+	}
+	return e
+}
 
 // Unprocessable 表示语义正确但业务规则拒绝（HTTP 422）。
 func Unprocessable(format string, args ...any) *Error {

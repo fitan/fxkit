@@ -35,7 +35,7 @@ type colorHandler struct {
 	attrs  []slog.Attr
 	groups []string
 	color  bool
-	mu     sync.Mutex
+	mu     *sync.Mutex
 }
 
 // NewConsoleHandler 返回在 TTY 上对 ERROR/WARN 行着色的 slog handler。
@@ -47,7 +47,7 @@ func NewConsoleHandler(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
 	if f, ok := w.(*os.File); ok {
 		color = isatty.IsTerminal(f.Fd())
 	}
-	return &colorHandler{w: w, opts: opts, color: color}
+	return &colorHandler{w: w, opts: opts, color: color, mu: &sync.Mutex{}}
 }
 
 func (h *colorHandler) Enabled(ctx context.Context, level slog.Level) bool {

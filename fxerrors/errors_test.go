@@ -93,3 +93,13 @@ func TestWriteErrorPreservesNotFound(t *testing.T) {
 		t.Fatalf("body=%s", rec.Body.String())
 	}
 }
+
+func TestValidation(t *testing.T) {
+	err := fxerrors.Validation(map[string]string{"email": "invalid"})
+	if err.Status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", err.Status)
+	}
+	if err.Details["email"] != "invalid" {
+		t.Fatalf("expected email=invalid in details, got %v", err.Details)
+	}
+}
