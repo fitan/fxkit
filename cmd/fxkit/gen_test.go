@@ -100,6 +100,7 @@ func TestRenderResource_listEngine(t *testing.T) {
 		`Select("title", "body", "author_id")`,
 		"crudx.ListResult[ArticleListRow]",
 		`gorm:"size:255;not null;index"`,
+		"s.client.WithTxResult",
 	}
 	for _, s := range mustContain {
 		if !bytes.Contains(src, []byte(s)) {
@@ -151,6 +152,7 @@ func TestGenerateClient_scaffold(t *testing.T) {
 	for _, want := range []string{
 		"package users",
 		"NewFromFactory",
+		"ProvideClient",
 		"TransportClient",
 		"*ClientWithResponses",
 	} {

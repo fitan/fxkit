@@ -146,24 +146,26 @@ func (s *Service) Create(ctx context.Context, req Create{{.TypeName}}Req) ({{.Ty
 }
 
 func (s *Service) Update(ctx context.Context, req Update{{.TypeName}}Req) ({{.TypeName}}Detail, error) {
-	existing, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return {{.TypeName}}Detail{}, err
-	}
-	next := *existing
+	return s.client.WithTxResult(ctx, func(txCtx context.Context) ({{.TypeName}}Detail, error) {
+		existing, err := crudx.FirstByID[{{.TypeName}}](txCtx, s.client.Conn(txCtx), req.ID)
+		if err != nil {
+			return {{.TypeName}}Detail{}, err
+		}
+		next := *existing
 {{- range .Fields}}
-	next.{{.Name}} = req.{{.Name}}
+		next.{{.Name}} = req.{{.Name}}
 {{- end}}
 {{- if .Fields}}
-	if err := s.client.Conn(ctx).Select({{range $i, $f := .Fields}}{{if $i}}, {{end}}"{{$f.Column}}"{{end}}).Updates(&next).Error; err != nil {
-		return {{.TypeName}}Detail{}, crudx.MapDBError(err)
-	}
+		if err := s.client.Conn(txCtx).Select({{range $i, $f := .Fields}}{{if $i}}, {{end}}"{{$f.Column}}"{{end}}).Updates(&next).Error; err != nil {
+			return {{.TypeName}}Detail{}, crudx.MapDBError(err)
+		}
 {{- end}}
-	out, err := crudx.FirstByID[{{.TypeName}}](ctx, s.client.Conn(ctx), req.ID)
-	if err != nil {
-		return {{.TypeName}}Detail{}, err
-	}
-	return to{{.TypeName}}Detail(*out), nil
+		out, err := crudx.FirstByID[{{.TypeName}}](txCtx, s.client.Conn(txCtx), req.ID)
+		if err != nil {
+			return {{.TypeName}}Detail{}, err
+		}
+		return to{{.TypeName}}Detail(*out), nil
+	})
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {

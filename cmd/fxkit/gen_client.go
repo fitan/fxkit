@@ -154,7 +154,18 @@ func NewFromFactory(f *reqx.Factory, in reqx.ClientInput) (*ClientWithResponses,
 	}
 	return NewClientWithResponses(server, WithHTTPClient(httpClient))
 }
-`, pkg, pkg)
+
+// ProvideClient returns an fx constructor function that builds and injects
+// *ClientWithResponses through [reqx.Factory] and the given [reqx.ClientInput].
+//
+// Usage:
+//   fx.Provide(%s.ProvideClient(reqx.ClientInput{Name: "%s"}))
+func ProvideClient(in reqx.ClientInput) any {
+	return func(f *reqx.Factory) (*ClientWithResponses, error) {
+		return NewFromFactory(f, in)
+	}
+}
+`, pkg, pkg, pkg, pkg)
 	formatted, err := format.Source([]byte(src))
 	if err != nil {
 		return []byte(src), fmt.Errorf("gofmt reqx.go: %w", err)
