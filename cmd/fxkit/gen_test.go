@@ -181,3 +181,43 @@ func TestValidateGoPackageName(t *testing.T) {
 		t.Fatal("leading digit")
 	}
 }
+
+func TestGenerateMCP_scaffold(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	spec := []byte("openapi: 3.0.3\ninfo:\n  title: Catalog\n  version: 1.0.0\npaths: {}\n")
+	specPath := filepath.Join(dir, "spec.yaml")
+	if err := os.WriteFile(specPath, spec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "catalog-mcp")
+	if err := generateMCP(mcpGenInput{
+		SpecPath: specPath,
+		OutDir:   out,
+		Name:     "catalog-mcp",
+		BaseURL:  "http://127.0.0.1:8080",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"openapi.yaml", "main.go", "claude_desktop_config.json", "README.md"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
+	}
+
+	mainSrc, err := os.ReadFile(filepath.Join(out, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"mcpx.NewServer",
+		"mcpx.ParseOpenAPI",
+		"srv.ServeStdio",
+		"srv.HTTPHandler()",
+	} {
+		if !bytes.Contains(mainSrc, []byte(want)) {
+			t.Errorf("main.go missing %q\n%s", want, mainSrc)
+		}
+	}
+}

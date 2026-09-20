@@ -20,6 +20,7 @@ func genCmd() *cobra.Command {
 	}
 	cmd.AddCommand(genResourceCmd())
 	cmd.AddCommand(genClientCmd())
+	cmd.AddCommand(genMCPCmd())
 	return cmd
 }
 
