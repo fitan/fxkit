@@ -68,22 +68,34 @@ func (h *colorHandler) Handle(ctx context.Context, r slog.Record) error {
 			line = append(append([]byte(ansiYellow), line...), ansiReset...)
 		}
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	if h.mu != nil {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	_, err := h.w.Write(line)
 	return err
 }
 
 func (h *colorHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	next := *h
-	next.attrs = append(append([]slog.Attr{}, h.attrs...), attrs...)
-	return &next
+	return &colorHandler{
+		w:      h.w,
+		opts:   h.opts,
+		attrs:  append(append([]slog.Attr{}, h.attrs...), attrs...),
+		groups: h.groups,
+		color:  h.color,
+		mu:     h.mu,
+	}
 }
 
 func (h *colorHandler) WithGroup(name string) slog.Handler {
-	next := *h
-	next.groups = append(append([]string{}, h.groups...), name)
-	return &next
+	return &colorHandler{
+		w:      h.w,
+		opts:   h.opts,
+		attrs:  h.attrs,
+		groups: append(append([]string{}, h.groups...), name),
+		color:  h.color,
+		mu:     h.mu,
+	}
 }
 
 func (h *colorHandler) handler() slog.Handler {
