@@ -352,6 +352,7 @@ func registerServiceWithMeta(
 // discovery.consul_address 为空时为空操作；discovery.register 控制是否自注册。
 var Module = fx.Module("fxkit/consulx",
 	config.Provide[Config]("discovery"),
+	fx.Provide(ProvideLocker),
 	fx.Invoke(registerSelfLifecycle),
 	fx.Invoke(registerStartupMeta),
 )

@@ -796,6 +796,30 @@ discovery:
 - 配置错误（缺 `consul_address`、隐式 loopback advertise 等）会阻断启动；Consul 不可达只告警
 - ACL：`CONSUL_HTTP_TOKEN`
 
+### 分布式锁：Locker 抽象层
+
+`consulx.Module` 自动注入 `consulx.Locker` 接口。基于 Consul Session（心跳自动续期与超时释放）+ KV 排他互斥实现：
+
+```go
+type OrderService struct {
+	locker consulx.Locker
+}
+
+func (s *OrderService) Process(ctx context.Context, orderID string) error {
+	// 快捷闭包：获取锁 -> 执行业务 -> 完毕或 panic 时自动释放
+	return s.locker.WithLock(ctx, "orders/"+orderID, func(ctx context.Context) error {
+		// 临界区业务代码
+		return nil
+	}, consulx.WithTTL(15*time.Second))
+}
+```
+
+能力：
+- `Lock(ctx)`：阻塞等待并获取锁（支持基于 Consul Blocking Query 的快速唤醒）
+- `TryLock(ctx)`：非阻塞尝试获取，若已被占用立即返回 `consulx.ErrLockHeld`
+- `WithLock`：闭包式安全持有，保证自动释放
+- `NewMemoryLocker()`：单机/单测内存锁实现，脱离 Consul 亦可测试互斥语义
+
 ### 出站 HTTP：reqx
 
 `reqx` 封装 `imroc/req`，已包含在 `fxkit.Default()`：填 Consul 服务名即可 watch **healthy** 实例（从 `Service.Address` / `Node.Address` 读 IP 或域名），相对路径发请求，失败换节点重试，并经 `otelhttp` 传播 trace。
