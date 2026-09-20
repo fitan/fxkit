@@ -281,3 +281,71 @@ func TestInbox_Once(t *testing.T) {
 		t.Fatalf("expected empty-key always run, got runs=%d", runs)
 	}
 }
+
+type demoPayload struct {
+	UserID string `json:"user_id"`
+	Amount int    `json:"amount"`
+}
+
+func TestEnqueueJSON(t *testing.T) {
+	client := testDB(t)
+	store := outbox.NewStore(client)
+	ctx := context.Background()
+
+	err := store.EnqueueJSON(ctx, outbox.JSONMessage[demoPayload]{
+		Topic:   "user-recharge",
+		Payload: demoPayload{UserID: "1001", Amount: 50},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var row outbox.OutboxEvent
+	if err := client.Conn(ctx).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if string(row.Payload) != `{"user_id":"1001","amount":50}` {
+		t.Fatalf("unexpected payload: %s", string(row.Payload))
+	}
+}
+
+func TestInbox_OnceResult(t *testing.T) {
+	client := testDB(t)
+	inbox := outbox.NewInbox(client)
+	ctx := context.Background()
+	if err := inbox.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	callCount := 0
+	out1, err := inbox.OnceResult(ctx, outbox.OnceResultInput[int]{
+		Key:   "payment-order-1",
+		Topic: "payments",
+		Fn: func(c context.Context) (int, error) {
+			callCount++
+			return 888, nil
+		},
+	})
+	if err != nil || !out1.Processed || out1.Result != 888 {
+		t.Fatalf("expected first execution to succeed, got %+v, %v", out1, err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected 1 call, got %d", callCount)
+	}
+
+	// 第二次执行相同 Key，幂等跳过，Processed 应当为 false
+	out2, err := inbox.OnceResult(ctx, outbox.OnceResultInput[int]{
+		Key:   "payment-order-1",
+		Topic: "payments",
+		Fn: func(c context.Context) (int, error) {
+			callCount++
+			return 999, nil
+		},
+	})
+	if err != nil || out2.Processed || out2.Result != 0 {
+		t.Fatalf("expected duplicate execution to be skipped, got %+v, %v", out2, err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected callCount to remain 1, got %d", callCount)
+	}
+}

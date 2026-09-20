@@ -53,6 +53,10 @@ page, err := crudx.List(ctx, crudx.ListInput[User, UserRow]{
 
 HTTP 入参嵌入 `fxhuma.ListQueryInput`，再 `ListParamsFromInput`。Huma 级中间件：`fxhuma.ProvideMiddleware(...)`（与 `server.ProvideMiddleware` 不同层）。
 
+### Go 1.27+ 泛型方法（Fluent API 与 Repo 增强）
+- **`ListResult[T].Map[R](fn)`**：直接在分页结果信封上进行类型投影，保留 `Total`、`Start`、`Limit`、`NextCursor` 分页元数据。
+- **`Repo[T].ListTo[R]` / `Repo[T].GetByIDTo[R]` / `Repo[T].FirstTo[R]`**：面向对象式领域仓储查询，一步完成过滤分页并投影到目标 DTO。
+
 ### 单个 list operation 示例
 
 ```go

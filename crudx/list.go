@@ -18,6 +18,22 @@ type ListResult[T any] struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
+// Map transforms ListResult[T] into ListResult[R] using fn, preserving pagination metadata.
+// Leverages Go 1.27+ generic methods on types.
+func (lr ListResult[T]) Map[R any](fn func(T) R) ListResult[R] {
+	items := make([]R, len(lr.Items))
+	for i, item := range lr.Items {
+		items[i] = fn(item)
+	}
+	return ListResult[R]{
+		Items:      items,
+		Total:      lr.Total,
+		Start:      lr.Start,
+		Limit:      lr.Limit,
+		NextCursor: lr.NextCursor,
+	}
+}
+
 // ListInput drives the generic [List] helper for GORM model M into rows of type Row.
 //
 // DB must already be scoped to the model/table, e.g.:

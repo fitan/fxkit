@@ -227,6 +227,17 @@ func (r *Repo[T]) First(ctx context.Context, in WhereInput) (*T, error) {
 	return &entity, nil
 }
 
+// FirstTo loads the first row matching in.Query and maps it to target type R.
+// Leverages Go 1.27+ generic methods on types.
+func (r *Repo[T]) FirstTo[R any](ctx context.Context, in WhereInput, toRow func(T) R) (R, error) {
+	var zero R
+	entity, err := r.First(ctx, in)
+	if err != nil {
+		return zero, err
+	}
+	return toRow(*entity), nil
+}
+
 // FirstWhere loads the first row matching query (e.g. "email = ?", email).
 // Prefer [First] with Detail for clearer NotFound messages.
 func (r *Repo[T]) FirstWhere(ctx context.Context, query string, args ...any) (*T, error) {

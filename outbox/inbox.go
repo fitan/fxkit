@@ -85,3 +85,66 @@ func (in *Inbox) Once(ctx context.Context, inp OnceInput) error {
 		return inp.Fn(txCtx)
 	})
 }
+
+// OnceResultInput is the parameter struct for [Inbox.OnceResult].
+type OnceResultInput[R any] struct {
+	Key   string
+	Topic string
+	Fn    func(context.Context) (R, error)
+}
+
+// OnceOutcome records the execution result and whether it was processed or deduplicated.
+type OnceOutcome[R any] struct {
+	Result    R
+	Processed bool // true if fn was executed; false if skipped due to idempotency key duplication
+}
+
+// OnceResult runs fn at most once for key and returns the generic computation result.
+// Leverages Go 1.27+ generic methods on types to eliminate external variable allocations.
+func (in *Inbox) OnceResult[R any](ctx context.Context, inp OnceResultInput[R]) (OnceOutcome[R], error) {
+	var zero OnceOutcome[R]
+	if in == nil || in.client == nil {
+		return zero, fmt.Errorf("outbox: nil inbox")
+	}
+	key := strings.TrimSpace(inp.Key)
+	if key == "" {
+		if inp.Fn == nil {
+			return zero, nil
+		}
+		res, err := inp.Fn(ctx)
+		if err != nil {
+			return zero, err
+		}
+		return OnceOutcome[R]{Result: res, Processed: true}, nil
+	}
+	if inp.Fn == nil {
+		return zero, fmt.Errorf("outbox: inbox OnceResult requires Fn")
+	}
+
+	var outcome OnceOutcome[R]
+	err := in.client.Transaction(ctx, func(txCtx context.Context) error {
+		row := InboxEvent{
+			ID:          key,
+			Topic:       inp.Topic,
+			ProcessedAt: time.Now().UTC(),
+		}
+		res := in.client.Conn(txCtx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			outcome = OnceOutcome[R]{Processed: false}
+			return nil
+		}
+		val, err := inp.Fn(txCtx)
+		if err != nil {
+			return err
+		}
+		outcome = OnceOutcome[R]{Result: val, Processed: true}
+		return nil
+	})
+	if err != nil {
+		return zero, err
+	}
+	return outcome, nil
+}

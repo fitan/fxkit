@@ -21,6 +21,14 @@ type Message struct {
 	IdempotencyKey string
 }
 
+// JSONMessage is a type-safe generic message container.
+type JSONMessage[T any] struct {
+	Pubsub         string
+	Topic          string
+	Payload        T
+	IdempotencyKey string
+}
+
 // Store writes outbox rows using [gormx.Client.Conn], joining an outer transaction when present.
 type Store struct {
 	client *gormx.Client
@@ -58,6 +66,21 @@ func (s *Store) Enqueue(ctx context.Context, msg Message) error {
 		return enqueueIdempotent(s.client.Conn(ctx), row)
 	}
 	return s.client.Conn(ctx).Create(&row).Error
+}
+
+// EnqueueJSON marshals payload of type T to JSON and inserts the pending outbox row.
+// Leverages Go 1.27+ generic methods on types to eliminate manual json.Marshal boilerplates.
+func (s *Store) EnqueueJSON[T any](ctx context.Context, msg JSONMessage[T]) error {
+	b, err := json.Marshal(msg.Payload)
+	if err != nil {
+		return fmt.Errorf("outbox: marshal payload: %w", err)
+	}
+	return s.Enqueue(ctx, Message{
+		Pubsub:         msg.Pubsub,
+		Topic:          msg.Topic,
+		Payload:        b,
+		IdempotencyKey: msg.IdempotencyKey,
+	})
 }
 
 // enqueueIdempotent inserts a keyed row, or resets it only when the existing

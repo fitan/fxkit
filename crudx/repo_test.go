@@ -157,4 +157,23 @@ func TestRepo_GenericMethods_ListTo_GetByIDTo(t *testing.T) {
 	if len(res.Items) != 1 || res.Items[0].Name != "bob" {
 		t.Fatalf("unexpected list items: %+v", res.Items)
 	}
+
+	// 验证 Repo.FirstTo[demoUserDTO]
+	firstDTO, err := repo.FirstTo(ctx, crudx.WhereInput{
+		Query: "name = ?",
+		Args:  []any{"bob"},
+	}, func(row demoUser) demoUserDTO {
+		return demoUserDTO{ID: row.ID, Name: row.Name, Email: row.Email}
+	})
+	if err != nil || firstDTO.Name != "bob" {
+		t.Fatalf("FirstTo failed: %v, %+v", err, firstDTO)
+	}
+
+	// 验证 ListResult.Map[string] 链式映射
+	names := res.Map(func(dto demoUserDTO) string {
+		return dto.Name
+	})
+	if len(names.Items) != 1 || names.Items[0] != "bob" {
+		t.Fatalf("ListResult.Map failed: %+v", names)
+	}
 }
