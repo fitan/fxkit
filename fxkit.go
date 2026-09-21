@@ -29,6 +29,7 @@ import (
 	"github.com/fitan/fxkit/otelx"
 	"github.com/fitan/fxkit/outbox"
 	"github.com/fitan/fxkit/reqx"
+	"github.com/fitan/fxkit/mcpx"
 	"github.com/fitan/fxkit/server"
 	"go.uber.org/fx"
 )
@@ -54,6 +55,7 @@ func Default() fx.Option {
 		authz.Module,
 		consulx.Module,
 		reqx.Module,
+		mcpx.Module,
 		cli.Module,
 	)
 }

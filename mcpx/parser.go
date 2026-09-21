@@ -10,12 +10,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var invalidIdentRegexp = regexp.MustCompile(`[^a-zA-Z0-9_]+`)
+var invalidIdentRegexp = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
-// ParseOpenAPI 从 OpenAPI 3.0 / 3.1 的 YAML 或 JSON 文本中提取 Tool 定义。
+// ParseOpenAPI 从 OpenAPI 3.0 或 3.1 YAML/JSON 字节流中提取所有 operations 并转为 []Tool。
 func ParseOpenAPI(data []byte) ([]Tool, error) {
 	var root map[string]any
-	// 优先尝试 JSON，失败后尝试 YAML
 	if err := json.Unmarshal(data, &root); err != nil {
 		if errYAML := yaml.Unmarshal(data, &root); errYAML != nil {
 			return nil, fmt.Errorf("mcpx: parse openapi failed: %w", err)
@@ -56,7 +55,7 @@ func ParseOpenAPI(data []byte) ([]Tool, error) {
 				continue
 			}
 
-			tool, err := extractOperation(strings.ToUpper(method), pathStr, op, pathLevelParams)
+			tool, err := extractOperation(root, strings.ToUpper(method), pathStr, op, pathLevelParams)
 			if err != nil {
 				return nil, err
 			}
@@ -79,14 +78,13 @@ func ParseHuma(api huma.API) ([]Tool, error) {
 	return ParseOpenAPI(b)
 }
 
-func extractOperation(method, path string, op map[string]any, parentParams []any) (Tool, error) {
+func extractOperation(root map[string]any, method, path string, op map[string]any, parentParams []any) (Tool, error) {
 	// 1. 获取 Tool 标识名称 (Name)
 	name := ""
 	if opID, ok := op["operationId"].(string); ok && strings.TrimSpace(opID) != "" {
 		name = strings.TrimSpace(opID)
 	}
 	if name == "" {
-		// 自动由 method + path 派生清晰名称
 		cleanPath := strings.ReplaceAll(path, "/", "_")
 		cleanPath = strings.ReplaceAll(cleanPath, "{", "")
 		cleanPath = strings.ReplaceAll(cleanPath, "}", "")
@@ -105,9 +103,10 @@ func extractOperation(method, path string, op map[string]any, parentParams []any
 		desc = fmt.Sprintf("Execute %s %s", method, path)
 	}
 
-	// 3. 构建 InputSchema (JSON Schema object)
+	// 3. 构建 InputSchema (JSON Schema object) 与参数位置映射
 	properties := make(map[string]any)
 	var requiredFields []string
+	paramLocations := make(map[string]string)
 
 	// 合并 parameters (path, query, header)
 	allParams := append([]any(nil), parentParams...)
@@ -126,9 +125,9 @@ func extractOperation(method, path string, op map[string]any, parentParams []any
 		}
 		pIn, _ := p["in"].(string) // "path", "query", etc.
 		if pIn != "path" && pIn != "query" {
-			// 目前优先处理 path 与 query 参数
 			continue
 		}
+		paramLocations[pName] = pIn
 
 		pReq, _ := p["required"].(bool)
 		if pIn == "path" {
@@ -161,15 +160,25 @@ func extractOperation(method, path string, op map[string]any, parentParams []any
 				}
 			}
 			if bodySchema != nil {
-				// 如果 body 顶层是 object，将其 properties 展开到顶层参数中
+				// 支持解引用 $ref: "#/components/schemas/..."
+				if refStr, ok := bodySchema["$ref"].(string); ok && refStr != "" {
+					if resolved := resolveSchemaRef(root, refStr); resolved != nil {
+						bodySchema = resolved
+					}
+				}
+
 				if bProps, ok := bodySchema["properties"].(map[string]any); ok {
 					for k, v := range bProps {
+						if k == "$schema" {
+							continue // 忽略 Huma 自动注入的元 schema 字段
+						}
 						properties[k] = v
+						paramLocations[k] = "body"
 					}
 				}
 				if bReq, ok := bodySchema["required"].([]any); ok {
 					for _, r := range bReq {
-						if rStr, ok := r.(string); ok {
+						if rStr, ok := r.(string); ok && rStr != "$schema" {
 							requiredFields = append(requiredFields, rStr)
 						}
 					}
@@ -183,75 +192,47 @@ func extractOperation(method, path string, op map[string]any, parentParams []any
 		"properties": properties,
 	}
 	if len(requiredFields) > 0 {
-		inputSchema["required"] = deduplicateStrings(requiredFields)
+		inputSchema["required"] = requiredFields
 	}
 
 	return Tool{
-		Name:        name,
-		Description: desc,
-		Method:      method,
-		Path:        path,
-		InputSchema: inputSchema,
+		Name:           name,
+		Description:    desc,
+		Method:         method,
+		Path:           path,
+		InputSchema:    inputSchema,
+		ParamLocations: paramLocations,
 	}, nil
 }
 
-func copyMap(src map[string]any) map[string]any {
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
+// resolveSchemaRef 解析 OpenAPI 内部的 JSON Pointer 引用，如 "#/components/schemas/Foo"。
+func resolveSchemaRef(root map[string]any, ref string) map[string]any {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
 	}
-	return dst
-}
-
-func deduplicateStrings(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	var out []string
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
+	parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
+	var current any = root
+	for _, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
 		}
+		current = m[part]
 	}
-	return out
+	res, _ := current.(map[string]any)
+	return copyMap(res)
 }
 
-// ToOpenAI 将 Tool 切片转为 OpenAI Function Calling 规范格式。
-func ToOpenAI(tools []Tool) []OpenAITool {
-	out := make([]OpenAITool, len(tools))
-	for i, t := range tools {
-		out[i] = OpenAITool{
-			Type: "function",
-			Function: OpenAIFunction{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.InputSchema,
-			},
-		}
+func copyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
 	}
-	return out
-}
-
-// ToClaude 将 Tool 切片转为 Anthropic Claude Tool Use 规范格式。
-func ToClaude(tools []Tool) []ClaudeTool {
-	out := make([]ClaudeTool, len(tools))
-	for i, t := range tools {
-		out[i] = ClaudeTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		}
-	}
-	return out
-}
-
-// ToGemini 将 Tool 切片转为 Google Gemini Function Declaration 规范格式。
-func ToGemini(tools []Tool) []GeminiDeclaration {
-	out := make([]GeminiDeclaration, len(tools))
-	for i, t := range tools {
-		out[i] = GeminiDeclaration{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  t.InputSchema,
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if subMap, ok := v.(map[string]any); ok {
+			out[k] = copyMap(subMap)
+		} else {
+			out[k] = v
 		}
 	}
 	return out

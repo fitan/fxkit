@@ -77,6 +77,7 @@ func Run(opts ...fx.Option) {
 	rootCmd.PersistentFlags().String("consul-key", "", "Consul KV key holding YAML config; required with --consul")
 	rootCmd.AddCommand(buildServeCmd(opts))
 	rootCmd.AddCommand(buildOpenAPICmd(opts))
+	rootCmd.AddCommand(buildMCPCmd(opts))
 	rootCmd.AddCommand(buildVersionCmd())
 
 	extraCommandsMu.Lock()

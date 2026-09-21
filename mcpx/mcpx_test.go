@@ -1,15 +1,17 @@
 package mcpx_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/fitan/fxkit/mcpx"
+	"github.com/go-chi/chi/v5"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 const sampleOpenAPIYAML = `
@@ -121,8 +123,78 @@ func TestParseOpenAPI_and_LLMAdapters(t *testing.T) {
 	}
 }
 
-func TestMCPServer_Protocol_and_ToolCall(t *testing.T) {
-	// 搭建 Mock 后端服务
+type updateArticleInput struct {
+	ID   string `path:"id"`
+	Body struct {
+		Title string `json:"title"`
+	}
+}
+
+type updateArticleOutput struct {
+	Body struct {
+		Message string `json:"message"`
+	}
+}
+
+func TestMCPServer_InMemoryHuma_DirectDispatch(t *testing.T) {
+	// 1. 搭建原生的 Huma 路由 (chi.Mux)
+	router := chi.NewMux()
+	api := humachi.New(router, huma.DefaultConfig("in-memory-catalog", "1.0.0"))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "updateArticleInMemory",
+		Method:      http.MethodPost,
+		Path:        "/articles/{id}",
+		Summary:     "Update article in memory directly",
+	}, func(ctx context.Context, input *updateArticleInput) (*updateArticleOutput, error) {
+		out := &updateArticleOutput{}
+		out.Body.Message = fmt.Sprintf("Success: id=%s title=%s", input.ID, input.Body.Title)
+		return out, nil
+	})
+
+	// 2. 从已注册的 Huma API 中提取工具
+	tools, err := mcpx.ParseHuma(api)
+	if err != nil {
+		t.Fatalf("ParseHuma failed: %v", err)
+	}
+
+	// 3. 重点：创建 MCP Server 并直接注入 router 作为 Handler (0 网络调用，完全内存直通)
+	srv := mcpx.NewServer(mcpx.ServerConfig{
+		Name:    "in-memory-mcp",
+		Handler: router,
+	}, tools)
+
+	// 4. 触发 tools/call
+	mcpServer := srv.MCPServer()
+	tool := mcpServer.GetTool("updateArticleInMemory")
+	if tool == nil {
+		t.Fatalf("tool updateArticleInMemory not registered")
+	}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "updateArticleInMemory"
+	req.Params.Arguments = map[string]any{
+		"id":    "888",
+		"title": "Zero Network Overhead",
+	}
+
+	res, err := tool.Handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("tool execution error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %+v", res)
+	}
+	if len(res.Content) == 0 {
+		t.Fatalf("empty result content")
+	}
+	text := res.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "Success: id=888 title=Zero Network Overhead") {
+		t.Fatalf("unexpected dispatch result: %s", text)
+	}
+}
+
+func TestMCPServer_mark3labs_Integration(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/articles/100", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -132,89 +204,45 @@ func TestMCPServer_Protocol_and_ToolCall(t *testing.T) {
 		}
 		http.Error(w, "bad method", http.StatusMethodNotAllowed)
 	})
-	mux.HandleFunc("/articles", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var in map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&in)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":    "101",
-				"title": in["title"],
-			})
-			return
-		}
-		http.Error(w, "bad method", http.StatusMethodNotAllowed)
-	})
-
-	backendServer := httptest.NewServer(mux)
-	defer backendServer.Close()
 
 	tools, err := mcpx.ParseOpenAPI([]byte(sampleOpenAPIYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	// 纯内存直通注入 mux
 	srv := mcpx.NewServer(mcpx.ServerConfig{
 		Name:    "test-catalog",
 		Version: "1.0.0",
-		BaseURL: backendServer.URL,
+		Handler: mux,
 	}, tools)
+
+	mcpServer := srv.MCPServer()
+	registeredTools := mcpServer.ListTools()
+	if len(registeredTools) != 3 {
+		t.Fatalf("expected 3 tools in mcp-go server, got %d", len(registeredTools))
+	}
 
 	ctx := context.Background()
 
-	// 1. 测试 initialize
-	initReq := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
-	initResp := srv.HandleMessage(ctx, initReq)
-	if initResp == nil || initResp.Error != nil {
-		t.Fatalf("initialize failed: %+v", initResp)
-	}
-	resMap, _ := initResp.Result.(map[string]any)
-	if resMap["protocolVersion"] != "2024-11-05" {
-		t.Fatalf("unexpected protocolVersion: %v", resMap["protocolVersion"])
+	getTool := mcpServer.GetTool("getArticle")
+	if getTool == nil {
+		t.Fatalf("getArticle not registered on MCPServer")
 	}
 
-	// 2. 测试 tools/list
-	listReq := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
-	listResp := srv.HandleMessage(ctx, listReq)
-	if listResp == nil || listResp.Error != nil {
-		t.Fatalf("tools/list failed: %+v", listResp)
-	}
+	getReq := mcp.CallToolRequest{}
+	getReq.Params.Name = "getArticle"
+	getReq.Params.Arguments = map[string]any{"id": "100"}
 
-	// 3. 测试 tools/call (GET 带 path 参数)
-	callReq := []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getArticle","arguments":{"id":"100"}}}`)
-	callResp := srv.HandleMessage(ctx, callReq)
-	if callResp == nil || callResp.Error != nil {
-		t.Fatalf("tools/call failed: %+v", callResp)
+	getRes, err := getTool.Handler(ctx, getReq)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
 	}
-	callResult, _ := callResp.Result.(map[string]any)
-	if callResult["isError"] == true {
-		t.Fatalf("tools/call returned error: %+v", callResult)
+	if getRes.IsError {
+		t.Fatalf("handler returned tool error: %+v", getRes)
 	}
-	contents, _ := callResult["content"].([]map[string]any)
-	if len(contents) == 0 || !strings.Contains(contents[0]["text"].(string), "Go 1.27 Generics") {
-		t.Fatalf("unexpected tool call result: %+v", contents)
-	}
-
-	// 4. 测试 tools/call (POST 带 JSON Body)
-	postReq := []byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"createArticle","arguments":{"title":"New Era"}}}`)
-	postResp := srv.HandleMessage(ctx, postReq)
-	if postResp == nil || postResp.Error != nil {
-		t.Fatalf("createArticle call failed: %+v", postResp)
-	}
-	postResult, _ := postResp.Result.(map[string]any)
-	postContents, _ := postResult["content"].([]map[string]any)
-	if len(postContents) == 0 || !strings.Contains(postContents[0]["text"].(string), "New Era") {
-		t.Fatalf("unexpected post call result: %+v", postContents)
-	}
-
-	// 5. 测试 ServeStdio
-	var inBuf bytes.Buffer
-	inBuf.WriteString(`{"jsonrpc":"2.0","id":5,"method":"ping"}` + "\n")
-	var outBuf bytes.Buffer
-	if err := srv.ServeStdio(ctx, &inBuf, &outBuf); err != nil {
-		t.Fatalf("ServeStdio failed: %v", err)
-	}
-	if !strings.Contains(outBuf.String(), `"id":5`) {
-		t.Fatalf("expected ping response in outBuf, got: %s", outBuf.String())
+	textContent := getRes.Content[0].(mcp.TextContent)
+	if !strings.Contains(textContent.Text, "Go 1.27 Generics") {
+		t.Fatalf("unexpected text content: %+v", getRes.Content[0])
 	}
 }

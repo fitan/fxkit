@@ -1,9 +1,13 @@
 package mcpx
 
 import (
+	"context"
+	"net/http"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/server"
+	"github.com/go-chi/chi/v5"
 	"go.uber.org/fx"
 )
 
@@ -12,7 +16,6 @@ type Config struct {
 	Enabled bool              `koanf:"enabled"`
 	Name    string            `koanf:"name"`
 	Path    string            `koanf:"path"` // 默认 "/mcp"
-	BaseURL string            `koanf:"base_url"`
 	Headers map[string]string `koanf:"headers"`
 }
 
@@ -28,35 +31,52 @@ func provideConfig(cfg *config.Config) Config {
 type serverParams struct {
 	fx.In
 	Config Config
-	API    huma.API `optional:"true"`
+	Mux    *chi.Mux `optional:"true"`
 }
 
 func provideServer(p serverParams) (*Server, error) {
-	var tools []Tool
-	if p.API != nil {
-		extracted, err := ParseHuma(p.API)
-		if err == nil {
-			tools = extracted
-		}
-	}
-
-	baseURL := p.Config.BaseURL
-	if baseURL == "" {
-		baseURL = "http://127.0.0.1:8080"
-	}
-
 	name := p.Config.Name
 	if name == "" {
 		name = "fxkit-service"
 	}
 
+	var handler http.Handler
+	if p.Mux != nil {
+		handler = p.Mux
+	}
+
 	srv := NewServer(ServerConfig{
 		Name:    name,
-		BaseURL: baseURL,
+		Handler: handler,
 		Headers: p.Config.Headers,
-	}, tools)
+	}, nil)
 
 	return srv, nil
+}
+
+type syncParams struct {
+	fx.In
+	Lc     fx.Lifecycle
+	Server *Server
+	API    huma.API `optional:"true"`
+}
+
+func syncHumaTools(p syncParams) {
+	if p.Server == nil || p.API == nil {
+		return
+	}
+	// 在 OnStart hook 中同步工具，确保此时所有业务模块的 huma registrars 均已执行完成
+	p.Lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			tools, err := ParseHuma(p.API)
+			if err == nil {
+				for _, t := range tools {
+					p.Server.RegisterTool(t)
+				}
+			}
+			return nil
+		},
+	})
 }
 
 func provideRoutes(srv *Server, cfg Config) []server.Route {
@@ -67,18 +87,18 @@ func provideRoutes(srv *Server, cfg Config) []server.Route {
 	if path == "" {
 		path = "/mcp"
 	}
+	sse := srv.SSEServer()
 	return []server.Route{
-		{
-			Pattern: path,
-			Handler: srv.HTTPHandler(),
-			Methods: []string{"POST"},
-		},
+		server.PrefixRoute(path, sse),
 	}
 }
 
-// Module 是 MCP 的 Fx 模块。引入后自动解析 Huma 路由，并可选在 /mcp 暴露 HTTP JSON-RPC 2.0 端点。
+// Module 是 MCP 的 Fx 模块。
+// 引入后自动从 Huma 提取所有业务路由对象、绑定进程内 chi.Mux 实现 0 网络开销直通反序列化，
+// 并可选挂载 SSE HTTP 路由。
 var Module = fx.Module("mcpx",
 	fx.Provide(provideConfig),
 	fx.Provide(provideServer),
+	fx.Invoke(syncHumaTools),
 	server.ProvideRoutes(provideRoutes),
 )
