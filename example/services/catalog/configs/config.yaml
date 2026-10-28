@@ -1,94 +1,96 @@
-server:
-  port: "8081"
-  log_payloads: false
-  cors_allowed_origins:
-    - "http://127.0.0.1:8880"
-    - "http://localhost:8880"
+# ==============================================================================
+# Catalog 服务配置 (example/services/catalog/configs/config.yaml)
+# ==============================================================================
 
+# 1. 应用基础元数据
 app:
-  name: "catalog"
+  name: "catalog"                 # 服务唯一标识 (Consul 注册名、Huma 文档名)
 
+# 2. HTTP 监听与中间件
+server:
+  port: "8081"                    # 服务监听端口
+  log_payloads: false             # 是否打印请求体/响应体日志
+  cors_allowed_origins:
+    - "http://localhost:3000"     # 允许的前端开发域名
+  cors_allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+    - "X-User"
+
+# 3. 数据库与持久化
 db:
-  driver: "postgres"
-  dsn: "host=10.170.34.223 user=hatchet password=hatchet dbname=fxkit port=5435 sslmode=disable TimeZone=UTC"
-  log_level: "warn"
-  max_idle_conns: 10
-  max_open_conns: 100
-  conn_max_lifetime: 1h
+  driver: "postgres"              # 驱动类型: postgres
+  dsn: "postgres://fxkit:fxkit@localhost:5432/fxkit?sslmode=disable" # 数据库连接串
+  log_level: "warn"               # GORM 日志级别 (避免打印全部正常 SQL)
+  slow_threshold: 200ms           # 慢查询告警阈值
+  max_idle_conns: 10              # 最大空闲连接数
+  max_open_conns: 100             # 最大打开连接数
+  conn_max_lifetime: 1h           # 单个连接最长生命周期
 
+# 4. 事务发件箱
 outbox:
-  enabled: true
-  poll_interval: 1s
-  batch_size: 50
-  max_retries: 10
-  claim_timeout: 30s
+  enabled: true                   # 启用发件箱 (保证业务操作与事件发布强一致性)
+  poll_interval: 1s               # 后台轮询扫描间隔
+  batch_size: 50                  # 批量处理上限
+  max_retries: 10                 # 发布重试上限
+  claim_timeout: 30s              # 故障转移租约超时时间
 
+# 5. Hatchet 任务编排引擎
 hatchet:
-  enabled: true
-  token: "" # HATCHET_CLIENT_TOKEN or example/tmp/hatchet.token (gitignored)
-  host_port: "10.170.34.223:7077" # live engine; token JWT may still say localhost:7077
-  server_url: "http://10.170.34.223:8088" # REST for CreateReminder (token often says localhost:8080)
-  tls_strategy: "none" # non-loopback hatchet-lite plaintext gRPC
-  namespace: ""
-  worker_name: "catalog"
-  outbox_publisher: true
-  otel: true # worker hatchet.start_step_run；复用 otelx TracerProvider
+  enabled: true                   # 启用 Hatchet 分布式任务引擎
+  token: ""                       # 凭证 Token (留空则从 tmp/hatchet.token 或环境变量自动拉取)
+  host_port: "localhost:7077"     # Hatchet 引擎通信 gRPC 地址
+  server_url: "http://localhost:8080" # Hatchet 控制台 REST 接口 (用于定时任务与提醒器)
+  tls_strategy: "none"            # gRPC 连接安全策略 (本地明文通信必须为 none)
+  worker_name: "catalog-worker"   # 注册至 Hatchet 的 Worker 标识
+  outbox_publisher: true          # 将 outbox 的事件发布者接入 Hatchet
+  otel: true                      # 开启 Worker 步骤的链路追踪
 
+# 6. 用户认证与 Casbin 权限引擎
 auth:
-  enabled: true
-  issuer: "https://10.170.34.223:3001/oidc"
-  audience: "https://fxkit.showcase/api"
-  jwks_url: "https://10.170.34.223:3001/oidc/jwks"
-  org_claim: "organization_id"
-  require_org: false
-  deny_unregistered: false
-  dev_header_user: true # showcase only; production must be false
-  tls_insecure: true # Logto serves HTTPS on a raw IP (self-signed)
+  enabled: true                   # 启用鉴权
+  dev_header_user: true           # 本地联调开启 X-User 头认证 (生产环境请设为 false)
   casbin:
-    enabled: true
-    table_name: "casbin_rule"
-    auto_register_routes: true
-    bootstrap_role: "admin"
-    bootstrap_users: ["alice"]
-    auto_bind_bootstrap: false
-    reload_interval: 5s
+    enabled: true                 # 启用 Casbin RBAC 细粒度接口权限判定
+    table_name: "casbin_rule"     # 权限规则存储表
+    auto_register_routes: true    # 启动时自动将所有 API 路由注册为权限资源
+    bootstrap_role: "admin"       # 初始管理员角色
+    bootstrap_users:              # 启动时自动赋予 admin 角色的用户列表
+      - "alice"
+    auto_bind_bootstrap: false    # 是否自动为未知用户赋予管理员权限 (严禁在生产开启)
+    reload_interval: 5s           # 多副本定期从数据库同步最新权限策略的间隔
 
+# 7. OpenTelemetry 可观测性
 otel:
-  enabled: true
-  service_name: "catalog"
-  service_version: "0.1.0"
-  environment: "development"
-  endpoint: "10.170.34.223:4318"
-  protocol: "http"
-  insecure: true
-  sampling: "always_on"
+  enabled: true                   # 启用 OpenTelemetry 遥测套件
+  service_name: "catalog"         # 遥测服务名称
+  service_version: "0.1.0"        # 遥测版本标识
+  environment: "development"      # 部署运行环境
+  endpoint: "localhost:4317"      # OTLP 收集端点
+  protocol: "grpc"                # 通信协议 (gRPC)
+  insecure: true                  # 本地使用非 TLS 明文传输
+  sampling: "always_on"           # 采样率策略 (开发模式全采样)
   traces:
     enabled: true
     exporter: "otlp"
   metrics:
     enabled: true
     exporter: "otlp"
-    runtime_metrics: true
+    runtime_metrics: true         # 自动收集 Go 运行时指标
   logs:
     enabled: true
     exporter: "otlp"
 
+# 8. 服务注册与服务发现
 discovery:
-  consul_address: "http://localhost:8500"
-  consul_passing_only: true
-  register: true
-  # 留空则登记本机非 loopback IPv4（宿主机 reqx + Docker 里的 Traefik 都能打到）。
-  # 不要写 127.0.0.1：Traefik 容器会打到自己。不要写 host.docker.internal：宿主机常无此 DNS。
-  advertise_address: ""
-  tags:
+  consul_address: "http://localhost:8500" # Consul 服务注册中心地址
+  consul_passing_only: true               # 客户端仅拉取健康的实例
+  register: true                          # 自动将当前 catalog 服务实例注册到 Consul
+  advertise_address: ""                   # 对外通告 IP (留空自动嗅探当前机内网 IP)
+  tags:                                   # 额外元数据标签 (供网关路由解析)
     - "traefik.enable=true"
-    - "traefik.http.routers.catalog.entrypoints=web"
-    - "traefik.http.routers.catalog.priority=100"
-    - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
-    - "traefik.http.routers.catalog.middlewares=catalog-strip@file"
+    - "traefik.http.routers.catalog.rule=PathPrefix(`/articles`) || PathPrefix(`/comments`) || PathPrefix(`/catalog`)"
 
+# 9. 业务自定义私有配置段
 catalog:
-  reminder_period: "15s"
-
-comments:
-  page_size: 10
+  reminder_period: "*/15 * * * * *"       # 定时心跳 Cron 表达式 (每 15 秒触发一次)

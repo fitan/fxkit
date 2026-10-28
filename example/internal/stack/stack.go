@@ -20,7 +20,7 @@ import (
 	"github.com/fitan/fxkit/mcpx"
 	"github.com/fitan/fxkit/reqx"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 func init() {
@@ -45,8 +45,8 @@ func init() {
 // WithMergedDocs matches [github.com/fitan/fxkit.Default] except /docs and
 // /openapi.{yaml,json} merge baseYAML with the live Huma spec.
 // Pass nil/empty baseYAML for Huma-only.
-func WithMergedDocs(baseYAML []byte) fx.Option {
-	return fx.Options(
+func WithMergedDocs(baseYAML []byte) di.Option {
+	return di.Options(
 		config.Module,
 		buildinfo.Module,
 		otelx.Module,

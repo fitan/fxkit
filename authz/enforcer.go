@@ -12,7 +12,7 @@ import (
 	"github.com/casbin/casbin/v2/model"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 	"gorm.io/gorm"
 )
 
@@ -70,10 +70,9 @@ type Enforcer struct {
 }
 
 type enforcerParams struct {
-	fx.In
 	Config *Config
 	DB     *gormx.Client `optional:"true"`
-	LC     fx.Lifecycle  `optional:"true"`
+	LC     *di.Lifecycle  `optional:"true"`
 }
 
 // NewEnforcer builds a Postgres-backed Casbin enforcer when auth.casbin.enabled.
@@ -148,11 +147,11 @@ func (e *Enforcer) ReloadPolicies() error {
 	return e.e.LoadPolicy()
 }
 
-func (e *Enforcer) attachPolicyReloader(lc fx.Lifecycle, interval time.Duration) {
+func (e *Enforcer) attachPolicyReloader(lc *di.Lifecycle, interval time.Duration) {
 	if e == nil || lc == nil || interval <= 0 || !e.Enabled() {
 		return
 	}
-	lc.Append(fx.Hook{
+	lc.Append(di.Hook{
 		OnStart: func(context.Context) error {
 			ctx, cancel := context.WithCancel(context.Background())
 			e.reloadMu.Lock()

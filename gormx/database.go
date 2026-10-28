@@ -2,7 +2,7 @@
 // 驱动由 `db.driver` 配置选择（mysql | postgres | sqlite）。`db.driver` 为空时模块短路返回 nil，
 // 宿主应用可保留 Module 而不接入数据库。
 //
-// 从 Fx 注入 [*Client]；每个请求使用 [Client.Conn]，事务使用 [Client.Transaction]。
+// 从 di 注入 [*Client]；每个请求使用 [Client.Conn]，事务使用 [Client.Transaction]。
 package gormx
 
 import (
@@ -16,9 +16,9 @@ import (
 
 	"github.com/XSAM/otelsql"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.uber.org/fx"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -223,30 +223,33 @@ func (a *slogAdapter) Trace(ctx context.Context, begin time.Time, fc func() (sql
 	}
 }
 
-// Module 在配置 db.driver/db.dsn 时向 Fx 暴露 [*Client]。
-var Module = fx.Module("fxkit/gormx",
+// Module 在配置 db.driver/db.dsn 时向 di 暴露 [*Client]。
+var Module = di.Module("fxkit/gormx",
 	config.Provide[Config]("db"),
-	fx.Provide(New),
-	fx.Invoke(registerClose),
-)
-
-type closeParams struct {
-	fx.In
-	LC     fx.Lifecycle
-	Client *Client `optional:"true"`
-}
-
-func registerClose(p closeParams) {
-	if p.Client == nil || p.Client.Pool() == nil {
-		return
-	}
-	p.LC.Append(fx.Hook{
-		OnStop: func(context.Context) error {
-			sqlDB, err := p.Client.Pool().DB()
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (*Client, error) {
+			cfg, err := di.Invoke[*Config](i)
 			if err != nil {
-				return nil
+				return nil, err
 			}
-			return sqlDB.Close()
-		},
-	})
-}
+			client, err := New(cfg)
+			if err != nil {
+				return nil, err
+			}
+			if client != nil && client.Pool() != nil {
+				if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {
+					lc.Append(di.Hook{
+						OnStop: func(context.Context) error {
+							sqlDB, err := client.Pool().DB()
+							if err != nil {
+								return nil
+							}
+							return sqlDB.Close()
+						},
+					})
+				}
+			}
+			return client, nil
+		})
+	},
+)

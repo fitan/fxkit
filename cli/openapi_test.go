@@ -12,11 +12,11 @@ import (
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/openapi"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 func TestCollectOpenAPI_liveSpec(t *testing.T) {
-	b, err := collectOpenAPI([]fx.Option{
+	b, err := collectOpenAPI([]di.Option{
 		config.Module,
 		server.Module,
 		server.ListenerModule,
@@ -53,7 +53,7 @@ func TestCollectOpenAPI_liveSpec(t *testing.T) {
 
 func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
 	// Simulate an environment where DB or Hatchet fails in OnStart, but OpenAPI can still be generated offline
-	b, err := collectOpenAPI([]fx.Option{
+	b, err := collectOpenAPI([]di.Option{
 		config.Module,
 		server.Module,
 		server.ListenerModule,
@@ -69,13 +69,16 @@ func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
 				})
 			})
 		}),
-		fx.Invoke(func(lc fx.Lifecycle) {
-			lc.Append(fx.Hook{
-				OnStart: func(_ context.Context) error {
-					return errors.New("database connection refused (offline)")
-				},
-			})
-		}),
+		func(i di.Injector) {
+			lc, _ := di.Invoke[*di.Lifecycle](i)
+			if lc != nil {
+				lc.Append(di.Hook{
+					OnStart: func(_ context.Context) error {
+						return errors.New("database connection refused (offline)")
+					},
+				})
+			}
+		},
 	}, config.Options{}, openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML})
 	if err != nil {
 		t.Fatalf("expected offline export to succeed, got %v", err)
@@ -87,7 +90,7 @@ func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
 }
 
 func TestCollectOpenAPI_requiresHuma(t *testing.T) {
-	_, err := collectOpenAPI([]fx.Option{
+	_, err := collectOpenAPI([]di.Option{
 		config.Module,
 		server.Module,
 	}, config.Options{}, openapi.EncodeInput{})

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/fitan/fxkit/outbox"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // outboxPublisher pushes outbox rows as Hatchet events (event key = topic name).
@@ -29,12 +29,12 @@ func provideOutboxPublisher(c *Client, cfg *Config) outbox.EventPublisher {
 	return &outboxPublisher{client: c}
 }
 
-func provideOutboxPublisherOption() fx.Option {
-	return fx.Provide(
-		fx.Annotate(
-			provideOutboxPublisher,
-			fx.As(new(outbox.EventPublisher)),
-			fx.ResultTags(`group:"outbox_publishers"`),
-		),
-	)
+func provideOutboxPublisherOption() di.Option {
+	return func(i di.Injector) {
+		c, _ := di.Invoke[*Client](i)
+		cfg, _ := di.Invoke[*Config](i)
+		if pub := provideOutboxPublisher(c, cfg); pub != nil {
+			outbox.ProvidePublisher(pub)(i)
+		}
+	}
 }

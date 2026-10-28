@@ -8,7 +8,7 @@ import (
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/server"
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // Config 定义在 application config 中的 mcp 配置段。
@@ -29,9 +29,8 @@ func provideConfig(cfg *config.Config) Config {
 }
 
 type serverParams struct {
-	fx.In
 	Config Config
-	Mux    *chi.Mux `optional:"true"`
+	Mux    *chi.Mux 
 }
 
 func provideServer(p serverParams) (*Server, error) {
@@ -55,10 +54,9 @@ func provideServer(p serverParams) (*Server, error) {
 }
 
 type syncParams struct {
-	fx.In
-	Lc     fx.Lifecycle
+	Lc     *di.Lifecycle
 	Server *Server
-	API    huma.API `optional:"true"`
+	API    huma.API 
 }
 
 func syncHumaTools(p syncParams) {
@@ -66,7 +64,8 @@ func syncHumaTools(p syncParams) {
 		return
 	}
 	// 在 OnStart hook 中同步工具，确保此时所有业务模块的 huma registrars 均已执行完成
-	p.Lc.Append(fx.Hook{
+	if p.Lc != nil {
+		p.Lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			tools, err := ParseHuma(p.API)
 			if err == nil {
@@ -77,6 +76,7 @@ func syncHumaTools(p syncParams) {
 			return nil
 		},
 	})
+	}
 }
 
 func provideRoutes(srv *Server, cfg Config) []server.Route {
@@ -96,9 +96,26 @@ func provideRoutes(srv *Server, cfg Config) []server.Route {
 // Module 是 MCP 的 Fx 模块。
 // 引入后自动从 Huma 提取所有业务路由对象、绑定进程内 chi.Mux 实现 0 网络开销直通反序列化，
 // 并可选挂载 SSE HTTP 路由。
-var Module = fx.Module("mcpx",
-	fx.Provide(provideConfig),
-	fx.Provide(provideServer),
-	fx.Invoke(syncHumaTools),
-	server.ProvideRoutes(provideRoutes),
+var Module = di.Module("mcpx",
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (Config, error) {
+			cfg, _ := di.Invoke[*config.Config](i)
+			return provideConfig(cfg), nil
+		})
+		di.Provide(i, func(i di.Injector) (*Server, error) {
+			c, _ := di.Invoke[Config](i)
+			mux, _ := di.Invoke[*chi.Mux](i)
+			return provideServer(serverParams{Config: c, Mux: mux})
+		})
+
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		srv, _ := di.Invoke[*Server](i)
+		api, _ := di.Invoke[huma.API](i)
+		syncHumaTools(syncParams{Lc: lc, Server: srv, API: api})
+
+		c, _ := di.Invoke[Config](i)
+		if srv != nil {
+			server.ProvideRoutes(provideRoutes(srv, c))(i)
+		}
+	},
 )

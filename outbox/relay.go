@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/gormx"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // EventPublisher publishes raw payload bytes to a topic (Hatchet event key = topic name).
@@ -21,8 +21,17 @@ type EventPublisher interface {
 
 // ProvidePublisher publishes an [EventPublisher] into the outbox_publishers fx group.
 // Use this to drive the relay with Kafka / NATS / RabbitMQ instead of (or after) Hatchet.
-func ProvidePublisher(fn any) fx.Option {
-	return fx.Provide(fx.Annotate(fn, fx.As(new(EventPublisher)), fx.ResultTags(`group:"outbox_publishers"`)))
+func ProvidePublisher(fn any) di.Option {
+	return func(i di.Injector) {
+		switch f := fn.(type) {
+		case EventPublisher:
+			di.ProvideGroupItem[EventPublisher](i, f)
+		case func() EventPublisher:
+			di.ProvideGroupItem[EventPublisher](i, f())
+		case func(di.Injector) EventPublisher:
+			di.ProvideGroupItem[EventPublisher](i, f(i))
+		}
+	}
 }
 
 // Relay polls the outbox table and publishes pending events.
@@ -39,11 +48,9 @@ type Relay struct {
 
 // NewRelayParams is the Fx-friendly constructor input for [NewRelay].
 type NewRelayParams struct {
-	fx.In
-
 	Client     *gormx.Client
 	Outbox     *Config
-	Publishers []EventPublisher `group:"outbox_publishers"`
+	Publishers []EventPublisher 
 }
 
 // NewRelay builds a Relay. The last non-nil [EventPublisher] in the fx group is used.

@@ -18,7 +18,7 @@ import (
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/outbox"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 const articleCreatedTopic = "article-created"
@@ -87,7 +87,7 @@ type Service struct {
 	listSpec crudx.ListSpec
 }
 
-func NewService(client *gormx.Client, store *outbox.Store, inbox *outbox.Inbox, obcfg *outbox.Config, lc fx.Lifecycle) (*Service, error) {
+func NewService(client *gormx.Client, store *outbox.Store, inbox *outbox.Inbox, obcfg *outbox.Config, lc *di.Lifecycle) (*Service, error) {
 	if client == nil {
 		return nil, fxerrors.Internal("article: nil gormx client")
 	}
@@ -116,7 +116,7 @@ func NewService(client *gormx.Client, store *outbox.Store, inbox *outbox.Inbox, 
 			Limits:      crudx.Limits{LimitDefault: 20, LimitMax: 100},
 		},
 	}
-	lc.Append(fx.Hook{
+	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			var z Article
 			if err := client.Conn(ctx).AutoMigrate(&z, &ArticleFanout{}); err != nil {
@@ -361,7 +361,7 @@ func toArticleDetail(m Article) ArticleDetail {
 	}
 }
 
-var Module = fx.Options(
+var Module = di.Options(
 	fxkit.Service("article", NewService),
 	fxhuma.ProvideRegistrar(NewHumaRegistrar),
 	hatchetx.ProvideRegistrar(RegisterWorker),

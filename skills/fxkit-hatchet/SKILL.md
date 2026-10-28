@@ -127,12 +127,12 @@ id, err := hatchetx.CreateReminder(ctx, client, hatchetx.CreateReminderInput{
 	WorkflowName: "fxkit-actor-reminder",
 	ActorID:      "sched-1",
 	ReminderName: "heartbeat",
-	Period:       "15s", // 或 @every 15s / 标准 cron
+	Period:       "*/15 * * * * *", // 标准 cron（如 */15 * * * * *）或 @hourly
 })
 _ = hatchetx.DeleteReminder(ctx, client, id)
 ```
 
-`NormalizeCronExpression`：`@every 15s` → `*/15 * * * * *`；`@every 2d` 拒绝。
+`NormalizeCronExpression`：支持标准 5/6 位 cron 及 `@hourly` 等别名；`@every` 拒绝以避免 cron 边界周期不均。
 
 ## Cron / Run
 

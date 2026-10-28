@@ -34,11 +34,11 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // Setup 是安装 OTel SDK 的 Fx invoker。由 [Module] 装配；仅测试时直接调用。
-func Setup(lc fx.Lifecycle, otelCfg *Config, app *config.App) error {
+func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 	logx.SetupDefault()
 
 	if otelCfg == nil || !otelCfg.Enabled {
@@ -113,7 +113,8 @@ func Setup(lc fx.Lifecycle, otelCfg *Config, app *config.App) error {
 		inner: rootHandler,
 	}))
 
-	lc.Append(fx.Hook{
+	if lc != nil {
+		lc.Append(di.Hook{
 		OnStop: func(ctx context.Context) error {
 			slog.Info("otel shutting down")
 			var errs []error
@@ -125,6 +126,7 @@ func Setup(lc fx.Lifecycle, otelCfg *Config, app *config.App) error {
 			return errors.Join(errs...)
 		},
 	})
+	}
 
 	slog.Info("otel initialised",
 		"service", cfg.ServiceName,
@@ -341,7 +343,12 @@ func parseRatio(s string) (float64, error) {
 }
 
 // Module 在 otel.enabled 为 true 时安装 OTel SDK 生命周期。
-var Module = fx.Module("fxkit/otelx",
+var Module = di.Module("fxkit/otelx",
 	config.Provide[Config]("otel"),
-	fx.Invoke(Setup),
+	func(i di.Injector) {
+		cfg, _ := di.Invoke[*Config](i)
+		app, _ := di.Invoke[*config.App](i)
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		_ = Setup(lc, cfg, app)
+	},
 )

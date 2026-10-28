@@ -10,7 +10,7 @@ import (
 
 	"github.com/fitan/fxkit/config"
 	"github.com/imroc/req/v3"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 const (
@@ -80,7 +80,7 @@ type ClientInput struct {
 }
 
 // NewFactory constructs a [Factory]. Prefer injecting via [Module].
-func NewFactory(lc fx.Lifecycle, cfg *config.Config) *Factory {
+func NewFactory(lc *di.Lifecycle, cfg *config.Config) *Factory {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &Factory{
 		cfg:    cfg,
@@ -88,12 +88,14 @@ func NewFactory(lc fx.Lifecycle, cfg *config.Config) *Factory {
 		root:   ctx,
 		cancel: cancel,
 	}
-	lc.Append(fx.Hook{
+	if lc != nil {
+		lc.Append(di.Hook{
 		OnStop: func(context.Context) error {
 			f.Close()
 			return nil
 		},
 	})
+	}
 	return f
 }
 

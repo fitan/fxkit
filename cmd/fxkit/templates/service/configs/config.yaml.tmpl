@@ -78,4 +78,21 @@ discovery:                     # consulx 注册 + reqx 发现
   register: false              # true = 以 app.name TTL 自注册
   advertise_address: ""        # 空 = 自动本机 IP
   tags: []                     # 额外 Consul 标签；Traefik：traefik.enable=true 等
+
+cache:                         # fxkit/cachex 缓存系统与防击穿/穿透/雪崩封装
+  driver: ""                   # "" (禁用) | memory (纯内存) | redis (分布式)
+  prefix: ""                   # 统一键名前缀，如 svc_app:
+  default_ttl: 30m             # 默认过期时间
+  null_ttl: 1m                 # 空值占位缓存时间 (防穿透，0 表示不缓存)
+  singleflight: true           # 是否启用并发防击穿合并
+  jitter_max_percent: 10       # TTL 随机浮动最大百分比 (防雪崩)
+  redis:
+    addr: "127.0.0.1:6379"
+    password: ""
+    db: 0
+    pool_size: 100
+    min_idle_conns: 10
+    dial_timeout: 5s
+    read_timeout: 3s
+    write_timeout: 3s
 {{end}}

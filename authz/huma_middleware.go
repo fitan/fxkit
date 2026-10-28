@@ -8,15 +8,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	fxhuma "github.com/fitan/fxkit/huma"
-	"go.uber.org/fx"
+	
 )
 
 type humaMiddlewareParams struct {
-	fx.In
 	Config    *Config
-	Validator TokenValidator `optional:"true"`
-	Enforcer  *Enforcer      `optional:"true"`
-	Routes    []HTTPRoute    `group:"authz_http_routes"`
+	Validator TokenValidator 
+	Enforcer  *Enforcer      
+	Routes    []HTTPRoute    
 }
 
 func provideHumaMiddleware(p humaMiddlewareParams) fxhuma.MiddlewareRegistrar {

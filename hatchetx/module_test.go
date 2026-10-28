@@ -85,6 +85,21 @@ func TestApplyHatchetEnv_RemoteHostNoDefaultTLS(t *testing.T) {
 	}
 }
 
+func TestApplyHatchetEnv_RemoteHostEnvWithYamlDefaultHostPort(t *testing.T) {
+	t.Setenv("HATCHET_CLIENT_TLS_STRATEGY", "")
+	t.Setenv("HATCHET_CLIENT_HOST_PORT", "remote.company.internal:7077")
+	var c Config
+	c.SetDefaults() // sets HostPort = "localhost:7077"
+	err := applyHatchetEnv(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// When env has remote host, default yaml HostPort="localhost:7077" must NOT cause TLS_STRATEGY to become "none"
+	if got := os.Getenv("HATCHET_CLIENT_TLS_STRATEGY"); got != "" {
+		t.Fatalf("effective remote host must not set TLS none, got %q", got)
+	}
+}
+
 func TestApplyHatchetEnv_TLSStrategyYaml(t *testing.T) {
 	t.Setenv("HATCHET_CLIENT_TLS_STRATEGY", "")
 	err := applyHatchetEnv(Config{HostPort: "10.170.34.223:7077", TLSStrategy: "none"})

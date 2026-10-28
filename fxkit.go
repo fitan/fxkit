@@ -31,7 +31,8 @@ import (
 	"github.com/fitan/fxkit/reqx"
 	"github.com/fitan/fxkit/mcpx"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/cachex"
 )
 
 // 重新导出共享的 Config 类型，调用方只需 import "fxkit"。
@@ -41,8 +42,8 @@ type Config = config.Config
 // docs、gormx、hatchetx、outbox、authz、consulx、reqx 与 cli。
 //
 // 不再包含 Dapr；HTTP 由 [server.ListenerModule] 直接监听。
-func Default() fx.Option {
-	return fx.Options(
+func Default() di.Option {
+	return di.Options(
 		config.Module,
 		buildinfo.Module,
 		otelx.Module,
@@ -56,13 +57,14 @@ func Default() fx.Option {
 		consulx.Module,
 		reqx.Module,
 		mcpx.Module,
+		cachex.Module,
 		cli.Module,
 	)
 }
 
 // Minimal 是最小可用组合：config、buildinfo、server（含独立 HTTP listener）、docs 与 cli。
-func Minimal() fx.Option {
-	return fx.Options(
+func Minimal() di.Option {
+	return di.Options(
 		config.Module,
 		buildinfo.Module,
 		server.Module,
@@ -73,6 +75,9 @@ func Minimal() fx.Option {
 }
 
 // Run 将给定 options 装配为 Fx 应用并调用 Cobra 入口。
-func Run(opts ...fx.Option) {
+func Run(opts ...di.Option) {
 	cli.Run(opts...)
 }
+
+// Option 重新导出 di.Option
+type Option = di.Option

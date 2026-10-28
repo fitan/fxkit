@@ -11,7 +11,7 @@ import (
 	"github.com/fitan/fxkit/fxerrors"
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/reqx"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 
 	catalogclient "github.com/fitan/fxkit-example/services/storefront/internal/clients/catalog"
 )
@@ -146,7 +146,7 @@ func digestHTTPRoutes() []authz.HTTPRoute {
 	})
 }
 
-var Module = fx.Options(
+var Module = di.Options(
 	fxkit.Service("digest", NewService,
 		fxkit.ProvideConfig[Config]("storefront"),
 	),

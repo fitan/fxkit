@@ -1,7 +1,7 @@
 ---
 name: fxkit
 description: >-
-  Build and extend Go microservices with the fxkit Uber Fx scaffold (config, chi HTTP,
+  Build and extend Go microservices with the fxkit samber/do/v2 scaffold (config, chi HTTP,
   gormx, fxerrors, logx, buildinfo, cli, cmd/fxkit). Use whenever the user mentions fxkit,
   Fx modules, fxkit.Default/Minimal/Run, server.Route, ProvideMiddleware, gormx.Client,
   configs/config.yaml, or scaffolding a new fxkit service — even if they only say
@@ -59,7 +59,7 @@ fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 |--------|------|
 | `fxkit.Default()` | config, buildinfo, otelx, server+Listener, docs, gormx, hatchetx, outbox, authz, consulx, reqx, cli |
 | `fxkit.Minimal()` | config, buildinfo, server+Listener, docs, cli |
-| 自选 | `fx.Options(config.Module, server.Module, server.ListenerModule, …)` |
+| 自选 | `di.Options(config.Module, server.Module, server.ListenerModule, …)` |
 
 ## 业务模块写法
 
@@ -72,7 +72,7 @@ var Module = fxkit.Service("hello", NewService,
 )
 ```
 
-- `Service(name, ctor, opts...)` → `fx.Module` + `Provide(ctor)`。
+- `Service(name, ctor, opts...)` → `di.Module` + `Provide(ctor)`。
 - `Routes(fn)` → `fn` 返回 `[]server.Route`。
 - 多业务参数用 **struct 入参**（`CreateInput`），`context.Context` 单独放第一参。
 
@@ -186,7 +186,7 @@ fxkit gen client --spec openapi.yaml --out ./internal/clients/users
 
 ## Agent 检查清单
 
-- [ ] 用 `fxkit.Service` / `Routes`，不要手写零散 `fx.Provide` 绕过惯例（除非扩展框架本身）。
+- [ ] 用 `fxkit.Service` / `Routes`，不要手写零散 `di.Provide` 绕过惯例（除非扩展框架本身）。
 - [ ] REST 需要时加入 `huma.Module`；鉴权只覆盖 Huma（见 `fxkit-authz`）。
 - [ ] 对外错误走 `fxerrors`；Huma 非 `*fxerrors.Error` → 500 + `"internal error"`。
 - [ ] Go 拉依赖：`GOPROXY=https://goproxy.cn,direct`（命令级 env）。

@@ -2,59 +2,67 @@ package fxkit
 
 import (
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
 )
 
-// ServiceOption 用于定制 [Service] 声明。请始终通过辅助函数（[Routes] 等）构造。
+// ServiceOption 用于定制 [Service] 声明。
 type ServiceOption struct {
-	options []fx.Option
+	options []di.Option
 }
 
-// Service 声明一个宿主模块：单一主构造函数及若干 fx group 贡献项。
-//
-//	var Module = fxkit.Service("users", NewService,
-//	    fxkit.Routes(newRoutes),
-//	)
-func Service(name string, ctor any, opts ...ServiceOption) fx.Option {
-	all := []fx.Option{fx.Provide(ctor)}
+// Service 声明一个宿主模块：单一主构造函数及若干 group 贡献项。
+func Service(name string, ctor any, opts ...ServiceOption) di.Option {
+	all := []di.Option{}
+	if opt := di.ToOption(ctor); opt != nil {
+		all = append(all, opt)
+	}
 	for _, opt := range opts {
 		all = append(all, opt.options...)
 	}
-	return fx.Module(name, all...)
+	return di.Module(name, all...)
 }
 
-// Provide 包装 fx.Provide。
+// Provide 包装任意构造函数或值提供者。
 func Provide(ctors ...any) ServiceOption {
-	out := make([]fx.Option, 0, len(ctors))
+	out := make([]di.Option, 0, len(ctors))
 	for _, c := range ctors {
-		out = append(out, fx.Provide(c))
+		if opt := di.ToOption(c); opt != nil {
+			out = append(out, opt)
+		}
 	}
 	return ServiceOption{options: out}
 }
 
-// ProvideConfig 把 YAML 顶层 key 解成 *T 并注入（等价于 [config.Provide]）。
-//
-//	type OrdersConfig struct {
-//	    PageSize int `yaml:"page_size"`
-//	}
-//	var Module = fxkit.Service("orders", NewService,
-//	    fxkit.ProvideConfig[OrdersConfig]("orders"),
-//	)
+// ProvideTyped 以完全静态强类型方式注册构造函数，无须反射包装。
+// 利用泛型与反向类型推导，编译器自动推导出依赖注入类型 T。
+func ProvideTyped[T any](ctor func(di.Injector) (T, error)) ServiceOption {
+	return ServiceOption{
+		options: []di.Option{
+			func(i di.Injector) {
+				di.Provide(i, ctor)
+			},
+		},
+	}
+}
+
+// ProvideValue 向容器直接注册一个已有实例，具有编译期静态类型安全。
+func ProvideValue[T any](val T) ServiceOption {
+	return ServiceOption{
+		options: []di.Option{
+			func(i di.Injector) {
+				di.ProvideValue(i, val)
+			},
+		},
+	}
+}
+
+// ProvideConfig 把 YAML 顶层 key 解成 *T 并注入。
 func ProvideConfig[T any](key string) ServiceOption {
-	return ServiceOption{options: []fx.Option{config.Provide[T](key)}}
+	return ServiceOption{options: []di.Option{config.Provide[T](key)}}
 }
 
-// Invoke 包装 fx.Invoke。
-func Invoke(fns ...any) ServiceOption {
-	out := make([]fx.Option, 0, len(fns))
-	for _, f := range fns {
-		out = append(out, fx.Invoke(f))
-	}
-	return ServiceOption{options: out}
-}
-
-// Routes 从构造函数贡献 []server.Route —— 等价于 [server.ProvideRoutes]。
+// Routes 从构造函数贡献 []server.Route。
 func Routes(fn any) ServiceOption {
-	return ServiceOption{options: []fx.Option{server.ProvideRoutes(fn)}}
+	return ServiceOption{options: []di.Option{server.ProvideRoutes(fn)}}
 }

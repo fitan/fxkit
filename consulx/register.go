@@ -17,7 +17,7 @@ import (
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 const (
@@ -40,12 +40,11 @@ func isRegisterConfigError(err error) bool {
 }
 
 type registerSelfParams struct {
-	fx.In
-	LC     fx.Lifecycle
+	LC     *di.Lifecycle
 	Disc   *Config
-	App    *config.App          `optional:"true"`
-	Server *server.Config       `optional:"true"`
-	HTTP   *server.HTTPServer   `optional:"true"` // start-order: listen before register
+	App    *config.App          
+	Server *server.Config       
+	HTTP   *server.HTTPServer    // start-order: listen before register
 }
 
 // registerSelfLifecycle registers app.name on the Consul agent when discovery.register is true.
@@ -57,7 +56,8 @@ func registerSelfLifecycle(p registerSelfParams) {
 	_ = p.HTTP // depend on listener so the port is bound before TTL registration
 	var cancelTTL context.CancelFunc
 	var registeredID string
-	p.LC.Append(fx.Hook{
+	if p.LC != nil {
+		p.LC.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			id, err := registerSelf(ctx, p.Disc, p.App, p.Server)
 			if err != nil {
@@ -89,6 +89,7 @@ func registerSelfLifecycle(p registerSelfParams) {
 			return nil
 		},
 	})
+	}
 }
 
 func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *server.Config) (string, error) {

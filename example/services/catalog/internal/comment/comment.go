@@ -12,7 +12,7 @@ import (
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	fxhuma "github.com/fitan/fxkit/huma"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 	"gorm.io/gorm"
 )
 
@@ -58,7 +58,7 @@ type Service struct {
 	listSpec crudx.ListSpec
 }
 
-func NewService(client *gormx.Client, cfg *Config, lc fx.Lifecycle) (*Service, error) {
+func NewService(client *gormx.Client, cfg *Config, lc *di.Lifecycle) (*Service, error) {
 	if client == nil {
 		return nil, fxerrors.Internal("comment: nil gormx client")
 	}
@@ -100,7 +100,7 @@ func NewService(client *gormx.Client, cfg *Config, lc fx.Lifecycle) (*Service, e
 			Limits:      crudx.Limits{LimitDefault: page, LimitMax: 100},
 		},
 	}
-	lc.Append(fx.Hook{
+	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			var z Comment
 			return client.Conn(ctx).AutoMigrate(&z)
@@ -241,7 +241,7 @@ func toRow(m Comment) CommentRow {
 	}
 }
 
-var Module = fx.Options(
+var Module = di.Options(
 	fxkit.Service("comment", NewService,
 		fxkit.ProvideConfig[Config]("comments"),
 	),

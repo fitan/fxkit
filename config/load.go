@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // Load 把 YAML 顶层 key 解到 T（yaml tag）。
@@ -33,11 +33,15 @@ func Load[T any](cfg *Config, key string) (*T, error) {
 	return &v, nil
 }
 
-// Provide 把 Load[T](key) 注册进 Fx，供构造函数注入 *T。校验失败则 Fx 启动失败。
-//
-//	fxkit.Run(fxkit.Default(), config.Provide[OrdersConfig]("orders"), orders.Module)
-func Provide[T any](key string) fx.Option {
-	return fx.Provide(func(cfg *Config) (*T, error) {
-		return Load[T](cfg, key)
-	})
+// Provide 把 Load[T](key) 注册进 di，供构造函数注入 *T。校验失败则启动失败。
+func Provide[T any](key string) di.Option {
+	return func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (*T, error) {
+			cfg, err := di.Invoke[*Config](i)
+			if err != nil {
+				return nil, err
+			}
+			return Load[T](cfg, key)
+		})
+	}
 }

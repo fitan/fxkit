@@ -1,5 +1,5 @@
 // Package cli 是框架的 Cobra 入口。默认根命令支持 `serve` / `openapi` / `version`，
-// 从传入 [Run] 的模块构造 Fx 图。宿主应用可在调用 [Run] 前通过 [AddCommand] 注册额外命令。
+// 从传入 [Run] 的模块构造依赖注入图。宿主应用可在调用 [Run] 前通过 [AddCommand] 注册额外命令。
 package cli
 
 import (
@@ -7,16 +7,17 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/logx"
 	"github.com/spf13/cobra"
-	"go.uber.org/fx"
-	"go.uber.org/fx/fxevent"
 )
 
 const (
@@ -32,8 +33,7 @@ var (
 	extraCommands   []*cobra.Command
 )
 
-// SetRootName 自定义 cobra 根命令的 Use 与 Short。在 [Run] 之前调用（例如 main 中），
-// 为二进制设置独立的帮助信息。
+// SetRootName 自定义 cobra 根命令的 Use 与 Short。
 func SetRootName(name, short string) {
 	if name != "" {
 		rootName = name
@@ -43,7 +43,7 @@ func SetRootName(name, short string) {
 	}
 }
 
-// AddCommand 注册额外 cobra 命令，在 Run 设置根命令时挂载。可在 init() 或 main() 中安全调用。
+// AddCommand 注册额外 cobra 命令。
 func AddCommand(cmds ...*cobra.Command) {
 	extraCommandsMu.Lock()
 	defer extraCommandsMu.Unlock()
@@ -51,11 +51,7 @@ func AddCommand(cmds ...*cobra.Command) {
 }
 
 // Run 构建 cobra 根命令与 `serve` / `openapi` / `version` 子命令并执行。
-// serve 从用户提供的 options 组装 fx.App；openapi 使用同一张图但不监听 HTTP。
-//
-// 全局 deferred recover 防止意外 panic，使其在进程以 code 1 退出前写入 stderr
-// （OTel 日志管道安装后也会进入该管道）。
-func Run(opts ...fx.Option) {
+func Run(opts ...di.Option) {
 	logx.SetupDefault()
 
 	defer func() {
@@ -92,33 +88,42 @@ func Run(opts ...fx.Option) {
 	}
 }
 
-func buildServeCmd(opts []fx.Option) *cobra.Command {
+func buildServeCmd(opts []di.Option) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the HTTP service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			startTO, stopTO := timeoutsFromCmd(cmd)
-			app := newFxApp(cmd, opts)
+			root := newApp(cmd, opts)
+
+			lc, err := di.Invoke[*di.Lifecycle](root)
+			if err != nil {
+				return err
+			}
+
 			startCtx, cancel := context.WithTimeout(context.Background(), startTO)
 			defer cancel()
-			if err := app.Start(startCtx); err != nil {
+			if err := lc.Start(startCtx); err != nil {
 				return err
 			}
-			sig := <-app.Wait()
+
+			// 等待退出信号
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+			<-quit
+
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), stopTO)
 			defer stopCancel()
-			if err := app.Stop(stopCtx); err != nil {
+			if err := lc.Stop(stopCtx); err != nil {
 				return err
 			}
-			if sig.ExitCode != 0 {
-				return fmt.Errorf("fx shutdown with exit code %d", sig.ExitCode)
-			}
+			_ = root.Shutdown()
 			return nil
 		},
 	}
 	cmd.Flags().StringP("port", "p", "", "server port (overrides config)")
-	cmd.Flags().Duration("start-timeout", defaultStartTimeout, "Fx OnStart timeout (config load, DB ping, bind)")
-	cmd.Flags().Duration("stop-timeout", defaultStopTimeout, "Fx OnStop / HTTP Shutdown timeout")
+	cmd.Flags().Duration("start-timeout", defaultStartTimeout, "OnStart timeout")
+	cmd.Flags().Duration("stop-timeout", defaultStopTimeout, "OnStop / HTTP Shutdown timeout")
 	return cmd
 }
 
@@ -136,27 +141,25 @@ func timeoutsFromCmd(cmd *cobra.Command) (start, stop time.Duration) {
 	return
 }
 
-func newFxApp(cmd *cobra.Command, opts []fx.Option, extra ...fx.Option) *fx.App {
+func newApp(cmd *cobra.Command, opts []di.Option, extra ...di.Option) *di.RootScope {
 	configFile, _ := cmd.Flags().GetString("config")
 	consulAddr, _ := cmd.Flags().GetString("consul")
 	consulKey, _ := cmd.Flags().GetString("consul-key")
 	port, _ := cmd.Flags().GetString("port")
-	startTO, stopTO := timeoutsFromCmd(cmd)
 
-	all := []fx.Option{
-		fx.StartTimeout(startTO),
-		fx.StopTimeout(stopTO),
-		fx.WithLogger(func() fxevent.Logger { return logx.NewFxLogger(os.Stderr) }),
-		fx.Supply(config.Options{
+	supplyOpt := func(i di.Injector) {
+		di.ProvideValue(i, config.Options{
 			ConfigFile:      configFile,
 			ConsulAddress:   consulAddr,
 			ConsulConfigKey: consulKey,
 			Port:            port,
-		}),
+		})
 	}
+
+	all := []di.Option{supplyOpt}
 	all = append(all, opts...)
 	all = append(all, extra...)
-	return fx.New(all...)
+	return di.New(all...)
 }
 
 func buildVersionCmd() *cobra.Command {
@@ -173,5 +176,5 @@ func buildVersionCmd() *cobra.Command {
 	}
 }
 
-// Module 为与其他 fxkit 包对称而设的占位符。实际装配在 [Run] 内完成，由 [Run] 自行构造 fx.App。
-var Module = fx.Module("fxkit/cli")
+// Module 模块占位符。
+var Module = di.Module("fxkit/cli")

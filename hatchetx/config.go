@@ -26,6 +26,10 @@ type Config struct {
 	Namespace string `yaml:"namespace"`
 	// WorkerName worker 进程名，默认 fxkit-worker。
 	WorkerName string `yaml:"worker_name"`
+	// WorkerSlots 最大并发任务数（可选，<=0 表示使用 SDK 默认值）。
+	WorkerSlots int `yaml:"worker_slots"`
+	// WorkerLabels worker 亲和性路由标签（可选）。
+	WorkerLabels map[string]string `yaml:"worker_labels"`
 	// OutboxPublisher 为 true 时 outbox relay 把事件推到 Hatchet。默认 true。
 	OutboxPublisher bool `yaml:"outbox_publisher"`
 	// OTel 为 true 时在 worker 上挂 Hatchet instrumentor（hatchet.start_step_run）。

@@ -6,20 +6,23 @@ import (
 	"strings"
 	"testing"
 
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 func TestBuildServeCmd_ReturnsErrorOnStartFailure(t *testing.T) {
 	errBoom := errors.New("boom during start")
-	badModule := fx.Invoke(func(lc fx.Lifecycle) {
-		lc.Append(fx.Hook{
-			OnStart: func(context.Context) error {
-				return errBoom
-			},
-		})
-	})
+	badModule := func(i di.Injector) {
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		if lc != nil {
+			lc.Append(di.Hook{
+				OnStart: func(context.Context) error {
+					return errBoom
+				},
+			})
+		}
+	}
 
-	cmd := buildServeCmd([]fx.Option{badModule})
+	cmd := buildServeCmd([]di.Option{badModule})
 	cmd.SetArgs([]string{})
 	err := cmd.Execute()
 	if err == nil {

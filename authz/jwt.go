@@ -12,7 +12,7 @@ import (
 	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // TokenValidator validates a raw Bearer access token into a [Subject].
@@ -95,7 +95,7 @@ func NewValidator(p validatorParams) (TokenValidator, error) {
 		cache:      cache,
 	}
 	if p.LC != nil {
-		p.LC.Append(fx.Hook{
+		p.LC.Append(di.Hook{
 			OnStop: func(ctx context.Context) error {
 				return cache.Shutdown(ctx)
 			},

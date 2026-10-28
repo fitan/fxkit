@@ -7,23 +7,21 @@ import (
 	"net/http"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/otelx"
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/fx"
 )
 
-// MuxParams 是 [NewMux] 的输入。任意模块可向 "middleware" fx group 贡献 [Middleware] 以扩展 chi mux。
+// MuxParams 是 [NewMux] 的输入。
 type MuxParams struct {
-	fx.In
 	Server           *Config
-	Otel             *otelx.Config `optional:"true"`
-	ExtraMiddlewares []Middleware  `group:"middleware"`
+	Otel             *otelx.Config
+	ExtraMiddlewares []Middleware
 }
 
 // NewMux 构建共享 chi mux，默认中间件链为 CORS → OTel HTTP（启用时）→ route-pattern → recover，
 // 并加上其他模块贡献的中间件。otelhttp 最多在此处安装一次。
-//
-// server.log_payloads 为 true 时启用请求体日志。
 func NewMux(p MuxParams) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -53,14 +51,15 @@ func NewMux(p MuxParams) *chi.Mux {
 
 // RouterParams 收集 [RegisterRoutes] 消费的所有 [Route] 值。
 type RouterParams struct {
-	fx.In
 	Mux    *chi.Mux
-	Routes []Route `group:"routes"`
+	Routes []Route
 }
 
 // RegisterRoutes 在共享 chi mux 上挂载 grouped [Route] 值。
-// 存活/就绪探针通过 [RegisterHealth] 注册。
 func RegisterRoutes(p RouterParams) {
+	if p.Mux == nil {
+		return
+	}
 	slog.Info("──── route registration ────")
 
 	for _, route := range p.Routes {
@@ -82,27 +81,25 @@ func RegisterRoutes(p RouterParams) {
 	slog.Info("──── registration complete ────", "app_routes", len(p.Routes))
 }
 
-// Runtime 控制 HTTP listener 行为。通过 fx.Supply 注入；缺省则正常监听。
-// `openapi` 子命令会 Supply SkipListen=true，装配同一张 Fx 图但不绑端口。
+// Runtime 控制 HTTP listener 行为。缺省则正常监听。
 type Runtime struct {
 	SkipListen bool
 }
 
 // ServerParams 列出 [NewHTTPServer] 的输入。
 type ServerParams struct {
-	fx.In
-	Lifecycle fx.Lifecycle
+	Lifecycle *di.Lifecycle
 	Server    *Config
 	Mux       *chi.Mux
-	Runtime   *Runtime `optional:"true"`
+	Runtime   *Runtime
 }
 
-// HTTPServer 是 [http.Server] 的薄封装，供需要显式引用绑定 server 的 Fx 图使用（例如测试或需要地址的模块）。
+// HTTPServer 是 [http.Server] 的薄封装。
 type HTTPServer struct {
 	*http.Server
 }
 
-// NewHTTPServer 将 chi mux 绑定到支持 h2c 的 [http.Server]（配置端口），并通过 Fx 生命周期 hook 管理 Start/Stop。
+// NewHTTPServer 将 chi mux 绑定到支持 h2c 的 [http.Server]（配置端口），并通过生命周期 hook 管理 Start/Stop。
 func NewHTTPServer(p ServerParams) *HTTPServer {
 	if p.Server == nil {
 		panic("server: nil Config")
@@ -127,43 +124,85 @@ func NewHTTPServer(p ServerParams) *HTTPServer {
 		return &HTTPServer{Server: srv}
 	}
 
-	p.Lifecycle.Append(fx.Hook{
-		OnStart: func(_ context.Context) error {
-			ln, err := newListener(srv.Addr)
-			if err != nil {
-				return err
-			}
-			slog.Info("http server listening", "addr", srv.Addr)
-			go func() {
-				if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					slog.Error("http server error", "error", err)
+	if p.Lifecycle != nil {
+		p.Lifecycle.Append(di.Hook{
+			OnStart: func(_ context.Context) error {
+				ln, err := newListener(srv.Addr)
+				if err != nil {
+					return err
 				}
-			}()
-			return nil
-		},
-		OnStop: func(ctx context.Context) error {
-			slog.Info("http server shutting down")
-			return srv.Shutdown(ctx)
-		},
-	})
+				slog.Info("http server listening", "addr", srv.Addr)
+				go func() {
+					if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						slog.Error("http server error", "error", err)
+					}
+				}()
+				return nil
+			},
+			OnStop: func(ctx context.Context) error {
+				slog.Info("http server shutting down")
+				return srv.Shutdown(ctx)
+			},
+		})
+	}
 
 	return &HTTPServer{Server: srv}
 }
 
-// Module 提供共享 chi mux 与最终 router，供需挂载路由的模块使用。
-// 不包含 HTTP listener —— 独立 HTTP 请配合 [ListenerModule]。
-var Module = fx.Module("fxkit/server",
+// Module 提供共享 chi mux 与最终 router。
+var Module = di.Module("fxkit/server",
 	config.Provide[Config]("server"),
-	fx.Provide(
-		fx.Annotate(defaultRoutes, fx.ResultTags(`group:"routes,flatten"`)),
-		fx.Annotate(defaultMiddleware, fx.ResultTags(`group:"middleware"`)),
-		NewMux,
-	),
-	fx.Invoke(RegisterRoutes, RegisterHealth),
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (*chi.Mux, error) {
+			cfg, _ := di.Invoke[*Config](i)
+			otelCfg, _ := di.Invoke[*otelx.Config](i)
+			mws := di.GetGroup[Middleware](i)
+			mux := NewMux(MuxParams{
+				Server:           cfg,
+				Otel:             otelCfg,
+				ExtraMiddlewares: mws,
+			})
+
+			// 注册路由与健康检查
+			routes := di.GetGroup[Route](i)
+			RegisterRoutes(RouterParams{
+				Mux:    mux,
+				Routes: routes,
+			})
+
+			dbClient, _ := di.Invoke[*gormx.Client](i)
+			RegisterHealth(HealthParams{
+				Mux:    mux,
+				Client: dbClient,
+			})
+
+			return mux, nil
+		})
+	},
 )
 
 // ListenerModule 在共享 mux 上启动独立 HTTP listener。
-var ListenerModule = fx.Module("fxkit/server/listener",
-	fx.Provide(NewHTTPServer),
-	fx.Invoke(func(*HTTPServer) {}),
+var ListenerModule = di.Module("fxkit/server/listener",
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (*HTTPServer, error) {
+			lc, _ := di.Invoke[*di.Lifecycle](i)
+			cfg, err := di.Invoke[*Config](i)
+			if err != nil {
+				return nil, err
+			}
+			mux, err := di.Invoke[*chi.Mux](i)
+			if err != nil {
+				return nil, err
+			}
+			rt, _ := di.Invoke[*Runtime](i)
+			return NewHTTPServer(ServerParams{
+				Lifecycle: lc,
+				Server:    cfg,
+				Mux:       mux,
+				Runtime:   rt,
+			}), nil
+		})
+		// 触发初始化 listener
+		_, _ = di.Invoke[*HTTPServer](i)
+	},
 )

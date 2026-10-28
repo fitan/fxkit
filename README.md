@@ -1,6 +1,6 @@
 # fxkit 使用文档
 
-`fxkit` 是一套基于 **Uber Fx** 的 Go 微服务脚手架：用可组合的 Module 把 HTTP、配置、观测、鉴权、GORM、Hatchet（workflow / cron / events / actor）与事务性 Outbox 装进同一个进程。
+`fxkit` 是一套基于 **samber/do/v2**（支持泛型类型安全与生命周期拓扑）的 Go 微服务脚手架：用可组合的 Module 把 HTTP、配置、观测、鉴权、GORM、Hatchet（workflow / cron / events / actor）与事务性 Outbox 装进同一个进程。
 
 > **当前定位**：默认栈**不再依赖 Dapr**。HTTP 由 `server.ListenerModule` 直接监听；异步与定时能力走 **Hatchet**；跨事务发布走 **outbox**。
 
@@ -131,7 +131,7 @@ fxkit.Default()
 fxkit.Minimal()
 
 // 自选
-fx.Options(config.Module, server.Module, server.ListenerModule, gormx.Module, ...)
+di.Options(config.Module, server.Module, server.ListenerModule, gormx.Module, ...)
 ```
 
 `Default()` 当前包含：
@@ -407,7 +407,7 @@ fxhuma.RegisterResource(api, svc, fxhuma.RegisterResourceInput[UpdateReq]{
 
 ### OpenAPI 导出与 typed client
 
-Huma 会生成 OpenAPI。服务二进制自带 `openapi` 子命令：装配与 `serve` 相同的 Fx 图，**不监听 HTTP**，把 live spec 打到 stdout（日志在 stderr）。默认 **OpenAPI 3.0.3 YAML**（oapi-codegen 对 3.1 支持不完整）：
+Huma 会生成 OpenAPI。服务二进制自带 `openapi` 子命令：装配与 `serve` 相同的 DI 容器，**不监听 HTTP**，把 live spec 打到 stdout（日志在 stderr）。默认 **OpenAPI 3.0.3 YAML**（oapi-codegen 对 3.1 支持不完整）：
 
 ```bash
 ./myapp openapi > openapi.yaml
@@ -523,7 +523,7 @@ curl -H "X-User: alice" http://localhost:8090/authz/permissions
 
 ## 8. 数据库 gormx
 
-配置 `db.driver` + `db.dsn` 后 Fx 提供 `*gormx.Client`。
+配置 `db.driver` + `db.dsn` 后 DI 提供 `*gormx.Client`。
 
 ```go
 func (s *Svc) Save(ctx context.Context, u *User) error {
@@ -678,11 +678,9 @@ hatchetx.ProvideRegistrar(func(svc *Svc) hatchetx.Registrar {
 
 | 输入 | 结果示例 |
 |------|----------|
-| `@every 15s` / `15s` | `*/15 * * * * *` |
-| `@every 5m` | `*/5 * * * *` |
-| `@hourly` / `@daily` | 标准 5 域 cron |
-| 已是合法 cron | 原样通过 |
-| `@every 2d` | **拒绝**（请写显式 cron） |
+| 标准 5 位或 6 位 cron（含秒） | 原样通过，如 `*/15 * * * * *` 或 `0 2 * * *` |
+| `@hourly` / `@daily` / `@weekly` / `@monthly` | 扩展为标准 5 域 cron |
+| `@every ...`（如 `@every 15s`） | **拒绝**（避免 cron 模除导致的周期边界不均问题，请用标准 cron） |
 
 动态 cron：`client.Crons().Create(...)`（见 example scheduler）。
 
@@ -773,7 +771,7 @@ myapp openapi --spec 3.1 -o spec.yaml
 myapp openapi --base docs/base.yaml -o merged.yaml
 ```
 
-需要 `huma.Module`。会启动同一张 Fx 图（DB 等 OnStart 仍会跑），只跳过 HTTP listen。
+需要 `huma.Module`。会启动同一张 DI 容器（DB 等 OnStart 仍会跑），只跳过 HTTP listen。
 
 调用方：`fxkit gen client --spec spec.yaml --out ./internal/clients/<svc>` 写出 `client.gen.go`（oapi-codegen）、`reqx.go`（`NewFromFactory`）和 `//go:generate`。
 

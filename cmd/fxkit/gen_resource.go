@@ -36,7 +36,7 @@ import (
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	fxhuma "github.com/fitan/fxkit/huma"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // {{.TypeName}} 是 GORM model。JSON tag 为 "-" 表示不直接暴露；请调整 List/Detail DTO。
@@ -86,7 +86,7 @@ type Service struct {
 	listSpec crudx.ListSpec
 }
 
-func NewService(client *gormx.Client, lc fx.Lifecycle) (*Service, error) {
+func NewService(client *gormx.Client, lc *di.Lifecycle) (*Service, error) {
 	if client == nil {
 		return nil, fxerrors.Internal("{{.Package}}: nil gormx client")
 	}
@@ -110,7 +110,7 @@ func NewService(client *gormx.Client, lc fx.Lifecycle) (*Service, error) {
 			Limits:      crudx.Limits{LimitDefault: 20, LimitMax: 100},
 		},
 	}
-	lc.Append(fx.Hook{
+	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			var z {{.TypeName}}
 			return client.Conn(ctx).AutoMigrate(&z)

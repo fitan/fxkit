@@ -27,6 +27,17 @@ type RegisterResourceInput[UpdateReq any] struct {
 	// BindUpdate extracts the path id into UpdateReq before calling Update.
 	// If nil, PUT is not registered.
 	BindUpdate func(id string, body UpdateReq) UpdateReq
+
+	// Optional operation toggles (default false = enabled)
+	DisableList   bool // If true, GET {path} is not registered
+	DisableGet    bool // If true, GET {path}/{id} is not registered
+	DisableCreate bool // If true, POST {path} is not registered
+	DisableUpdate bool // If true, PUT {path}/{id} is not registered even if BindUpdate is set
+	DisableDelete bool // If true, DELETE {path}/{id} is not registered
+
+	// PascalCaseOperationID generates PascalCase operationId (e.g. ListArticles / GetArticles).
+	// Default false keeps backwards compatibility with existing specs (listarticles).
+	PascalCaseOperationID bool
 }
 
 // ResourceOperations returns the Huma operations [RegisterResource] mounts.
@@ -39,27 +50,74 @@ func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []hu
 	if listSummary == "" {
 		listSummary = "List"
 	}
-	ops := []huma.Operation{
-		{OperationID: "list" + sanitizeOpID(path), Method: http.MethodGet, Path: path, Summary: listSummary, Tags: tags},
-		{OperationID: "get" + sanitizeOpID(path), Method: http.MethodGet, Path: path + "/{id}", Summary: "Get", Tags: tags},
-		{OperationID: "create" + sanitizeOpID(path), Method: http.MethodPost, Path: path, Summary: "Create", Tags: tags},
-	}
-	if in.BindUpdate != nil {
+	opSuffix := sanitizeOpID(path, in.PascalCaseOperationID)
+
+	var ops []huma.Operation
+	if !in.DisableList {
+		prefix := "list"
+		if in.PascalCaseOperationID {
+			prefix = "List"
+		}
 		ops = append(ops, huma.Operation{
-			OperationID: "update" + sanitizeOpID(path),
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodGet,
+			Path:        path,
+			Summary:     listSummary,
+			Tags:        tags,
+		})
+	}
+	if !in.DisableGet {
+		prefix := "get"
+		if in.PascalCaseOperationID {
+			prefix = "Get"
+		}
+		ops = append(ops, huma.Operation{
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodGet,
+			Path:        path + "/{id}",
+			Summary:     "Get",
+			Tags:        tags,
+		})
+	}
+	if !in.DisableCreate {
+		prefix := "create"
+		if in.PascalCaseOperationID {
+			prefix = "Create"
+		}
+		ops = append(ops, huma.Operation{
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodPost,
+			Path:        path,
+			Summary:     "Create",
+			Tags:        tags,
+		})
+	}
+	if in.BindUpdate != nil && !in.DisableUpdate {
+		prefix := "update"
+		if in.PascalCaseOperationID {
+			prefix = "Update"
+		}
+		ops = append(ops, huma.Operation{
+			OperationID: prefix + opSuffix,
 			Method:      http.MethodPut,
 			Path:        path + "/{id}",
 			Summary:     "Update",
 			Tags:        tags,
 		})
 	}
-	ops = append(ops, huma.Operation{
-		OperationID: "delete" + sanitizeOpID(path),
-		Method:      http.MethodDelete,
-		Path:        path + "/{id}",
-		Summary:     "Delete",
-		Tags:        tags,
-	})
+	if !in.DisableDelete {
+		prefix := "delete"
+		if in.PascalCaseOperationID {
+			prefix = "Delete"
+		}
+		ops = append(ops, huma.Operation{
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodDelete,
+			Path:        path + "/{id}",
+			Summary:     "Delete",
+			Tags:        tags,
+		})
+	}
 	return ops
 }
 
@@ -107,58 +165,81 @@ func RegisterResource[ListRow, Detail, CreateReq, UpdateReq any](
 	if listSummary == "" {
 		listSummary = "List"
 	}
+	opSuffix := sanitizeOpID(path, in.PascalCaseOperationID)
 
-	Register(api, huma.Operation{
-		OperationID: "list" + sanitizeOpID(path),
-		Method:      http.MethodGet,
-		Path:        path,
-		Summary:     listSummary,
-		Tags:        tags,
-	}, func(ctx context.Context, input *struct {
-		ListQueryInput
-	}) (*listOut[ListRow], error) {
-		params, err := ListParamsFromInput(&input.ListQueryInput)
-		if err != nil {
-			return nil, err
+	if !in.DisableList {
+		prefix := "list"
+		if in.PascalCaseOperationID {
+			prefix = "List"
 		}
-		out, err := svc.List(ctx, params)
-		if err != nil {
-			return nil, err
-		}
-		return &listOut[ListRow]{Body: out}, nil
-	})
-
-	Register(api, huma.Operation{
-		OperationID: "get" + sanitizeOpID(path),
-		Method:      http.MethodGet,
-		Path:        path + "/{id}",
-		Summary:     "Get",
-		Tags:        tags,
-	}, func(ctx context.Context, input *idPath) (*detailOut[Detail], error) {
-		out, err := svc.Get(ctx, input.ID)
-		if err != nil {
-			return nil, err
-		}
-		return &detailOut[Detail]{Body: out}, nil
-	})
-
-	Register(api, huma.Operation{
-		OperationID: "create" + sanitizeOpID(path),
-		Method:      http.MethodPost,
-		Path:        path,
-		Summary:     "Create",
-		Tags:        tags,
-	}, func(ctx context.Context, input *createIn[CreateReq]) (*detailOut[Detail], error) {
-		out, err := svc.Create(ctx, input.Body)
-		if err != nil {
-			return nil, err
-		}
-		return &detailOut[Detail]{Body: out}, nil
-	})
-
-	if in.BindUpdate != nil {
 		Register(api, huma.Operation{
-			OperationID: "update" + sanitizeOpID(path),
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodGet,
+			Path:        path,
+			Summary:     listSummary,
+			Tags:        tags,
+		}, func(ctx context.Context, input *struct {
+			ListQueryInput
+		}) (*listOut[ListRow], error) {
+			params, err := ListParamsFromInput(&input.ListQueryInput)
+			if err != nil {
+				return nil, err
+			}
+			out, err := svc.List(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return &listOut[ListRow]{Body: out}, nil
+		})
+	}
+
+	if !in.DisableGet {
+		prefix := "get"
+		if in.PascalCaseOperationID {
+			prefix = "Get"
+		}
+		Register(api, huma.Operation{
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodGet,
+			Path:        path + "/{id}",
+			Summary:     "Get",
+			Tags:        tags,
+		}, func(ctx context.Context, input *idPath) (*detailOut[Detail], error) {
+			out, err := svc.Get(ctx, input.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &detailOut[Detail]{Body: out}, nil
+		})
+	}
+
+	if !in.DisableCreate {
+		prefix := "create"
+		if in.PascalCaseOperationID {
+			prefix = "Create"
+		}
+		Register(api, huma.Operation{
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodPost,
+			Path:        path,
+			Summary:     "Create",
+			Tags:        tags,
+		}, func(ctx context.Context, input *createIn[CreateReq]) (*detailOut[Detail], error) {
+			out, err := svc.Create(ctx, input.Body)
+			if err != nil {
+				return nil, err
+			}
+			return &detailOut[Detail]{Body: out}, nil
+		})
+	}
+
+	if in.BindUpdate != nil && !in.DisableUpdate {
+		prefix := "update"
+		if in.PascalCaseOperationID {
+			prefix = "Update"
+		}
+		Register(api, huma.Operation{
+			OperationID: prefix + opSuffix,
 			Method:      http.MethodPut,
 			Path:        path + "/{id}",
 			Summary:     "Update",
@@ -173,28 +254,46 @@ func RegisterResource[ListRow, Detail, CreateReq, UpdateReq any](
 		})
 	}
 
-	Register(api, huma.Operation{
-		OperationID: "delete" + sanitizeOpID(path),
-		Method:      http.MethodDelete,
-		Path:        path + "/{id}",
-		Summary:     "Delete",
-		Tags:        tags,
-	}, func(ctx context.Context, input *idPath) (*emptyOut, error) {
-		if err := svc.Delete(ctx, input.ID); err != nil {
-			return nil, err
+	if !in.DisableDelete {
+		prefix := "delete"
+		if in.PascalCaseOperationID {
+			prefix = "Delete"
 		}
-		return &emptyOut{}, nil
-	})
+		Register(api, huma.Operation{
+			OperationID: prefix + opSuffix,
+			Method:      http.MethodDelete,
+			Path:        path + "/{id}",
+			Summary:     "Delete",
+			Tags:        tags,
+		}, func(ctx context.Context, input *idPath) (*emptyOut, error) {
+			if err := svc.Delete(ctx, input.ID); err != nil {
+				return nil, err
+			}
+			return &emptyOut{}, nil
+		})
+	}
 }
 
-func sanitizeOpID(path string) string {
+func sanitizeOpID(path string, pascalCase bool) string {
+	if !pascalCase {
+		var b strings.Builder
+		for _, r := range path {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+
+	// PascalCase (e.g. "/order-items" -> "OrderItems")
+	parts := strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '-' || r == '_'
+	})
 	var b strings.Builder
-	for _, r := range path {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			// skip separators
+	for _, p := range parts {
+		if len(p) > 0 {
+			b.WriteString(strings.ToUpper(p[:1]) + p[1:])
 		}
 	}
 	return b.String()

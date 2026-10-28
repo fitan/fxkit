@@ -17,7 +17,7 @@ import (
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/server"
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 type Config struct {
@@ -76,7 +76,7 @@ type Service struct {
 	heartbeat *hatchetx.Actor[HeartbeatIn, HeartbeatOut]
 }
 
-func NewService(client *gormx.Client, ht *hatchetx.Client, enf *authz.Enforcer, cfg *Config, lc fx.Lifecycle) (*Service, error) {
+func NewService(client *gormx.Client, ht *hatchetx.Client, enf *authz.Enforcer, cfg *Config, lc *di.Lifecycle) (*Service, error) {
 	if client == nil {
 		return nil, fxerrors.Internal("platform: nil gormx client")
 	}
@@ -87,7 +87,7 @@ func NewService(client *gormx.Client, ht *hatchetx.Client, enf *authz.Enforcer, 
 	s := &Service{client: client, hatchet: ht, enforcer: enf, cfg: cfg}
 	s.counter = hatchetx.NewActor("catalog-counter", s.incCounter, hatchetx.WithActorDescription("article view counter"))
 	s.heartbeat = hatchetx.NewActor("catalog-heartbeat", s.onHeartbeat, hatchetx.WithActorDescription("reminder tick"))
-	lc.Append(fx.Hook{
+	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			if err := client.Conn(ctx).AutoMigrate(&Counter{}, &Heartbeat{}); err != nil {
 				return err
@@ -187,7 +187,7 @@ func (s *Service) maybeReminder(ctx context.Context) {
 	}
 	period := strings.TrimSpace(s.cfg.ReminderPeriod)
 	if period == "" {
-		period = "15s"
+		period = "*/15 * * * * *"
 	}
 	_, err := hatchetx.CreateReminder(ctx, s.hatchet, hatchetx.CreateReminderInput{
 		WorkflowName: s.heartbeat.Name(),
@@ -407,7 +407,7 @@ func chiRoutes() []server.Route {
 	}
 }
 
-var Module = fx.Options(
+var Module = di.Options(
 	fxkit.Service("platform", NewService,
 		fxkit.ProvideConfig[Config]("catalog"),
 		fxkit.Routes(chiRoutes),

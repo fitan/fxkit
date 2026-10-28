@@ -1,89 +1,53 @@
-server:
-  port: "8082"
-  log_payloads: false
-  cors_allowed_origins:
-    - "http://127.0.0.1:8880"
-    - "http://localhost:8880"
+# ==============================================================================
+# Storefront 服务配置 (example/services/storefront/configs/config.yaml)
+# ==============================================================================
 
+# 1. 应用基础元数据
 app:
-  name: "storefront"
+  name: "storefront"              # 业务服务名称
 
-db:
-  driver: "postgres"
-  dsn: "host=10.170.34.223 user=hatchet password=hatchet dbname=fxkit port=5435 sslmode=disable TimeZone=UTC"
-  log_level: "warn"
-  max_idle_conns: 5
-  max_open_conns: 20
-  conn_max_lifetime: 1h
+# 2. HTTP Web 服务
+server:
+  port: "8082"                    # 服务监听端口
+  cors_allowed_origins:
+    - "http://localhost:3000"     # 允许的前端 Origin
+  cors_allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+    - "X-User"
 
-outbox:
-  enabled: false
-  poll_interval: 1s
-  batch_size: 50
-  max_retries: 10
-  claim_timeout: 30s
-
-hatchet:
-  enabled: false
-  token: ""
-  host_port: "10.170.34.223:7077"
-  tls_strategy: "none"
-  namespace: ""
-  worker_name: "storefront"
-  outbox_publisher: true
-  otel: true
-
+# 3. 用户认证 (JWT / X-User)
 auth:
   enabled: true
-  issuer: "https://10.170.34.223:3001/oidc"
-  audience: "https://fxkit.showcase/api"
-  jwks_url: "https://10.170.34.223:3001/oidc/jwks"
-  org_claim: "organization_id"
-  require_org: false
-  deny_unregistered: false
-  dev_header_user: true
-  tls_insecure: true
-  casbin:
-    enabled: true
-    table_name: "casbin_rule"
-    auto_register_routes: true
-    bootstrap_role: "admin"
-    bootstrap_users: ["alice"]
-    auto_bind_bootstrap: false
-    reload_interval: 5s
+  dev_header_user: true           # 联调允许 X-User 传递身份 (透传至下游服务)
 
+# 4. OpenTelemetry 遥测套件
 otel:
   enabled: true
   service_name: "storefront"
-  service_version: "0.1.0"
-  environment: "development"
-  endpoint: "10.170.34.223:4318"
-  protocol: "http"
+  endpoint: "localhost:4317"
+  protocol: "grpc"
   insecure: true
-  sampling: "always_on"
   traces:
     enabled: true
     exporter: "otlp"
   metrics:
     enabled: true
     exporter: "otlp"
-    runtime_metrics: true
   logs:
     enabled: true
     exporter: "otlp"
 
+# 5. 服务发现 (通过 Consul 动态寻址并调用下游服务)
 discovery:
-  consul_address: "http://localhost:8500"
-  consul_passing_only: true
-  register: true
-  advertise_address: ""
+  consul_address: "http://localhost:8500" # Consul 注册中心地址
+  consul_passing_only: true               # 仅路由至健康的节点
+  register: true                          # 自身注册至 Consul
   tags:
     - "traefik.enable=true"
-    - "traefik.http.routers.storefront.entrypoints=web"
-    - "traefik.http.routers.storefront.priority=100"
-    - "traefik.http.routers.storefront.rule=PathPrefix(`/storefront`)"
-    - "traefik.http.routers.storefront.middlewares=storefront-strip@file"
+    - "traefik.http.routers.storefront.rule=PathPrefix(`/digest`) || PathPrefix(`/storefront`)"
 
+# 6. 业务私有配置段
 storefront:
-  catalog_name: "catalog"
-  catalog_seed: "127.0.0.1:8081"
+  catalog_name: "catalog"         # 下游目标服务名称 (由 reqx 通过 Consul 自动发现并负载均衡)
+  catalog_seed: "127.0.0.1:8081"  # 当 Consul 不可用时的备选回退种子地址

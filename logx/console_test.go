@@ -33,10 +33,3 @@ func TestColorHandlerColorsWarn(t *testing.T) {
 		t.Fatalf("expected yellow ANSI in %q", out)
 	}
 }
-
-func TestFxLoggerRedactsNothing(t *testing.T) {
-	logger := NewFxLogger(nopWriter{})
-	if logger == nil {
-		t.Fatal("nil logger")
-	}
-}

@@ -7,17 +7,11 @@ import (
 	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/openapi"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
 	"gopkg.in/yaml.v3"
 )
-
-// MergedParams wires live [huma.API] into merged OpenAPI routes.
-type MergedParams struct {
-	fx.In
-	API huma.API
-}
 
 type mergedSpec struct {
 	baseYAML []byte
@@ -81,13 +75,12 @@ func MergedRoutes(baseYAML []byte, api huma.API) []server.Route {
 }
 
 // MergedModule is like [Module], but merges baseYAML with [huma.API] at serve time.
-// Requires [github.com/fitan/fxkit/huma].Module in the same Fx app when baseYAML
-// should be overlaid with live Huma routes. Pass nil/empty baseYAML for Huma-only.
-func MergedModule(baseYAML []byte) fx.Option {
+func MergedModule(baseYAML []byte) di.Option {
 	yaml := baseYAML
-	return fx.Module("fxkit/docs",
-		server.ProvideRoutes(func(p MergedParams) []server.Route {
-			return MergedRoutes(yaml, p.API)
-		}),
+	return di.Module("fxkit/docs",
+		func(i di.Injector) {
+			api, _ := di.Invoke[huma.API](i)
+			server.ProvideRoutes(MergedRoutes(yaml, api))(i)
+		},
 	)
 }

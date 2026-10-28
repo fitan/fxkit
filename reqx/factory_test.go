@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/config"
-	"go.uber.org/fx/fxtest"
+	"github.com/fitan/fxkit/di"
+	
 )
 
 func TestParseEndpoint(t *testing.T) {
@@ -80,7 +81,7 @@ func TestClientStaticSeeds(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	lc := fxtest.NewLifecycle(t)
+	lc := di.NewLifecycle()
 	cfg, err := config.New(config.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +128,7 @@ func TestTransportClient(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	lc := fxtest.NewLifecycle(t)
+	lc := di.NewLifecycle()
 	cfg, err := config.New(config.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +281,7 @@ func TestWatchFetchParsesEndpoints(t *testing.T) {
 
 func TestClientRequiresNameOrSeeds(t *testing.T) {
 	t.Parallel()
-	lc := fxtest.NewLifecycle(t)
+	lc := di.NewLifecycle()
 	cfg, err := config.New(config.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +311,7 @@ func TestFailoverToNextEndpoint(t *testing.T) {
 	}))
 	t.Cleanup(good.Close)
 
-	lc := fxtest.NewLifecycle(t)
+	lc := di.NewLifecycle()
 	cfg, err := config.New(config.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +348,7 @@ func TestHTTPSScheme(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	lc := fxtest.NewLifecycle(t)
+	lc := di.NewLifecycle()
 	cfg, err := config.New(config.Options{})
 	if err != nil {
 		t.Fatal(err)

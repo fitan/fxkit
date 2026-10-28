@@ -62,6 +62,32 @@ func TestAttachWorkerTracing_SDKProvider(t *testing.T) {
 	}
 }
 
+func TestAttachWorkerTracing_Deduplication(t *testing.T) {
+	orig := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(orig) })
+
+	tp := sdktrace.NewTracerProvider()
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	otel.SetTracerProvider(tp)
+
+	var w1 fakeWorker
+	if !attachWorkerTracing(&w1, true) {
+		t.Fatal("expected attach")
+	}
+
+	var w2 fakeWorker
+	if !attachWorkerTracing(&w2, true) {
+		t.Fatal("expected second attach to succeed for worker middleware")
+	}
+
+	spanProcessorMu.Lock()
+	_, registered := registeredTracerProviders[tp]
+	spanProcessorMu.Unlock()
+	if !registered {
+		t.Fatal("expected tp to be registered")
+	}
+}
+
 func TestConfigSetDefaults_OTel(t *testing.T) {
 	var c Config
 	c.SetDefaults()

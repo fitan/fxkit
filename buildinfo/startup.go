@@ -4,11 +4,14 @@ import (
 	"context"
 	"log/slog"
 
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
-func registerStartupLog(lc fx.Lifecycle) {
-	lc.Append(fx.Hook{
+func registerStartupLog(lc *di.Lifecycle) {
+	if lc == nil {
+		return
+	}
+	lc.Append(di.Hook{
 		OnStart: func(context.Context) error {
 			info := Get()
 			slog.Info("build info",

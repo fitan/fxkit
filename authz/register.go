@@ -8,22 +8,22 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 type autoRegisterParams struct {
-	fx.In
-	LC       fx.Lifecycle
+	LC       *di.Lifecycle
 	Config   *Config
 	Enforcer *Enforcer
-	Routes   []HTTPRoute `group:"authz_http_routes"`
-	API      huma.API    `optional:"true"`
+	Routes   []HTTPRoute 
+	API      huma.API    
 }
 
 // registerRoutesOnStart syncs ProvideHTTPRoutes plus live Huma OpenAPI operations
 // into Casbin policies for bootstrap_role (so RegisterResource is covered).
 func registerRoutesOnStart(p autoRegisterParams) {
-	p.LC.Append(fx.Hook{
+	if p.LC != nil {
+		p.LC.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			if p.Enforcer == nil || !p.Enforcer.Enabled() || p.Config == nil {
 				return nil
@@ -75,6 +75,7 @@ func registerRoutesOnStart(p autoRegisterParams) {
 			return nil
 		},
 	})
+	}
 }
 
 // PoliciesFromRoutes builds Casbin p rules: role may Method on Path.

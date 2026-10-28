@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,7 +58,6 @@ func routes() []server.Route {
 }
 
 // Module 在 /docs 提供 Scalar，在 /openapi.{yaml,json} 提供静态 OpenAPI 骨架。
-// 生产请嵌入自有 openapi.yaml，或使用 [MergedModule] / [MergedRoutes] 与 Huma live spec 合并。
-var Module = fx.Module("fxkit/docs",
+var Module = di.Module("fxkit/docs",
 	server.ProvideRoutes(routes),
 )

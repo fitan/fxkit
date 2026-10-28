@@ -46,7 +46,8 @@ import (
 	v0Client "github.com/hatchet-dev/hatchet/pkg/client"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
-	"go.uber.org/fx"
+	"github.com/tidwall/gjson"
+	"github.com/fitan/fxkit/di"
 )
 
 // Client wraps the Hatchet SDK client. Nil when hatchet is disabled.
@@ -61,20 +62,45 @@ type WorkflowBase = hatchet.WorkflowBase
 type Registrar func(client *Client) ([]WorkflowBase, error)
 
 // Module provides [Client] and, when enabled, starts a worker for all [Registrar]s.
-var Module = fx.Module("fxkit/hatchetx",
+var Module = di.Module("fxkit/hatchetx",
 	config.Provide[Config]("hatchet"),
-	fx.Provide(NewClient),
-	fx.Provide(fx.Annotate(defaultRegistrars, fx.ResultTags(`group:"hatchet_registrars,flatten"`))),
-	provideOutboxPublisherOption(),
-	fx.Invoke(registerLifecycle),
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (*Client, error) {
+			cfg, _ := di.Invoke[*Config](i)
+			return NewClient(cfg)
+		})
+		provideOutboxPublisherOption()(i)
+
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		cfg, _ := di.Invoke[*Config](i)
+		client, _ := di.Invoke[*Client](i)
+		regs := di.GetGroup[Registrar](i)
+		registerLifecycle(lifecycleParams{
+			LC:         lc,
+			Cfg:        cfg,
+			Client:     client,
+			Registrars: regs,
+		})
+	},
 )
 
 func defaultRegistrars() []Registrar { return nil }
 
 // ProvideRegistrar publishes a [Registrar] into the hatchet_registrars fx group.
 // Constructors must return [Registrar] (a function type — not an interface, so no fx.As).
-func ProvideRegistrar(fn any) fx.Option {
-	return fx.Provide(fx.Annotate(fn, fx.ResultTags(`group:"hatchet_registrars"`)))
+func ProvideRegistrar(fn any) di.Option {
+	return func(i di.Injector) {
+		switch f := fn.(type) {
+		case Registrar:
+			di.ProvideGroupItem[Registrar](i, f)
+		case func(*Client) ([]WorkflowBase, error):
+			di.ProvideGroupItem[Registrar](i, Registrar(f))
+		case func() Registrar:
+			di.ProvideGroupItem[Registrar](i, f())
+		case func(di.Injector) Registrar:
+			di.ProvideGroupItem[Registrar](i, f(i))
+		}
+	}
 }
 
 // NewClient builds a Hatchet client when hatchet.enabled is true.
@@ -119,11 +145,17 @@ func applyHatchetEnv(hcfg Config) error {
 	if hcfg.Namespace != "" {
 		setenvIfEmpty("HATCHET_CLIENT_NAMESPACE", hcfg.Namespace)
 	}
+
+	effectiveHostPort := strings.TrimSpace(os.Getenv("HATCHET_CLIENT_HOST_PORT"))
+	if effectiveHostPort == "" {
+		effectiveHostPort = strings.TrimSpace(hcfg.HostPort)
+	}
+
 	// Local compose (SERVER_GRPC_INSECURE=t) needs plaintext gRPC.
 	// yaml tls_strategy wins when env is unset; otherwise only loopback defaults to none.
 	if s := strings.TrimSpace(hcfg.TLSStrategy); s != "" {
 		setenvIfEmpty("HATCHET_CLIENT_TLS_STRATEGY", s)
-	} else if isLoopbackHostPort(hcfg.HostPort) || isLoopbackHostPort(os.Getenv("HATCHET_CLIENT_HOST_PORT")) {
+	} else if isLoopbackHostPort(effectiveHostPort) {
 		setenvIfEmpty("HATCHET_CLIENT_TLS_STRATEGY", "none")
 	}
 	return nil
@@ -138,8 +170,14 @@ func isLoopbackHostPort(hp string) bool {
 	if err != nil {
 		return false
 	}
-	host = strings.ToLower(host)
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 func setenvIfEmpty(key, value string) {
@@ -155,33 +193,40 @@ func (c *Client) Enabled() bool {
 
 // PushEvent publishes a Hatchet event (triggers event-based tasks/workflows).
 func (c *Client) PushEvent(ctx context.Context, eventKey string, payload any, metadata map[string]string) error {
-	if !c.Enabled() {
-		return fmt.Errorf("hatchetx: client disabled")
-	}
 	opts := []v0Client.PushOpFunc{}
 	if len(metadata) > 0 {
 		opts = append(opts, v0Client.WithEventMetadata(metadata))
 	}
+	return c.PushEventWithOpts(ctx, eventKey, payload, opts...)
+}
+
+// PushEventWithOpts publishes a Hatchet event with full push options.
+func (c *Client) PushEventWithOpts(ctx context.Context, eventKey string, payload any, opts ...v0Client.PushOpFunc) error {
+	if !c.Enabled() {
+		return fmt.Errorf("hatchetx: client disabled")
+	}
 	return c.SDK.Events().Push(ctx, eventKey, payload, opts...)
 }
 
-// PushEventJSON unmarshals raw JSON into a map (or keeps raw string) and pushes.
+// PushEventJSON pushes raw JSON bytes as an event without redundant map unmarshal.
 func (c *Client) PushEventJSON(ctx context.Context, eventKey string, raw []byte, metadata map[string]string) error {
 	var payload any
 	if len(raw) == 0 {
-		payload = map[string]any{}
-	} else if err := json.Unmarshal(raw, &payload); err != nil {
+		payload = json.RawMessage("{}")
+	} else if gjson.ValidBytes(raw) {
+		payload = json.RawMessage(raw)
+	} else {
 		payload = map[string]any{"raw": string(raw)}
 	}
 	return c.PushEvent(ctx, eventKey, payload, metadata)
 }
 
-// RunNoWait starts a workflow and returns the run id.
-func (c *Client) RunNoWait(ctx context.Context, workflowName string, input any) (string, error) {
+// RunNoWait starts a workflow and returns the run id. Supports optional Hatchet RunOptFunc options.
+func (c *Client) RunNoWait(ctx context.Context, workflowName string, input any, opts ...hatchet.RunOptFunc) (string, error) {
 	if !c.Enabled() {
 		return "", fmt.Errorf("hatchetx: client disabled")
 	}
-	ref, err := c.SDK.RunNoWait(ctx, workflowName, input)
+	ref, err := c.SDK.RunNoWait(ctx, workflowName, input, opts...)
 	if err != nil {
 		return "", err
 	}
@@ -197,21 +242,24 @@ func (c *Client) Crons() *features.CronsClient {
 }
 
 type lifecycleParams struct {
-	fx.In
-	LC         fx.Lifecycle
+	LC         *di.Lifecycle
 	Cfg        *Config
 	Client     *Client
-	Registrars []Registrar `group:"hatchet_registrars"`
+	Registrars []Registrar 
 }
 
 func registerLifecycle(p lifecycleParams) {
 	if p.Cfg == nil || !p.Cfg.Enabled || !p.Client.Enabled() {
 		return
 	}
-	workerName := p.Cfg.WorkerName
+	workerName := strings.TrimSpace(p.Cfg.WorkerName)
+	if workerName == "" {
+		workerName = "fxkit-worker"
+	}
 
 	var cleanup func() error
-	p.LC.Append(fx.Hook{
+	if p.LC != nil {
+		p.LC.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			var workflows []WorkflowBase
 			for _, reg := range p.Registrars {
@@ -228,7 +276,22 @@ func registerLifecycle(p lifecycleParams) {
 				slog.Info("hatchetx: enabled but no workflows registered; worker not started")
 				return nil
 			}
-			w, err := p.Client.SDK.NewWorker(workerName, hatchet.WithWorkflows(workflows...))
+
+			workerOpts := []hatchet.WorkerOption{
+				hatchet.WithWorkflows(workflows...),
+			}
+			if p.Cfg.WorkerSlots > 0 {
+				workerOpts = append(workerOpts, hatchet.WithSlots(p.Cfg.WorkerSlots))
+			}
+			if len(p.Cfg.WorkerLabels) > 0 {
+				labels := make(map[string]any, len(p.Cfg.WorkerLabels))
+				for k, v := range p.Cfg.WorkerLabels {
+					labels[k] = v
+				}
+				workerOpts = append(workerOpts, hatchet.WithLabels(labels))
+			}
+
+			w, err := p.Client.SDK.NewWorker(workerName, workerOpts...)
 			if err != nil {
 				return fmt.Errorf("hatchetx: new worker: %w", err)
 			}
@@ -251,4 +314,5 @@ func registerLifecycle(p lifecycleParams) {
 			return nil
 		},
 	})
+	}
 }

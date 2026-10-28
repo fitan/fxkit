@@ -3,6 +3,7 @@ package hatchetx
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/hatchet-dev/hatchet/pkg/worker"
 	hatchetotel "github.com/hatchet-dev/hatchet/sdks/go/opentelemetry"
@@ -13,6 +14,21 @@ import (
 // middlewareHost is satisfied by *hatchet.Worker.
 type middlewareHost interface {
 	Use(mws ...worker.MiddlewareFunc)
+}
+
+var (
+	spanProcessorMu           sync.Mutex
+	registeredTracerProviders = make(map[*sdktrace.TracerProvider]struct{})
+)
+
+func registerHatchetSpanProcessor(tp *sdktrace.TracerProvider) {
+	spanProcessorMu.Lock()
+	defer spanProcessorMu.Unlock()
+	if _, ok := registeredTracerProviders[tp]; ok {
+		return
+	}
+	tp.RegisterSpanProcessor(hatchetotel.NewHatchetAttributeSpanProcessor(passthroughSpanProcessor{}))
+	registeredTracerProviders[tp] = struct{}{}
 }
 
 // attachWorkerTracing registers Hatchet's consumer-span middleware on the worker.
@@ -43,7 +59,7 @@ func attachWorkerTracing(w middlewareHost, enabled bool) bool {
 	}
 	// Collector is off, so NewInstrumentor does not register the attribute
 	// processor. Attach a passthrough wrapper so child spans still get hatchet.*.
-	tp.RegisterSpanProcessor(hatchetotel.NewHatchetAttributeSpanProcessor(passthroughSpanProcessor{}))
+	registerHatchetSpanProcessor(tp)
 	w.Use(inst.Middleware())
 	slog.Info("hatchetx: worker traces enabled")
 	return true

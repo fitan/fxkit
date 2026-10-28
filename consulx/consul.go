@@ -22,7 +22,7 @@ import (
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/server"
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 type agentService struct {
@@ -72,8 +72,9 @@ type registerServiceRequest struct {
 }
 
 // registerStartupMeta 装配 Fx OnStart hook，为配置端口上匹配 app.name 的注册项补全 Consul agent 元数据。
-func registerStartupMeta(lc fx.Lifecycle, disc *Config, app *config.App, srv *server.Config) {
-	lc.Append(fx.Hook{
+func registerStartupMeta(lc *di.Lifecycle, disc *Config, app *config.App, srv *server.Config) {
+	if lc == nil { return }
+	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			buildinfo.Normalize()
 			appName := ""
@@ -348,11 +349,30 @@ func registerServiceWithMeta(
 	return nil
 }
 
-// Module 将 Consul 自注册与元数据补丁接入 Fx。
-// discovery.consul_address 为空时为空操作；discovery.register 控制是否自注册。
-var Module = fx.Module("fxkit/consulx",
+// Module 将 Consul 自注册、元数据补丁与分布式锁接入 DI。
+// discovery.consul_address 为空时为无操作；discovery.register 控制是否自注册。
+var Module = di.Module("fxkit/consulx",
 	config.Provide[Config]("discovery"),
-	fx.Provide(ProvideLocker),
-	fx.Invoke(registerSelfLifecycle),
-	fx.Invoke(registerStartupMeta),
+	func(i di.Injector) {
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		disc, _ := di.Invoke[*Config](i)
+		app, _ := di.Invoke[*config.App](i)
+		srv, _ := di.Invoke[*server.Config](i)
+		httpSrv, _ := di.Invoke[*server.HTTPServer](i)
+
+		registerSelfLifecycle(registerSelfParams{
+			LC:     lc,
+			Disc:   disc,
+			App:    app,
+			Server: srv,
+			HTTP:   httpSrv,
+		})
+		registerStartupMeta(lc, disc, app, srv)
+
+		// 提供分布式锁 Locker
+		di.Provide(i, func(i di.Injector) (Locker, error) {
+			discConfig, _ := di.Invoke[*Config](i)
+			return ProvideLocker(discConfig), nil
+		})
+	},
 )

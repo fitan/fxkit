@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // HTTPRoute 登记需要鉴权的 Huma/REST 路由，并携带 OpenAPI 元数据便于权限目录展示。
@@ -161,8 +161,17 @@ func routeSpecificity(r HTTPRoute) int {
 //	authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
 //	    return []authz.HTTPRoute{{Method: http.MethodGet, Path: "/users", Permission: "users:list"}}
 //	})
-func ProvideHTTPRoutes(fn any) fx.Option {
-	return fx.Provide(fx.Annotate(fn, fx.ResultTags(`group:"authz_http_routes,flatten"`)))
+func ProvideHTTPRoutes(fn any) di.Option {
+	return func(i di.Injector) {
+		switch f := fn.(type) {
+		case []HTTPRoute:
+			di.ProvideGroupItems(i, f...)
+		case func() []HTTPRoute:
+			di.ProvideGroupItems(i, f()...)
+		case func(di.Injector) []HTTPRoute:
+			di.ProvideGroupItems(i, f(i)...)
+		}
+	}
 }
 
 // defaultHTTPRoutes 提供空默认；业务通过 [ProvideHTTPRoutes] 追加。

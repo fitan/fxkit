@@ -14,27 +14,49 @@
 package authz
 
 import (
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/gormx"
 	fxhuma "github.com/fitan/fxkit/huma"
-	"go.uber.org/fx"
 )
 
-// Module 注册 JWT 校验器、Casbin enforcer、启动时路由权限自动登记、
-// RBAC 管理 API（/authz/*）与 Huma 鉴权中间件。
-var Module = fx.Module("fxkit/authz",
+var Module = di.Module("fxkit/authz",
 	config.Provide[Config]("auth"),
-	fx.Provide(NewValidator),
-	fx.Provide(NewEnforcer),
-	fx.Provide(fx.Annotate(defaultHTTPRoutes, fx.ResultTags(`group:"authz_http_routes,flatten"`))),
-	fx.Provide(fx.Annotate(adminHTTPRoutes, fx.ResultTags(`group:"authz_http_routes,flatten"`))),
-	fxhuma.ProvideMiddleware(provideHumaMiddleware),
-	fxhuma.ProvideRegistrar(provideAdminRegistrar),
-	fx.Invoke(registerRoutesOnStart),
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (TokenValidator, error) {
+			cfg, _ := di.Invoke[*Config](i)
+			lc, _ := di.Invoke[*di.Lifecycle](i)
+			return NewValidator(validatorParams{Config: cfg, LC: lc})
+		})
+		di.Provide(i, func(i di.Injector) (*Enforcer, error) {
+			cfg, _ := di.Invoke[*Config](i)
+			db, _ := di.Invoke[*gormx.Client](i)
+			lc, _ := di.Invoke[*di.Lifecycle](i)
+			return NewEnforcer(enforcerParams{Config: cfg, DB: db, LC: lc})
+		})
+
+		ProvideHTTPRoutes(adminHTTPRoutes)(i)
+		fxhuma.ProvideMiddleware(provideHumaMiddleware)(i)
+		fxhuma.ProvideRegistrar(provideAdminRegistrar)(i)
+
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		cfg, _ := di.Invoke[*Config](i)
+		enf, _ := di.Invoke[*Enforcer](i)
+		routes := di.GetGroup[HTTPRoute](i)
+		api, _ := di.Invoke[huma.API](i)
+		registerRoutesOnStart(autoRegisterParams{
+			LC:       lc,
+			Config:   cfg,
+			Enforcer: enf,
+			Routes:   routes,
+			API:      api,
+		})
+	},
 )
 
 // validatorParams is the Fx input for [NewValidator].
 type validatorParams struct {
-	fx.In
 	Config *Config
-	LC     fx.Lifecycle `optional:"true"`
+	LC     *di.Lifecycle `optional:"true"`
 }

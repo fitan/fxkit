@@ -3,11 +3,11 @@ package cli
 import (
 	"testing"
 
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 func TestBuildMCPCmd_Creation(t *testing.T) {
-	cmd := buildMCPCmd([]fx.Option{})
+	cmd := buildMCPCmd([]di.Option{})
 	if cmd == nil || cmd.Use != "mcp" {
 		t.Fatalf("unexpected mcp command: %+v", cmd)
 	}

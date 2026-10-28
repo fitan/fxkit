@@ -1,5 +1,4 @@
 // Package huma 在共享 chi mux 上装配 [danielgtaylor/huma/v2]，handler 感知 fxerrors。
-// 模块通过 [ProvideRegistrar] 或接受 [huma.API] 的 fx.Invoke 构造函数注册 operation。
 package huma
 
 import (
@@ -8,8 +7,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/fx"
 )
 
 // Registrar 向共享 API 实例挂载一个或多个 Huma operation。
@@ -22,12 +21,10 @@ type FuncRegistrar func(api huma.API)
 
 func (f FuncRegistrar) Register(api huma.API) { f(api) }
 
-// Middleware 是 Huma 中间件签名（见 [huma.API.UseMiddleware]）。用于在 REST/Huma 路径上执行
-// 认证、鉴权等横切逻辑。
+// Middleware 是 Huma 中间件签名（见 [huma.API.UseMiddleware]）。
 type Middleware = func(ctx huma.Context, next func(huma.Context))
 
 // MiddlewareRegistrar 在拿到共享 [huma.API] 后构造一个 [Middleware]。
-// 需要 API 引用是因为中间件通常用 [huma.WriteErr] 写出错误响应。
 type MiddlewareRegistrar interface {
 	Middleware(api huma.API) Middleware
 }
@@ -38,14 +35,15 @@ type MiddlewareFunc func(api huma.API) Middleware
 func (f MiddlewareFunc) Middleware(api huma.API) Middleware { return f(api) }
 
 type registrarParams struct {
-	fx.In
 	API         huma.API
-	Middlewares []MiddlewareRegistrar `group:"huma_middlewares"`
-	Registrars  []Registrar           `group:"huma_registrars"`
+	Middlewares []MiddlewareRegistrar
+	Registrars  []Registrar
 }
 
 func invokeRegistrars(p registrarParams) {
-	// 中间件先于 operation 挂载；[huma.API.UseMiddleware] 对所有 operation 生效，与注册顺序无关。
+	if p.API == nil {
+		return
+	}
 	installed := 0
 	for _, mw := range p.Middlewares {
 		if mw == nil {
@@ -67,49 +65,67 @@ func invokeRegistrars(p registrarParams) {
 
 // NewAPI 在共享 chi mux 上构建 Huma API，使用 app 元数据作为 OpenAPI 标题。
 func NewAPI(mux *chi.Mux, app *config.App) huma.API {
-	conf := huma.DefaultConfig(app.Name, "1.0.0")
-	// 宿主应用自行提供 Scalar/docs（见 fxkit/docs）。
+	appName := "app"
+	if app != nil && app.Name != "" {
+		appName = app.Name
+	}
+	conf := huma.DefaultConfig(appName, "1.0.0")
 	conf.DocsPath = ""
-	// Huma appends .json / .yaml; this must be the path without extension.
 	conf.OpenAPIPath = "/huma/openapi"
 	return humachi.New(mux, conf)
 }
 
-// ProvideRegistrar 将启动 hook 发布到 "huma_registrars" fx group。
-// 构造函数须返回 [Registrar]（常为 [FuncRegistrar]）。
-//
-//	func RegisterDemo(svc *demo.Service) fxhuma.Registrar {
-//	    return fxhuma.FuncRegistrar(func(api huma.API) {
-//	        fxhuma.Register(api, huma.Operation{...}, handler)
-//	    })
-//	}
-//
-//	var Module = fx.Options(
-//	    huma.ProvideRegistrar(RegisterDemo),
-//	)
-func ProvideRegistrar(fn any) fx.Option {
-	return fx.Provide(fx.Annotate(fn, fx.As(new(Registrar)), fx.ResultTags(`group:"huma_registrars"`)))
+// ProvideRegistrar 将 Registrar 发布到容器 group。
+func ProvideRegistrar(fn any) di.Option {
+	return func(i di.Injector) {
+		switch f := fn.(type) {
+		case Registrar:
+			di.ProvideGroupItem(i, f)
+		case func(api huma.API):
+			di.ProvideGroupItem[Registrar](i, FuncRegistrar(f))
+		case func() Registrar:
+			di.ProvideGroupItem(i, f())
+		case func(di.Injector) Registrar:
+			di.ProvideGroupItem(i, f(i))
+		}
+	}
 }
 
-func defaultRegistrars() []Registrar { return nil }
-
-// ProvideMiddleware 将一个 [MiddlewareRegistrar] 发布到 "huma_middlewares" fx group，
-// 由 [Module] 在启动时通过 [huma.API.UseMiddleware] 挂载。构造函数须返回 [MiddlewareRegistrar]
-// （常为 [MiddlewareFunc]），可依赖任意 Fx 提供的值。
-//
-//	func provideAuthMiddleware(p Params) fxhuma.MiddlewareRegistrar { ... }
-//
-//	var Module = fx.Options(fxhuma.ProvideMiddleware(provideAuthMiddleware))
-func ProvideMiddleware(fn any) fx.Option {
-	return fx.Provide(fx.Annotate(fn, fx.As(new(MiddlewareRegistrar)), fx.ResultTags(`group:"huma_middlewares"`)))
+// ProvideMiddleware 将一个 [MiddlewareRegistrar] 发布到容器 group。
+func ProvideMiddleware(fn any) di.Option {
+	return func(i di.Injector) {
+		switch f := fn.(type) {
+		case MiddlewareRegistrar:
+			di.ProvideGroupItem(i, f)
+		case func(api huma.API) Middleware:
+			di.ProvideGroupItem[MiddlewareRegistrar](i, MiddlewareFunc(f))
+		case func() MiddlewareRegistrar:
+			di.ProvideGroupItem(i, f())
+		case func(di.Injector) MiddlewareRegistrar:
+			di.ProvideGroupItem(i, f(i))
+		}
+	}
 }
-
-func defaultMiddlewares() []MiddlewareRegistrar { return nil }
 
 // Module 提供共享 [huma.API]，挂载所有 [MiddlewareRegistrar]，并执行所有 [Registrar] hook。
-var Module = fx.Module("fxkit/huma",
-	fx.Provide(NewAPI),
-	fx.Provide(fx.Annotate(defaultRegistrars, fx.ResultTags(`group:"huma_registrars,flatten"`))),
-	fx.Provide(fx.Annotate(defaultMiddlewares, fx.ResultTags(`group:"huma_middlewares,flatten"`))),
-	fx.Invoke(invokeRegistrars),
+var Module = di.Module("fxkit/huma",
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (huma.API, error) {
+			mux, err := di.Invoke[*chi.Mux](i)
+			if err != nil {
+				return nil, err
+			}
+			app, _ := di.Invoke[*config.App](i)
+			api := NewAPI(mux, app)
+
+			mws := di.GetGroup[MiddlewareRegistrar](i)
+			regs := di.GetGroup[Registrar](i)
+			invokeRegistrars(registrarParams{
+				API:         api,
+				Middlewares: mws,
+				Registrars:  regs,
+			})
+			return api, nil
+		})
+	},
 )

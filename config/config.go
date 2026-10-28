@@ -23,16 +23,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fitan/fxkit/di"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
-	"go.uber.org/fx"
 )
 
 // Options 将 cobra 提供的覆盖项传入配置构建器。
-//
-// 在 main 包中通过 [fx.Supply] 填充（[cli] 包会根据 --config / --consul / --port flag 自动完成）。
 type Options struct {
 	ConfigFile      string // 本地 YAML 文件；为空时忽略
 	ConsulAddress   string // Consul HTTP 地址（如 localhost:8500）；非空则从 KV 拉配置
@@ -145,8 +143,16 @@ func isConfigFileNotFound(err error) bool {
 	return err != nil && (os.IsNotExist(err) || errors.Is(err, os.ErrNotExist))
 }
 
-// Module 装配 [*Config] 与 [App]（yaml: app）。期望已 supply [Options]。
-var Module = fx.Module("fxkit/config",
-	fx.Provide(New),
+// Module 装配 [*Config] 与 [App]（yaml: app）。
+var Module = di.Module("fxkit/config",
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (*Config, error) {
+			opts, err := di.Invoke[Options](i)
+			if err != nil {
+				opts = Options{}
+			}
+			return New(opts)
+		})
+	},
 	Provide[App]("app"),
 )

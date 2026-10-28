@@ -10,7 +10,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"go.uber.org/fx"
+	"github.com/fitan/fxkit/di"
 )
 
 // 以下变量在构建时通过 -ldflags 注入。
@@ -166,9 +166,14 @@ func Get() Info {
 	}
 }
 
-// Module 使 [Info] 可用于 Fx 注入，并在启动时记录元数据。
+// Module 使 [Info] 可用于 di 注入，并在启动时记录元数据。
 // GET /version 由 [github.com/fitan/fxkit/server.RegisterHealth] 挂载。
-var Module = fx.Module("fxkit/buildinfo",
-	fx.Provide(Get),
-	fx.Invoke(registerStartupLog),
+var Module = di.Module("fxkit/buildinfo",
+	func(i di.Injector) {
+		di.Provide(i, func(i di.Injector) (Info, error) {
+			return Get(), nil
+		})
+		lc, _ := di.Invoke[*di.Lifecycle](i)
+		registerStartupLog(lc)
+	},
 )
