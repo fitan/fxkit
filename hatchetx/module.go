@@ -18,6 +18,7 @@
 // [CreateReminder] is a recurring Hatchet cron, not a full Dapr Actor Reminder:
 // period only (no dueTime / one-shot), missed ticks are not replayed, and
 // create is not upsert (Name+Expression uniqueness may reject duplicates).
+// For one-off scheduled runs, use [ScheduleOnce].
 //
 // # Events as MQ
 //
@@ -43,11 +44,11 @@ import (
 	"sync"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	v0Client "github.com/hatchet-dev/hatchet/pkg/client"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 	"github.com/tidwall/gjson"
-	"github.com/fitan/fxkit/di"
 )
 
 // Client wraps the Hatchet SDK client. Nil when hatchet is disabled.
@@ -87,7 +88,7 @@ var Module = di.Module("fxkit/hatchetx",
 func defaultRegistrars() []Registrar { return nil }
 
 // ProvideRegistrar publishes a [Registrar] into the hatchet_registrars fx group.
-// Constructors must return [Registrar] (a function type — not an interface, so no fx.As).
+// Supports Registrar functions returning []WorkflowBase or a single WorkflowBase.
 func ProvideRegistrar(fn any) di.Option {
 	return func(i di.Injector) {
 		switch f := fn.(type) {
@@ -95,12 +96,51 @@ func ProvideRegistrar(fn any) di.Option {
 			di.ProvideGroupItem[Registrar](i, f)
 		case func(*Client) ([]WorkflowBase, error):
 			di.ProvideGroupItem[Registrar](i, Registrar(f))
+		case func(*Client) (WorkflowBase, error):
+			di.ProvideGroupItem[Registrar](i, func(c *Client) ([]WorkflowBase, error) {
+				w, err := f(c)
+				if err != nil {
+					return nil, err
+				}
+				if w == nil {
+					return nil, nil
+				}
+				return []WorkflowBase{w}, nil
+			})
 		case func() Registrar:
 			di.ProvideGroupItem[Registrar](i, f())
 		case func(di.Injector) Registrar:
 			di.ProvideGroupItem[Registrar](i, f(i))
 		}
 	}
+}
+
+// ProvideWorkflow registers a single native Hatchet workflow directly into the worker.
+func ProvideWorkflow(wf WorkflowBase) di.Option {
+	return ProvideRegistrar(func(*Client) ([]WorkflowBase, error) {
+		if wf == nil {
+			return nil, nil
+		}
+		return []WorkflowBase{wf}, nil
+	})
+}
+
+// ProvideWorkflows registers multiple native Hatchet workflows directly into the worker.
+func ProvideWorkflows(wfs ...WorkflowBase) di.Option {
+	return ProvideRegistrar(func(*Client) ([]WorkflowBase, error) {
+		var res []WorkflowBase
+		for _, w := range wfs {
+			if w != nil {
+				res = append(res, w)
+			}
+		}
+		return res, nil
+	})
+}
+
+// ProvideWorkflowFn registers a constructor that builds workflows using the Client.
+func ProvideWorkflowFn(fn func(*Client) ([]WorkflowBase, error)) di.Option {
+	return ProvideRegistrar(fn)
 }
 
 // NewClient builds a Hatchet client when hatchet.enabled is true.
@@ -191,6 +231,14 @@ func (c *Client) Enabled() bool {
 	return c != nil && c.SDK != nil
 }
 
+// Raw returns the underlying Hatchet SDK client as an escape hatch, or nil if disabled.
+func (c *Client) Raw() *hatchet.Client {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK
+}
+
 // PushEvent publishes a Hatchet event (triggers event-based tasks/workflows).
 func (c *Client) PushEvent(ctx context.Context, eventKey string, payload any, metadata map[string]string) error {
 	opts := []v0Client.PushOpFunc{}
@@ -221,7 +269,15 @@ func (c *Client) PushEventJSON(ctx context.Context, eventKey string, raw []byte,
 	return c.PushEvent(ctx, eventKey, payload, metadata)
 }
 
-// RunNoWait starts a workflow and returns the run id. Supports optional Hatchet RunOptFunc options.
+// Run starts a workflow synchronously and blocks until execution completes, returning the result.
+func (c *Client) Run(ctx context.Context, workflowName string, input any, opts ...hatchet.RunOptFunc) (*hatchet.WorkflowResult, error) {
+	if !c.Enabled() {
+		return nil, fmt.Errorf("hatchetx: client disabled")
+	}
+	return c.SDK.Run(ctx, workflowName, input, opts...)
+}
+
+// RunNoWait starts a workflow asynchronously and returns the run id. Supports optional Hatchet RunOptFunc options.
 func (c *Client) RunNoWait(ctx context.Context, workflowName string, input any, opts ...hatchet.RunOptFunc) (string, error) {
 	if !c.Enabled() {
 		return "", fmt.Errorf("hatchetx: client disabled")
@@ -233,6 +289,38 @@ func (c *Client) RunNoWait(ctx context.Context, workflowName string, input any, 
 	return ref.RunId, nil
 }
 
+// RunMany triggers multiple workflow runs in batch.
+func (c *Client) RunMany(ctx context.Context, workflowName string, inputs []hatchet.RunManyOpt) ([]hatchet.WorkflowRunRef, error) {
+	if !c.Enabled() {
+		return nil, fmt.Errorf("hatchetx: client disabled")
+	}
+	return c.SDK.RunMany(ctx, workflowName, inputs)
+}
+
+// NewWorkflow creates a new Hatchet workflow definition.
+func (c *Client) NewWorkflow(name string, opts ...hatchet.WorkflowOption) *hatchet.Workflow {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.NewWorkflow(name, opts...)
+}
+
+// NewStandaloneTask creates a standalone task workflow.
+func (c *Client) NewStandaloneTask(name string, fn any, opts ...hatchet.StandaloneTaskOption) *hatchet.StandaloneTask {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.NewStandaloneTask(name, fn, opts...)
+}
+
+// NewStandaloneDurableTask creates a standalone durable task workflow with state persistence.
+func (c *Client) NewStandaloneDurableTask(name string, fn any, opts ...hatchet.StandaloneTaskOption) *hatchet.StandaloneTask {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.NewStandaloneDurableTask(name, fn, opts...)
+}
+
 // Crons returns the Hatchet cron trigger client, or nil when disabled.
 func (c *Client) Crons() *features.CronsClient {
 	if !c.Enabled() {
@@ -241,11 +329,99 @@ func (c *Client) Crons() *features.CronsClient {
 	return c.SDK.Crons()
 }
 
+// Runs returns the Hatchet workflow runs client, or nil when disabled.
+func (c *Client) Runs() *features.RunsClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Runs()
+}
+
+// Schedules returns the Hatchet scheduled runs client, or nil when disabled.
+func (c *Client) Schedules() *features.SchedulesClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Schedules()
+}
+
+// RateLimits returns the Hatchet rate limits client, or nil when disabled.
+func (c *Client) RateLimits() *features.RateLimitsClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.RateLimits()
+}
+
+// Events returns the Hatchet events client, or nil when disabled.
+func (c *Client) Events() v0Client.EventClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Events()
+}
+
+// Workflows returns the Hatchet workflows client, or nil when disabled.
+func (c *Client) Workflows() *features.WorkflowsClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Workflows()
+}
+
+// Workers returns the Hatchet workers client, or nil when disabled.
+func (c *Client) Workers() *features.WorkersClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Workers()
+}
+
+// Filters returns the Hatchet filters client, or nil when disabled.
+func (c *Client) Filters() *features.FiltersClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Filters()
+}
+
+// Metrics returns the Hatchet metrics client, or nil when disabled.
+func (c *Client) Metrics() *features.MetricsClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Metrics()
+}
+
+// Logs returns the Hatchet logs client, or nil when disabled.
+func (c *Client) Logs() *features.LogsClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Logs()
+}
+
+// CEL returns the Hatchet CEL expression client, or nil when disabled.
+func (c *Client) CEL() *features.CELClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.CEL()
+}
+
+// Webhooks returns the Hatchet webhooks client, or nil when disabled.
+func (c *Client) Webhooks() *features.WebhooksClient {
+	if !c.Enabled() {
+		return nil
+	}
+	return c.SDK.Webhooks()
+}
+
 type lifecycleParams struct {
 	LC         *di.Lifecycle
 	Cfg        *Config
 	Client     *Client
-	Registrars []Registrar 
+	Registrars []Registrar
 }
 
 func registerLifecycle(p lifecycleParams) {
@@ -260,59 +436,59 @@ func registerLifecycle(p lifecycleParams) {
 	var cleanup func() error
 	if p.LC != nil {
 		p.LC.Append(di.Hook{
-		OnStart: func(ctx context.Context) error {
-			var workflows []WorkflowBase
-			for _, reg := range p.Registrars {
-				if reg == nil {
-					continue
+			OnStart: func(ctx context.Context) error {
+				var workflows []WorkflowBase
+				for _, reg := range p.Registrars {
+					if reg == nil {
+						continue
+					}
+					ws, err := reg(p.Client)
+					if err != nil {
+						return err
+					}
+					workflows = append(workflows, ws...)
 				}
-				ws, err := reg(p.Client)
+				if len(workflows) == 0 {
+					slog.Info("hatchetx: enabled but no workflows registered; worker not started")
+					return nil
+				}
+
+				workerOpts := []hatchet.WorkerOption{
+					hatchet.WithWorkflows(workflows...),
+				}
+				if p.Cfg.WorkerSlots > 0 {
+					workerOpts = append(workerOpts, hatchet.WithSlots(p.Cfg.WorkerSlots))
+				}
+				if len(p.Cfg.WorkerLabels) > 0 {
+					labels := make(map[string]any, len(p.Cfg.WorkerLabels))
+					for k, v := range p.Cfg.WorkerLabels {
+						labels[k] = v
+					}
+					workerOpts = append(workerOpts, hatchet.WithLabels(labels))
+				}
+
+				w, err := p.Client.SDK.NewWorker(workerName, workerOpts...)
 				if err != nil {
-					return err
+					return fmt.Errorf("hatchetx: new worker: %w", err)
 				}
-				workflows = append(workflows, ws...)
-			}
-			if len(workflows) == 0 {
-				slog.Info("hatchetx: enabled but no workflows registered; worker not started")
+				attachWorkerTracing(w, p.Cfg.OTel)
+				cleanup, err = w.Start()
+				if err != nil {
+					return fmt.Errorf("hatchetx: start worker: %w", err)
+				}
+				slog.Info("hatchetx: worker started", "name", workerName, "workflows", len(workflows))
 				return nil
-			}
-
-			workerOpts := []hatchet.WorkerOption{
-				hatchet.WithWorkflows(workflows...),
-			}
-			if p.Cfg.WorkerSlots > 0 {
-				workerOpts = append(workerOpts, hatchet.WithSlots(p.Cfg.WorkerSlots))
-			}
-			if len(p.Cfg.WorkerLabels) > 0 {
-				labels := make(map[string]any, len(p.Cfg.WorkerLabels))
-				for k, v := range p.Cfg.WorkerLabels {
-					labels[k] = v
+			},
+			OnStop: func(ctx context.Context) error {
+				if cleanup != nil {
+					if err := cleanup(); err != nil {
+						slog.Warn("hatchetx: worker cleanup", "error", err)
+						return err
+					}
 				}
-				workerOpts = append(workerOpts, hatchet.WithLabels(labels))
-			}
-
-			w, err := p.Client.SDK.NewWorker(workerName, workerOpts...)
-			if err != nil {
-				return fmt.Errorf("hatchetx: new worker: %w", err)
-			}
-			attachWorkerTracing(w, p.Cfg.OTel)
-			cleanup, err = w.Start()
-			if err != nil {
-				return fmt.Errorf("hatchetx: start worker: %w", err)
-			}
-			slog.Info("hatchetx: worker started", "name", workerName, "workflows", len(workflows))
-			return nil
-		},
-		OnStop: func(ctx context.Context) error {
-			if cleanup != nil {
-				if err := cleanup(); err != nil {
-					slog.Warn("hatchetx: worker cleanup", "error", err)
-					return err
-				}
-			}
-			slog.Info("hatchetx: worker stopped")
-			return nil
-		},
-	})
+				slog.Info("hatchetx: worker stopped")
+				return nil
+			},
+		})
 	}
 }

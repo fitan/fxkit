@@ -6,6 +6,7 @@
 | `cli` | 主 skill | `fxkit`（serve/openapi/version、`AddCommand`） |
 | `config` | 主 skill + checklist | `fxkit` / `references/config-checklist.md` |
 | `server` | 主 skill | `fxkit`（Route、PrefixRoute、ProvideMiddleware、Listener、健康检查） |
+| `cachex` | 主 skill | `fxkit`（Memory & Redis 多级缓存、Singleflight 防击穿、Jitter 防雪崩、Cache Null 防穿透） |
 | `gormx` | 主 skill | `fxkit` |
 | `fxerrors` | 主 skill | `fxkit`（构造表） |
 | `logx` | 主 skill（附） | 控制台 slog；otel 启用时由 otelx 接管 fanout |
