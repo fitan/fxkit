@@ -4,14 +4,39 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hatchet-dev/hatchet/pkg/client/rest"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-// GetRun returns full details of a workflow run by its run ID.
-func (c *Client) GetRun(ctx context.Context, runID string) (*rest.V1WorkflowRunDetails, error) {
+// RunStatus represents the execution state of a workflow run.
+type RunStatus string
+
+const (
+	RunStatusQueued    RunStatus = "QUEUED"
+	RunStatusRunning   RunStatus = "RUNNING"
+	RunStatusCompleted RunStatus = "COMPLETED"
+	RunStatusFailed    RunStatus = "FAILED"
+	RunStatusCancelled RunStatus = "CANCELLED"
+	RunStatusUnknown   RunStatus = "UNKNOWN"
+)
+
+// RunInfo contains structured execution details and status of a workflow run.
+type RunInfo struct {
+	ID           string                     `json:"id"`
+	Status       RunStatus                  `json:"status"`
+	WorkflowName string                     `json:"workflowName,omitempty"`
+	ErrorMessage string                     `json:"errorMessage,omitempty"`
+	StartedAt    *time.Time                 `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time                 `json:"finishedAt,omitempty"`
+	DurationMs   int                        `json:"durationMs,omitempty"`
+	Raw          *rest.V1WorkflowRunDetails `json:"-"`
+}
+
+// GetRun returns full details of a workflow run by its run ID as a clean RunInfo domain model.
+func (c *Client) GetRun(ctx context.Context, runID string) (*RunInfo, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("hatchetx: client disabled")
 	}
@@ -19,19 +44,65 @@ func (c *Client) GetRun(ctx context.Context, runID string) (*rest.V1WorkflowRunD
 	if id == "" {
 		return nil, fmt.Errorf("hatchetx: runId is required")
 	}
-	return c.SDK.Runs().Get(ctx, id)
+	details, err := c.SDK.Runs().Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if details == nil {
+		return nil, fmt.Errorf("hatchetx: run not found: %s", id)
+	}
+
+	info := &RunInfo{
+		ID:           id,
+		Status:       mapTaskStatus(details.Run.Status),
+		WorkflowName: details.Run.DisplayName,
+		StartedAt:    details.Run.StartedAt,
+		FinishedAt:   details.Run.FinishedAt,
+		Raw:          details,
+	}
+	if details.Run.Duration != nil {
+		info.DurationMs = *details.Run.Duration
+	}
+	if details.Run.ErrorMessage != nil {
+		info.ErrorMessage = *details.Run.ErrorMessage
+	}
+	return info, nil
 }
 
 // GetRunStatus returns the current execution status of a workflow run.
-func (c *Client) GetRunStatus(ctx context.Context, runID string) (*rest.V1TaskStatus, error) {
+func (c *Client) GetRunStatus(ctx context.Context, runID string) (RunStatus, error) {
 	if !c.Enabled() {
-		return nil, fmt.Errorf("hatchetx: client disabled")
+		return "", fmt.Errorf("hatchetx: client disabled")
 	}
 	id := strings.TrimSpace(runID)
 	if id == "" {
-		return nil, fmt.Errorf("hatchetx: runId is required")
+		return "", fmt.Errorf("hatchetx: runId is required")
 	}
-	return c.SDK.Runs().GetStatus(ctx, id)
+	status, err := c.SDK.Runs().GetStatus(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if status == nil {
+		return RunStatusUnknown, nil
+	}
+	return mapTaskStatus(*status), nil
+}
+
+func mapTaskStatus(s rest.V1TaskStatus) RunStatus {
+	switch string(s) {
+	case string(RunStatusQueued):
+		return RunStatusQueued
+	case string(RunStatusRunning):
+		return RunStatusRunning
+	case string(RunStatusCompleted):
+		return RunStatusCompleted
+	case string(RunStatusFailed):
+		return RunStatusFailed
+	case string(RunStatusCancelled):
+		return RunStatusCancelled
+	default:
+		return RunStatus(s)
+	}
 }
 
 // CancelRun requests cancellation of an active workflow run.

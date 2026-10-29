@@ -22,6 +22,15 @@ type ScheduleOnceInput struct {
 	Metadata     map[string]any // Optional metadata attached to the scheduled run
 }
 
+// ScheduledRun represents a scheduled one-off workflow run.
+type ScheduledRun struct {
+	ID           string                   `json:"id"`
+	WorkflowName string                   `json:"workflowName"`
+	TriggerAt    time.Time                `json:"triggerAt"`
+	Status       string                   `json:"status,omitempty"`
+	Raw          *rest.ScheduledWorkflows `json:"-"`
+}
+
 // ScheduleOnce schedules a workflow to execute once at a future time (dueTime semantics).
 func ScheduleOnce(ctx context.Context, client *Client, in ScheduleOnceInput) (scheduledRunID string, err error) {
 	if client == nil || !client.Enabled() || client.Schedules() == nil {
@@ -69,12 +78,34 @@ func CancelScheduled(ctx context.Context, client *Client, scheduledRunID string)
 	return client.Schedules().Delete(ctx, id)
 }
 
-// ListScheduled lists scheduled workflow runs matching the given filter params.
-func ListScheduled(ctx context.Context, client *Client, opts rest.WorkflowScheduledListParams) (*rest.ScheduledWorkflowsList, error) {
+// ListScheduled lists scheduled workflow runs matching the given filter params as clean ScheduledRun models.
+func ListScheduled(ctx context.Context, client *Client, opts rest.WorkflowScheduledListParams) ([]ScheduledRun, error) {
 	if client == nil || !client.Enabled() || client.Schedules() == nil {
 		return nil, fmt.Errorf("hatchetx: client disabled")
 	}
-	return client.Schedules().List(ctx, opts)
+	res, err := client.Schedules().List(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil || res.Rows == nil {
+		return nil, nil
+	}
+	runs := make([]ScheduledRun, 0, len(*res.Rows))
+	for _, row := range *res.Rows {
+		status := ""
+		if row.WorkflowRunStatus != nil {
+			status = string(*row.WorkflowRunStatus)
+		}
+		r := row
+		runs = append(runs, ScheduledRun{
+			ID:           row.Metadata.Id,
+			WorkflowName: row.WorkflowName,
+			TriggerAt:    row.TriggerAt,
+			Status:       status,
+			Raw:          &r,
+		})
+	}
+	return runs, nil
 }
 
 // ScheduleOnce schedules a one-off workflow execution at a future time on this client.
@@ -88,6 +119,6 @@ func (c *Client) CancelScheduled(ctx context.Context, scheduledRunID string) err
 }
 
 // ListScheduled lists scheduled workflow runs matching the given filter params on this client.
-func (c *Client) ListScheduled(ctx context.Context, opts rest.WorkflowScheduledListParams) (*rest.ScheduledWorkflowsList, error) {
+func (c *Client) ListScheduled(ctx context.Context, opts rest.WorkflowScheduledListParams) ([]ScheduledRun, error) {
 	return ListScheduled(ctx, c, opts)
 }

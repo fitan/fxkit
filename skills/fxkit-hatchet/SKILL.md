@@ -5,7 +5,7 @@ description: >-
   outbox + inbox, multi-step DAG workflows, durable tasks, cron reminders, one-off delayed
   runs (ScheduleOnce), rate limits, run lifecycle management, and semantic actors (concurrency mailbox).
   Use when the user mentions Hatchet, hatchetx, outbox, PushEvent, WithWorkflowEvents, CreateReminder,
-  ScheduleOnce, NewActor, actorId concurrency, durable workflow, DAG tasks, or reliable async processing.
+  ScheduleOnce, NewActor, ProvideEventHandler, ProvideTask, actorId concurrency, durable workflow, DAG tasks, or reliable async processing.
   Read this before inventing Kafka consumer groups or reintroducing Dapr for async.
 ---
 
@@ -71,22 +71,26 @@ runID, err := client.RunNoWait(ctx, "order-workflow", input)
 refs, err := client.RunMany(ctx, "batch-job", []hatchetx.RunManyOpt{...})
 ```
 
-### 2. Run 生命周期管控（取消、回放、状态、流式日志）
+### 2. Run 生命周期管控（领域模型：屏蔽底层 REST 结构体）
 
 ```go
-// 查询执行状态
+// 1. 查询执行状态（强类型枚举：QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED）
 status, err := client.GetRunStatus(ctx, runID)
+if status == hatchetx.RunStatusCompleted {
+    // 执行成功
+}
 
-// 获取完整详情
-details, err := client.GetRun(ctx, runID)
+// 2. 获取结构化详情（彻底封装屏蔽底层的指针代码）
+info, err := client.GetRun(ctx, runID)
+// info.Status, info.ErrorMessage, info.StartedAt, info.FinishedAt, info.DurationMs
 
-// 取消正在执行的任务
+// 3. 取消正在执行的任务
 err := client.CancelRun(ctx, runID)
 
-// 失败任务重新回放
+// 4. 失败任务重新回放
 err := client.ReplayRun(ctx, runID)
 
-// 实时订阅日志 / 事件流
+// 5. 实时订阅日志 / 事件流
 streamChan, err := client.SubscribeToStream(ctx, runID)
 ```
 
@@ -129,9 +133,48 @@ _ = hatchetx.DeleteActorReminder(ctx, client, "device-heartbeat-check", "ping", 
 
 ---
 
+## 声明式任务与事件订阅（极简单行注册）
+
+fxkit 针对事件驱动与独立定时任务提供了高层声明式 Option，直接在 `di.Module` 或模块初始化中一行注册：
+
+### 1. 订阅事件（Event Handler）
+
+```go
+// 极简一行声明事件消费者（自动注入共享 Worker，无需手动拼装 Task 样板代码）：
+var UserEventsModule = di.Module("user-events",
+    hatchetx.ProvideEventHandler(
+        "users-on-user-created", // task 名（相同 task 名在多副本间竞争消费，不同 task 名多重扇出）
+        "user-created",          // event key (topic)
+        func(ctx hatchetx.Context, ev UserCreatedEvent) error {
+            return svc.inbox.Once(ctx, outbox.OnceInput{
+                Key:   "user-created:" + ev.UserID,
+                Topic: "user-created",
+                Fn:    func(ctx context.Context) error { return svc.Handle(ctx, ev) },
+            })
+        },
+    ),
+)
+```
+
+### 2. 独立定时任务（Cron Task）
+
+```go
+var JobsModule = di.Module("jobs",
+    hatchetx.ProvideTask(
+        "daily-report",
+        func(ctx hatchetx.Context) error {
+            return svc.GenerateReport(ctx)
+        },
+        hatchetx.WithWorkflowCron("@daily"),
+    ),
+)
+```
+
+---
+
 ## 多步 DAG 工作流与持久化长任务（Durable Task）
 
-通过 `ProvideWorkflow` / `ProvideWorkflows` 声明并自动注册进 shared worker：
+对于复杂的业务流水线，继续采用 Hatchet 官方原生的标准模式进行声明，并使用 `ProvideWorkflow` / `ProvideWorkflowFn` 注入：
 
 ### 1. 多步骤 DAG 工作流
 
@@ -229,23 +272,6 @@ return client.Transaction(ctx, func(txCtx context.Context) error {
 })
 ```
 
-### 消费（事件订阅 + Inbox 幂等去重）
-
-```go
-task := client.NewStandaloneTask(
-    "users-on-user-created",
-    func(ctx hatchetx.Context, ev UserCreatedEvent) (map[string]any, error) {
-        err := svc.inbox.Once(ctx, outbox.OnceInput{
-            Key:   "user-created:" + ev.UserID,
-            Topic: "user-created",
-            Fn:    func(ctx context.Context) error { return svc.Handle(ctx, ev) },
-        })
-        return map[string]any{"ok": err == nil}, err
-    },
-    hatchetx.WithWorkflowEvents("user-created"),
-)
-```
-
 ---
 
 ## 语义 Actor（并发并发邮箱模式）
@@ -276,9 +302,11 @@ out, err := actor.Call(ctx, client, CounterInput{
 
 ## 开发者与 Agent 检查清单
 
-- [ ] 注册原生工作流优先使用 `hatchetx.ProvideWorkflow(wf)` 或 `ProvideWorkflows(...)`。
+- [ ] 注册简单事件驱动任务，优先使用单行 `hatchetx.ProvideEventHandler("name", "topic", fn)`。
+- [ ] 注册简单定时任务，优先使用单行 `hatchetx.ProvideTask("name", fn, WithWorkflowCron("@daily"))`。
+- [ ] 注册复杂多步流程，使用原生 `client.NewWorkflow` + `hatchetx.ProvideWorkflow(wf)`。
 - [ ] 长时间等待或审批流使用 `DurableContext`（`SleepFor` / `WaitForEvent`），严禁使用内存 `time.Sleep`。
 - [ ] 延迟一次性触发用 `ScheduleOnce`；循环心跳才使用 `CreateReminder` / `UpsertReminder`。
-- [ ] 外部未封装的能力统一走 `client.Raw()` 逃生通道，无需自行破坏客户端生命周期。
+- [ ] 外部未封装的能力统一走 `client.Raw()` 逃生通道。
 - [ ] 事件消息严格结合 Outbox（生产者）与 `inbox.Once`（消费者），确保可靠消息传递与幂等。
 - [ ] Actor 请求入参必须序列化出 JSON 字段 `actorId`。
