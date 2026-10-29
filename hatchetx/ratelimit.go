@@ -13,6 +13,12 @@ import (
 // RateLimitDuration aliases Hatchet's native rate limit time windows.
 type RateLimitDuration = types.RateLimitDuration
 
+// RateLimitListParams aliases query options for listing rate limits.
+type RateLimitListParams = rest.RateLimitListParams
+
+// RateLimitList aliases the result of listing rate limits.
+type RateLimitList = rest.RateLimitList
+
 const (
 	RateLimitSecond RateLimitDuration = types.Second
 	RateLimitMinute RateLimitDuration = types.Minute
@@ -47,7 +53,7 @@ func (c *Client) UpsertRateLimit(ctx context.Context, key string, limit int, dur
 }
 
 // ListRateLimits retrieves all configured rate limits matching the criteria.
-func (c *Client) ListRateLimits(ctx context.Context, opts *rest.RateLimitListParams) (*rest.RateLimitList, error) {
+func (c *Client) ListRateLimits(ctx context.Context, opts *RateLimitListParams) (*RateLimitList, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("hatchetx: client disabled")
 	}

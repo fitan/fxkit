@@ -10,6 +10,9 @@ import (
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 )
 
+// WorkflowScheduledListParams aliases Hatchet's scheduled run query filter options.
+type WorkflowScheduledListParams = rest.WorkflowScheduledListParams
+
 // ScheduleOnceInput configures a one-off scheduled workflow execution at a future time.
 //
 // Unlike recurring cron reminders ([CreateReminder]), ScheduleOnce fires once at RunAt
@@ -79,7 +82,7 @@ func CancelScheduled(ctx context.Context, client *Client, scheduledRunID string)
 }
 
 // ListScheduled lists scheduled workflow runs matching the given filter params as clean ScheduledRun models.
-func ListScheduled(ctx context.Context, client *Client, opts rest.WorkflowScheduledListParams) ([]ScheduledRun, error) {
+func ListScheduled(ctx context.Context, client *Client, opts WorkflowScheduledListParams) ([]ScheduledRun, error) {
 	if client == nil || !client.Enabled() || client.Schedules() == nil {
 		return nil, fmt.Errorf("hatchetx: client disabled")
 	}
@@ -119,6 +122,6 @@ func (c *Client) CancelScheduled(ctx context.Context, scheduledRunID string) err
 }
 
 // ListScheduled lists scheduled workflow runs matching the given filter params on this client.
-func (c *Client) ListScheduled(ctx context.Context, opts rest.WorkflowScheduledListParams) ([]ScheduledRun, error) {
+func (c *Client) ListScheduled(ctx context.Context, opts WorkflowScheduledListParams) ([]ScheduledRun, error) {
 	return ListScheduled(ctx, c, opts)
 }
