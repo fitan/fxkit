@@ -24,6 +24,7 @@ import (
 	"github.com/fitan/fxkit/server"
 )
 
+// Module 提供 JWT 校验、Casbin 授权、路由权限登记与管理 API。
 var Module = di.Module("fxkit/authz",
 	config.Provide[Config]("auth"),
 	func(i di.Injector) {
@@ -72,7 +73,7 @@ var Module = di.Module("fxkit/authz",
 	},
 )
 
-// validatorParams is the Fx input for [NewValidator].
+// validatorParams 是 [NewValidator] 的 Fx 入参。
 type validatorParams struct {
 	Config *Config
 	LC     *di.Lifecycle `optional:"true"`

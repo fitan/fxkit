@@ -1,6 +1,6 @@
 package crudx
 
-// Operator is a ZStack q= condition operator.
+// Operator 是 ZStack q= 条件操作符。
 type Operator int
 
 const (
@@ -18,23 +18,23 @@ const (
 	OpNotNull
 )
 
-// FieldKind is the expected type of a filterable column.
+// FieldKind 是可过滤列的预期类型。
 type FieldKind int
 
 const (
 	FieldString FieldKind = iota
 	FieldNumber
 	FieldBool
-	FieldTime // RFC3339 string or unix seconds (int64)
+	FieldTime // RFC3339 字符串或 unix 秒（int64）
 )
 
-// ConditionGroup is a set of conditions combined with AND, or OR when Or is true.
+// ConditionGroup 是一组条件，默认用 AND 组合；Or 为 true 时用 OR 组合。
 type ConditionGroup struct {
 	Or    bool
 	Conds []Condition
 }
 
-// FieldSpec describes a filterable column on the root resource or a relation.
+// FieldSpec 描述根资源或关联上的可过滤列。
 //
 // Indexed 与 Likeable 是**两个独立概念**：
 //
@@ -70,7 +70,7 @@ const (
 	RelationToMany
 )
 
-// RelationSpec describes a joinable association for dotted field paths.
+// RelationSpec 描述点号字段路径可 JOIN 的关联。
 type RelationSpec struct {
 	Table  string
 	Alias  string
@@ -81,17 +81,17 @@ type RelationSpec struct {
 	Cardinality RelationCardinality
 }
 
-// ListSpec is the filter/sort whitelist for [List] / [ApplyList].
-// Only names listed here may appear in q= or sortBy.
+// ListSpec 是 [List] / [ApplyList] 的过滤/排序白名单。
+// 只有此处列出的名称才能出现在 q= 或 sortBy 中。
 type ListSpec struct {
 	Fields      map[string]FieldSpec
 	Relations   map[string]*RelationSpec
-	SortFields  map[string]string // API path -> SQL column/expression
+	SortFields  map[string]string // API 路径 -> SQL 列/表达式
 	DefaultSort string
 	Limits      Limits
 }
 
-// Condition is a parsed q= expression.
+// Condition 是解析后的 q= 表达式。
 type Condition struct {
 	Field  string
 	Op     Operator
@@ -99,7 +99,7 @@ type Condition struct {
 	RawQ   string
 }
 
-// resolvedField holds SQL column and joins needed for a field path.
+// resolvedField 保存字段路径所需的 SQL 列与 JOIN。
 type resolvedField struct {
 	Column string
 	Joins  []joinPlan
@@ -107,6 +107,6 @@ type resolvedField struct {
 
 type joinPlan struct {
 	Alias       string
-	SQL         string // full LEFT JOIN ... ON ...
+	SQL         string // 完整的 LEFT JOIN ... ON ...
 	Cardinality RelationCardinality
 }

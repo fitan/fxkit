@@ -37,7 +37,7 @@ func TestRuns_DisabledClient(t *testing.T) {
 func TestRuns_EmptyParameters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	// Even if enabled was true, empty runID checks run before SDK calls
+	// 即使 enabled 为 true，空 runID 校验也会先于 SDK 调用执行
 	c := &Client{}
 	if _, err := c.GetRun(ctx, ""); err == nil {
 		t.Fatal("expected error for empty runId")

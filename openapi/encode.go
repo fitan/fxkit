@@ -9,17 +9,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SpecVersion is an OpenAPI document version to emit.
+// SpecVersion 是要输出的 OpenAPI 文档版本。
 type SpecVersion string
 
 const (
-	// Spec30 is OpenAPI 3.0.3 (Huma Downgrade). Preferred for oapi-codegen.
+	// Spec30 是 OpenAPI 3.0.3（Huma Downgrade）。推荐用于 oapi-codegen。
 	Spec30 SpecVersion = "3.0"
-	// Spec31 is native Huma OpenAPI 3.1.
+	// Spec31 是 Huma 原生的 OpenAPI 3.1。
 	Spec31 SpecVersion = "3.1"
 )
 
-// Format is the serialization of an encoded spec.
+// Format 是编码后规范的序列化格式。
 type Format string
 
 const (
@@ -27,16 +27,16 @@ const (
 	FormatJSON Format = "json"
 )
 
-// EncodeInput controls [Encode]. Zero value is OpenAPI 3.0 YAML (oapi-codegen).
+// EncodeInput 控制 [Encode] 的行为。零值为 OpenAPI 3.0 YAML（oapi-codegen）。
 type EncodeInput struct {
-	Version SpecVersion // default [Spec30]
-	Format  Format      // default [FormatYAML]
-	// Base is an optional static spec merged under the live Huma document
-	// (same rules as [MergeBaseHuma]).
+	Version SpecVersion // 默认 [Spec30]
+	Format  Format      // 默认 [FormatYAML]
+	// Base 是可选的静态规范，会合并到实时 Huma 文档之下
+	// （规则与 [MergeBaseHuma] 相同）。
 	Base []byte
 }
 
-// ParseSpecVersion accepts "3.0" / "3.0.3" / "3.1" / "3.1.0".
+// ParseSpecVersion 接受 "3.0" / "3.0.3" / "3.1" / "3.1.0"。
 func ParseSpecVersion(s string) (SpecVersion, error) {
 	switch strings.TrimSpace(s) {
 	case "", "3.0", "3.0.3":
@@ -48,7 +48,7 @@ func ParseSpecVersion(s string) (SpecVersion, error) {
 	}
 }
 
-// ParseFormat accepts yaml / yml / json.
+// ParseFormat 接受 yaml / yml / json。
 func ParseFormat(s string) (Format, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "yaml", "yml":
@@ -60,7 +60,7 @@ func ParseFormat(s string) (Format, error) {
 	}
 }
 
-// Encode serializes a live Huma OpenAPI document.
+// Encode 序列化实时的 Huma OpenAPI 文档。
 func Encode(api huma.API, in EncodeInput) ([]byte, error) {
 	if api == nil {
 		return nil, fmt.Errorf("openapi encode: nil Huma API")

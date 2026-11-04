@@ -45,7 +45,7 @@ func TestSyncRouteCatalog(t *testing.T) {
 	if err := e.SyncRouteCatalog(routes); err != nil {
 		t.Fatal(err)
 	}
-	// upsert again with updated summary
+	// 用更新后的 summary 再 upsert 一次
 	routes[0].Summary = "列出全部用户"
 	if err := e.SyncRouteCatalog(routes); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestSyncRouteCatalog(t *testing.T) {
 		t.Fatalf("%+v", rows[0])
 	}
 
-	// seed more rows for paging
+	// 再插入若干行用于分页
 	for i := 0; i < 5; i++ {
 		if _, err := e.CreateAPIPermission(t.Context(), CreateAPIPermissionInput{
 			Method: "GET", Path: fmt.Sprintf("/paged/%d", i), Summary: "page item",

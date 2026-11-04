@@ -242,8 +242,8 @@ func TestParseHTTPQValues_decode(t *testing.T) {
 func TestParseHTTPQValues_literalPercent(t *testing.T) {
 	got, err := ParseHTTPQValues([]string{"state=done", "description=discount 20%"})
 	if err != nil {
-		// A literal % is not a valid escape: ParseHTTPQValues must keep the raw string
-		// instead of failing, so clients can still search for "20%".
+		// 字面量 % 不是合法的转义：ParseHTTPQValues 必须保留原始字符串而不是报错，
+		// 以便客户端仍能搜索 "20%"。
 		t.Logf("ParseHTTPQValues error: %v", err)
 	} else if len(got) != 2 {
 		t.Fatalf("got %v", got)
@@ -264,7 +264,7 @@ func TestParseHTTPQValues_decodeFailed(t *testing.T) {
 
 func TestParseQConditions_numericStringField(t *testing.T) {
 	spec := testSpec()
-	// Test querying FieldString with pure numeric values (e.g. state=100 or phone=13800138000)
+	// 测试用纯数字值查询 FieldString（例如 state=100 或 phone=13800138000）
 	conds, err := ParseQConditions(spec, []string{"state=100", `name="456"`})
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
@@ -308,9 +308,9 @@ func TestParseQConditions_operatorPriority(t *testing.T) {
 
 func TestParseQConditions_operatorEarliestPosition(t *testing.T) {
 	spec := testSpec()
-	// When a query value contains characters of another operator, the earliest operator
-	// should be matched, not the operator that appears earlier in the opTokens slice.
-	// 1. Equal value containing '~' (like operator): name=a~b
+	// 当查询值中包含另一个操作符的字符时，应匹配位置最靠前的操作符，
+	// 而不是 opTokens 切片中更早出现的操作符。
+	// 1. 等值中包含 '~'（like 操作符）：name=a~b
 	conds, err := ParseQConditions(spec, []string{"name=a~b"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -319,7 +319,7 @@ func TestParseQConditions_operatorEarliestPosition(t *testing.T) {
 		t.Fatalf("unexpected cond: %+v", conds[0])
 	}
 
-	// 2. Like value containing '=': name~a=b
+	// 2. like 值中包含 '='：name~a=b
 	conds, err = ParseQConditions(spec, []string{"name~a=b"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -328,7 +328,7 @@ func TestParseQConditions_operatorEarliestPosition(t *testing.T) {
 		t.Fatalf("unexpected cond: %+v", conds[0])
 	}
 
-	// 3. Equal value containing '!=': description=1!=2
+	// 3. 等值中包含 '!='：description=1!=2
 	conds, err = ParseQConditions(spec, []string{"description=1!=2"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

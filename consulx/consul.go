@@ -116,7 +116,7 @@ func registerStartupMeta(lc *di.Lifecycle, disc *Config, app *config.App, srv *s
 				}
 				select {
 				case <-ctx.Done():
-					// Soft-fail: Consul is optional at startup; do not abort the process.
+					// 软失败：Consul 在启动时是可选的；不要中止进程。
 					slog.Warn("consul meta patch canceled",
 						"service", appName, "port", targetPort, "err", ctx.Err(),
 					)
@@ -137,8 +137,8 @@ func consulServiceName(appNameFromConfig string) string {
 	return strings.TrimSpace(appNameFromConfig)
 }
 
-// consulServiceID uniquely identifies a replica: name + advertise address + port.
-// Name+port alone collides when multiple hosts expose the same listen port.
+// consulServiceID 唯一标识一个副本：name + advertise 地址 + 端口。
+// 当多台主机暴露同一监听端口时，仅用 Name+port 会冲突。
 func consulServiceID(name, addr string, port int) string {
 	return name + "-" + sanitizeConsulIDPart(addr) + "-" + strconv.Itoa(port)
 }
@@ -270,7 +270,7 @@ func listAgentChecksByService(ctx context.Context, client *http.Client, base str
 		if sid == "" {
 			continue
 		}
-		// Drop status/runtime fields; keep definition fields for re-register.
+		// 丢弃 status/runtime 字段；保留定义类字段以便重新注册。
 		def := agentCheck{
 			CheckID:                        c.CheckID,
 			Name:                           c.Name,

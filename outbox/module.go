@@ -10,9 +10,9 @@ import (
 	"github.com/fitan/fxkit/gormx"
 )
 
-// Module wires [Store], [Inbox], and when outbox.enabled is true, migrates tables and starts [Relay].
-// Included in [github.com/fitan/fxkit.Default]; relay stays off until outbox.enabled=true.
-// Publisher is an [EventPublisher] from hatchetx (hatchet.outbox_publisher) or [ProvidePublisher].
+// Module 装配 [Store]、[Inbox]，并在 outbox.enabled 为 true 时迁移表并启动 [Relay]。
+// 已包含在 [github.com/fitan/fxkit.Default] 中；outbox.enabled=true 之前 relay 保持关闭。
+// Publisher 是来自 hatchetx 的 [EventPublisher]（hatchet.outbox_publisher）或 [ProvidePublisher]。
 var Module = di.Module("fxkit/outbox",
 	config.Provide[Config]("outbox"),
 	func(i di.Injector) {

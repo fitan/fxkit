@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// casbinRule is the Postgres row for Casbin policies (compatible with casbin_rule schema).
-// Unique key is ptype+v0+v1+v2 (this model only stores sub/obj/act). v1 is 255 to match
-// authz_api_permission.path; v3–v5 are omitted from the unique index so MySQL utf8mb4
-// stays under the 3072-byte limit.
+// casbinRule 是 Casbin 策略的 Postgres 行（兼容 casbin_rule 表结构）。
+// 唯一键为 ptype+v0+v1+v2（本模型只存 sub/obj/act）。v1 取 255 以对齐
+// authz_api_permission.path；v3–v5 不进入唯一索引，使 MySQL utf8mb4
+// 保持在 3072 字节限制内。
 type casbinRule struct {
 	ID    uint   `gorm:"primaryKey;autoIncrement"`
 	Ptype string `gorm:"column:ptype;size:100;uniqueIndex:uk_casbin_rule"`
@@ -24,7 +24,7 @@ type casbinRule struct {
 	V5    string `gorm:"column:v5;size:100"`
 }
 
-// gormAdapter persists Casbin policies via GORM (avoids gorm-adapter / dbresolver clashes).
+// gormAdapter 通过 GORM 持久化 Casbin 策略（避免 gorm-adapter / dbresolver 冲突）。
 type gormAdapter struct {
 	db        *gorm.DB
 	tableName string
@@ -115,12 +115,12 @@ func (a *gormAdapter) RemoveFilteredPolicy(_ string, ptype string, fieldIndex in
 	return q.Delete(&casbinRule{}).Error
 }
 
-// replacePoliciesForSub atomically replaces all p rules whose v0 is sub.
+// replacePoliciesForSub 原子替换所有 v0 为 sub 的 p 规则。
 func (a *gormAdapter) replacePoliciesForSub(sub string, rules [][]string) error {
 	return a.replaceRules("p", sub, rules)
 }
 
-// replaceGroupingsForUser atomically replaces all g rules whose v0 is user.
+// replaceGroupingsForUser 原子替换所有 v0 为 user 的 g 规则。
 func (a *gormAdapter) replaceGroupingsForUser(user string, rules [][]string) error {
 	return a.replaceRules("g", user, rules)
 }

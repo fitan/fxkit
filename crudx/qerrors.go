@@ -2,7 +2,7 @@ package crudx
 
 import "github.com/fitan/fxkit/fxerrors"
 
-// Query error reason codes (ZStack-style q= parsing).
+// 查询错误原因码（ZStack 风格的 q= 解析）。
 const (
 	ReasonNoOperator             = "NO_OPERATOR"
 	ReasonFieldNotExist          = "FIELD_NOT_EXIST"
@@ -23,7 +23,7 @@ const (
 	ReasonCursorRelationSort   = "CURSOR_RELATION_SORT_UNSUPPORTED"
 )
 
-// InvalidQueryCondition returns HTTP 400 for q= parse/validation failures.
+// InvalidQueryCondition 为 q= 解析/校验失败返回 HTTP 400。
 func InvalidQueryCondition(rawQ, reason string) *fxerrors.Error {
 	return fxerrors.BadRequest("查询条件解析失败").WithDetails(map[string]any{
 		"code":   "INVALID_QUERY_CONDITION",

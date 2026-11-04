@@ -176,7 +176,7 @@ func TestGetByID(t *testing.T) {
 }
 
 func TestFormatPrimaryKey(t *testing.T) {
-	newListTestDB(t) // resolves + caches ModelMeta for listTestModel
+	newListTestDB(t) // 解析并缓存 listTestModel 的 ModelMeta
 	m := listTestModel{ID: 42}
 	id, err := FormatPrimaryKey(&m)
 	if err != nil || id != "42" {
@@ -316,7 +316,7 @@ func TestList_CursorPagination_DescSecondPageWithoutDirection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	spec := listTestSpec() // DefaultSort "id asc"
+	spec := listTestSpec() // DefaultSort 为 "id asc"
 	toRow := func(m listTestModel) listTestRow { return listTestRow{ID: m.ID, Name: m.Name} }
 
 	page1, err := List(ctx, ListInput[listTestModel, listTestRow]{

@@ -26,15 +26,15 @@ import (
 type HTTPRoute struct {
 	Method      string
 	Path        string
-	Permission  string   // legacy: only used when Casbin is disabled
+	Permission  string   // 遗留字段：仅在 Casbin 关闭时使用
 	OperationID string   // Huma OperationID
 	Summary     string   // Huma Summary（权限中文/说明）
 	Description string   // Huma Description
 	Tags        []string // Huma Tags
 }
 
-// normalizeRequestPath trims space and a trailing slash so findRoute and Casbin
-// Enforce see the same path (GET /users/ ≡ /users).
+// normalizeRequestPath 去掉首尾空白与末尾斜杠，使 findRoute 与 Casbin
+// Enforce 看到同一条路径（GET /users/ ≡ /users）。
 func normalizeRequestPath(path string) string {
 	path = strings.TrimSpace(path)
 	path = strings.TrimSuffix(path, "/")
@@ -56,7 +56,7 @@ func findRoute(routes []HTTPRoute, method, path string) (HTTPRoute, bool) {
 	return indexRoutes(routes).find(method, path)
 }
 
-// skipAuthzPath is true for built-in Huma spec/docs/schema routes (always public).
+// skipAuthzPath 对 Huma 内置的 spec/docs/schema 路由返回 true（始终公开）。
 //
 // 必须按「路径段」匹配：早期的 strings.HasPrefix(p, "/docs") 会把 /docs-evil、
 // /openapix 这类完全无关的路径也当成公开路径放行。
@@ -270,7 +270,7 @@ func ProvideHTTPRoutes(fn any) di.Option {
 	}
 }
 
-// Method helpers for route tables.
+// 路由表使用的 Method 常量。
 const (
 	MethodGet    = http.MethodGet
 	MethodPost   = http.MethodPost

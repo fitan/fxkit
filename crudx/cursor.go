@@ -11,15 +11,15 @@ import (
 	"github.com/fitan/fxkit/fxerrors"
 )
 
-// cursorPayload is the opaque list cursor (sort value + primary key tie-breaker).
+// cursorPayload 是不透明的列表游标（排序值 + 用于打破平局的主键）。
 type cursorPayload struct {
 	V  any    `json:"v"`
 	PK string `json:"pk"`
-	SB string `json:"sb,omitempty"` // sortBy at encode time
-	SD string `json:"sd,omitempty"` // sortDirection
+	SB string `json:"sb,omitempty"` // 编码时的 sortBy
+	SD string `json:"sd,omitempty"` // 排序方向
 }
 
-// EncodeCursor builds an opaque cursor token for keyset pagination.
+// EncodeCursor 为 keyset 分页构建不透明的游标 token。
 func EncodeCursor(sortBy, sortDir string, sortValue any, pk string) (string, error) {
 	pk = strings.TrimSpace(pk)
 	if pk == "" {
@@ -37,7 +37,7 @@ func EncodeCursor(sortBy, sortDir string, sortValue any, pk string) (string, err
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// DecodeCursor parses an opaque cursor token.
+// DecodeCursor 解析不透明的游标 token。
 func DecodeCursor(token string) (sortBy, sortDir string, sortValue any, pk string, err error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -82,7 +82,7 @@ func normalizeCursorValue(v any) any {
 	}
 }
 
-// cursorWhereSQL builds the keyset predicate for the next page.
+// cursorWhereSQL 为下一页构建 keyset 谓词。
 //
 // 排序统一把 NULL 放在最后（见 applyList 的 "(col IS NULL)" 首列），因此：
 //   - sortVal 为 nil 时表示已经翻到 NULL 分组，只需按主键继续翻；

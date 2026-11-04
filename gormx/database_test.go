@@ -17,7 +17,7 @@ func TestSlogAdapterRespectsSilent(t *testing.T) {
 	if a.level <= slog.LevelError {
 		t.Fatalf("silent level should be above Error, got %v", a.level)
 	}
-	// Trace must not panic under silent.
+	// 在 silent 级别下 Trace 不得 panic。
 	a.Trace(context.Background(), time.Now(), func() (string, int64) {
 		return "SELECT 1", 1
 	}, nil)
@@ -101,10 +101,10 @@ func TestSlogAdapterLogsSlowQuery(t *testing.T) {
 	slog.SetDefault(slog.New(h))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	// Level is Warn, threshold is 50ms
+	// 级别为 Warn，阈值为 50ms
 	a := newSlogAdapter("warn", 50*time.Millisecond).(*slogAdapter)
 
-	// Simulate fast query (1ms ago)
+	// 模拟快查询（1ms 前）
 	a.Trace(context.Background(), time.Now().Add(-1*time.Millisecond), func() (string, int64) {
 		return "SELECT fast", 1
 	}, nil)
@@ -112,7 +112,7 @@ func TestSlogAdapterLogsSlowQuery(t *testing.T) {
 		t.Fatalf("fast query logged as slow: %s", buf.String())
 	}
 
-	// Simulate slow query (100ms ago)
+	// 模拟慢查询（100ms 前）
 	a.Trace(context.Background(), time.Now().Add(-100*time.Millisecond), func() (string, int64) {
 		return "SELECT slow", 1
 	}, nil)

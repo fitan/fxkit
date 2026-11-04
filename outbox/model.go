@@ -2,7 +2,7 @@ package outbox
 
 import "time"
 
-// Status values for [OutboxEvent].
+// [OutboxEvent] 的状态值。
 const (
 	StatusPending    = "pending"
 	StatusProcessing = "processing"
@@ -10,22 +10,22 @@ const (
 	StatusFailed     = "failed"
 )
 
-// MetadataIdempotencyKey is the event metadata key carrying the
-// producer idempotency key. Consumers can use [Inbox.Once] with the same key.
+// MetadataIdempotencyKey 是承载生产端幂等 key 的事件 metadata 键。
+// 消费端可用相同的 key 调用 [Inbox.Once]。
 const MetadataIdempotencyKey = "outbox.idempotency_key"
 
-// OutboxEvent is a row in the transactional outbox table. Written inside the same
-// DB transaction as business data; relay publishes via Hatchet after commit.
+// OutboxEvent 是事务性 outbox 表中的一行。它与业务数据写入在同一个
+// DB 事务内；relay 在提交之后通过 Hatchet 投递。
 //
-// Claiming sets status=processing, LeaseID, LockedAt, and increments Attempts.
-// A live relay heartbeats LockedAt while publishing. Another replica may reclaim
-// when LockedAt is older than outbox.claim_timeout (crash / lost lease).
-// Completion uses compare-and-swap on LeaseID so a stale markFailed cannot
-// resurrect a published row. Delivery remains at-least-once on the wire.
+// 认领会设置 status=processing、LeaseID、LockedAt，并递增 Attempts。
+// 活跃的 relay 在投递期间心跳刷新 LockedAt。当 LockedAt 早于
+// outbox.claim_timeout 时（崩溃 / 租约丢失），另一个副本可以重新认领。
+// 完成时基于 LeaseID 做比较并交换，因此陈旧的 markFailed 不会让已投递的行复活。
+// 投递在链路上仍是至少一次。
 //
-// IdempotencyKey, when set, is unique: duplicate Enqueue is a no-op unless the
-// existing row is failed (then it is reset to pending). The key is attached to
-// event metadata for consumer-side dedup ([Inbox]).
+// IdempotencyKey 一旦设置即唯一：重复 Enqueue 是空操作，除非已存在的行处于
+// failed（此时会被重置为 pending）。该 key 会附加到事件 metadata 上，
+// 供消费端去重（[Inbox]）。
 type OutboxEvent struct {
 	ID             uint64     `gorm:"primaryKey"`
 	Pubsub         string     `gorm:"size:128;not null"`
@@ -41,5 +41,5 @@ type OutboxEvent struct {
 	PublishedAt    *time.Time `gorm:"index"`
 }
 
-// TableName overrides the default GORM table name.
+// TableName 覆盖 GORM 默认表名。
 func (OutboxEvent) TableName() string { return "outbox_events" }

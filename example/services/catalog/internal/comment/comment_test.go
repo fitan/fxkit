@@ -52,7 +52,7 @@ func TestCommentService_CRUDAndFilters(t *testing.T) {
 
 	noteVal := "pinned note"
 
-	// 1. Create Comment 1 (带 note)
+	// 1. 创建 Comment 1（带 note）
 	c1, err := svc.Create(ctx, comment.CreateCommentReq{
 		ArticleID: art.ID,
 		Body:      "First comment body",
@@ -64,7 +64,7 @@ func TestCommentService_CRUDAndFilters(t *testing.T) {
 	assert.Equal(t, "First comment body", c1.Body)
 	assert.Equal(t, &noteVal, c1.Note)
 
-	// 2. Create Comment 2 (Note 为空)
+	// 2. 创建 Comment 2（Note 为空）
 	c2, err := svc.Create(ctx, comment.CreateCommentReq{
 		ArticleID: art.ID,
 		Body:      "Second comment without note",
@@ -73,21 +73,21 @@ func TestCommentService_CRUDAndFilters(t *testing.T) {
 	assert.True(t, c2.ID > 0)
 	assert.Nil(t, c2.Note)
 
-	// 3. Validation - Empty Body
+	// 3. 校验 —— Body 为空
 	_, err = svc.Create(ctx, comment.CreateCommentReq{
 		ArticleID: art.ID,
 		Body:      "   ",
 	})
 	assert.Error(t, err)
 
-	// 4. Validation - Zero ArticleID
+	// 4. 校验 —— ArticleID 为 0
 	_, err = svc.Create(ctx, comment.CreateCommentReq{
 		ArticleID: 0,
 		Body:      "valid body",
 	})
 	assert.Error(t, err)
 
-	// 5. List with isNull filter (note.isnull)
+	// 5. 带 isNull 过滤的列表查询（note.isnull）
 	resNull, err := svc.List(ctx, crudx.ListParams{
 		Q:     []string{"note.isnull"},
 		Limit: 10,
@@ -96,7 +96,7 @@ func TestCommentService_CRUDAndFilters(t *testing.T) {
 	assert.Equal(t, 1, len(resNull.Items))
 	assert.Equal(t, c2.ID, resNull.Items[0].ID)
 
-	// 6. List with or() filter
+	// 6. 带 or() 过滤的列表查询
 	resOr, err := svc.List(ctx, crudx.ListParams{
 		Q:     []string{"or(body~First,body~Second)"},
 		Limit: 10,
@@ -104,7 +104,7 @@ func TestCommentService_CRUDAndFilters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(resOr.Items))
 
-	// 7. Delete (软删除)
+	// 7. 删除（软删除）
 	err = svc.Delete(ctx, fmt.Sprintf("%d", c1.ID))
 	require.NoError(t, err)
 

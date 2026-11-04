@@ -82,7 +82,7 @@ func TestRepoCRUD(t *testing.T) {
 		t.Fatalf("ExistsWhere: %v %v", ok, err)
 	}
 
-	// Idempotent update (same values) must not return NotFound.
+	// 幂等更新（值相同）不得返回 NotFound。
 	if err := repo.Update(ctx, crudx.UpdateInput[demoUser]{Entity: u}); err != nil {
 		t.Fatalf("idempotent update: %v", err)
 	}

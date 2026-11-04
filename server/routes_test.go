@@ -21,7 +21,7 @@ func TestRegisterRoutes_SkipsInvalidEntries(t *testing.T) {
 			Routes: []Route{
 				{Pattern: "", Handler: http.NotFoundHandler()},         // 空 pattern
 				{Pattern: "no-slash", Handler: http.NotFoundHandler()}, // 缺前导斜杠
-				{Pattern: "/nil-handler", Handler: nil},                // nil handler
+				{Pattern: "/nil-handler", Handler: nil},                // 处理器为 nil
 				{Pattern: "/bad-method", Handler: http.NotFoundHandler(), Methods: []string{""}},
 				{Pattern: "/ok", Handler: http.NotFoundHandler()}, // 唯一合法的
 			},

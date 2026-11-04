@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 )
 
-// endpointPool holds a thread-safe list of host:port targets and picks them round-robin.
+// endpointPool 持有线程安全的 host:port 目标列表，并以 round-robin 方式选取。
 type endpointPool struct {
 	mu        sync.RWMutex
 	endpoints []string
@@ -85,8 +85,8 @@ func normalizeEndpoints(raw []string) []string {
 	return out
 }
 
-// parseEndpoint accepts "host", "host:port", "http://host:port/path", "[ipv6]:port".
-// Returns host:port (or bare host) suitable for url.URL.Host.
+// parseEndpoint 接受 "host"、"host:port"、"http://host:port/path"、"[ipv6]:port"。
+// 返回适合作为 url.URL.Host 的 host:port（或裸 host）。
 func parseEndpoint(raw string) (string, bool) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -99,14 +99,14 @@ func parseEndpoint(raw string) (string, bool) {
 		}
 		return u.Host, true
 	}
-	// Bare host or host:port / [ipv6]:port
+	// 裸 host 或 host:port / [ipv6]:port
 	if host, port, err := net.SplitHostPort(s); err == nil {
 		if strings.TrimSpace(host) == "" {
 			return "", false
 		}
 		return net.JoinHostPort(host, port), true
 	}
-	// No port — still valid (scheme default port later, or domain-only).
+	// 无端口 —— 仍然有效（后续使用 scheme 默认端口，或仅为域名）。
 	if strings.Contains(s, "/") {
 		return "", false
 	}
@@ -118,7 +118,7 @@ func joinHostPort(addr string, port int) string {
 	if addr == "" || port <= 0 {
 		return ""
 	}
-	// Address may already include port (unusual but tolerate).
+	// 地址可能已包含端口（不常见，但需要容忍这种情况）。
 	if _, _, err := net.SplitHostPort(addr); err == nil {
 		return addr
 	}

@@ -13,18 +13,18 @@ func TestScheduleOnce_Validation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// nil client
+	// client 为 nil
 	if _, err := ScheduleOnce(ctx, nil, ScheduleOnceInput{}); err == nil || !strings.Contains(err.Error(), "client disabled") {
 		t.Fatalf("expected client disabled error, got %v", err)
 	}
 
-	// disabled client
+	// 禁用的 client
 	disabled := &Client{}
 	if _, err := ScheduleOnce(ctx, disabled, ScheduleOnceInput{}); err == nil || !strings.Contains(err.Error(), "client disabled") {
 		t.Fatalf("expected client disabled error, got %v", err)
 	}
 
-	// client method wrapper
+	// client 方法包装
 	if _, err := disabled.ScheduleOnce(ctx, ScheduleOnceInput{}); err == nil || !strings.Contains(err.Error(), "client disabled") {
 		t.Fatalf("expected client disabled error from client method, got %v", err)
 	}

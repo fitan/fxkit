@@ -13,15 +13,15 @@ import (
 	"go.opentelemetry.io/otel/codes"
 )
 
-// EventPublisher publishes raw payload bytes to a topic (Hatchet event key = topic name).
-// Inject implementations with [ProvidePublisher] (Hatchet is provided by hatchetx
-// when hatchet.outbox_publisher is true). Last non-nil publisher wins.
+// EventPublisher 把原始 payload 字节投递到 topic（Hatchet event key = topic 名）。
+// 通过 [ProvidePublisher] 注入实现（当 hatchet.outbox_publisher 为 true 时
+// Hatchet 由 hatchetx 提供）。最后一个非 nil 的 publisher 生效。
 type EventPublisher interface {
 	PublishEvent(ctx context.Context, pubsubName, topicName string, data []byte, metadata map[string]string) error
 }
 
-// ProvidePublisher publishes an [EventPublisher] into the outbox_publishers fx group.
-// Use this to drive the relay with Kafka / NATS / RabbitMQ instead of (or after) Hatchet.
+// ProvidePublisher 把一个 [EventPublisher] 发布进 outbox_publishers fx group。
+// 用它驱动 relay 使用 Kafka / NATS / RabbitMQ，替代（或接在）Hatchet 之后。
 func ProvidePublisher(fn any) di.Option {
 	return func(i di.Injector) {
 		switch f := fn.(type) {
@@ -35,7 +35,7 @@ func ProvidePublisher(fn any) di.Option {
 	}
 }
 
-// Relay polls the outbox table and publishes pending events.
+// Relay 轮询 outbox 表并投递 pending 事件。
 type Relay struct {
 	client    *gormx.Client
 	publisher EventPublisher
@@ -47,14 +47,14 @@ type Relay struct {
 	notify chan struct{}
 }
 
-// NewRelayParams is the Fx-friendly constructor input for [NewRelay].
+// NewRelayParams 是 [NewRelay] 的 Fx 友好构造函数入参。
 type NewRelayParams struct {
 	Client     *gormx.Client
 	Outbox     *Config
 	Publishers []EventPublisher
 }
 
-// NewRelay builds a Relay. The last non-nil [EventPublisher] in the fx group is used.
+// NewRelay 构造 Relay。使用 fx group 中最后一个非 nil 的 [EventPublisher]。
 func NewRelay(p NewRelayParams) *Relay {
 	outboxCfg := Config{}
 	if p.Outbox != nil {
@@ -82,7 +82,7 @@ func pickPublisher(pubs []EventPublisher) EventPublisher {
 	return pub
 }
 
-// SetPublisher replaces the publisher (for tests).
+// SetPublisher 替换 publisher（用于测试）。
 func (r *Relay) SetPublisher(pub EventPublisher) {
 	if r == nil {
 		return
@@ -98,7 +98,7 @@ func (r *Relay) getPublisher() EventPublisher {
 	return r.publisher
 }
 
-// Notify wakes up the relay polling loop immediately to process new events without waiting for the ticker.
+// Notify 立即唤醒 relay 轮询循环处理新事件，不必等待 ticker。
 func (r *Relay) Notify() {
 	if r == nil {
 		return
@@ -109,7 +109,7 @@ func (r *Relay) Notify() {
 	}
 }
 
-// batchResult is the outcome of one [Relay.processBatch] call.
+// batchResult 是一次 [Relay.processBatch] 调用的结果。
 type batchResult struct {
 	Published int
 	Claimed   int
@@ -119,8 +119,8 @@ type batchResult struct {
 	Failed int
 }
 
-// ProcessBatch claims and publishes up to batch_size pending (or stale processing) events.
-// The int result is the number of rows marked published.
+// ProcessBatch 认领并投递最多 batch_size 条 pending（或陈旧 processing）事件。
+// 返回的 int 是被标记为 published 的行数。
 func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
 	res, err := r.processBatch(ctx)
 	return res.Published, err
@@ -360,8 +360,8 @@ func (r *Relay) markFailed(ctx context.Context, ev OutboxEvent, maxRetries int, 
 	return res.RowsAffected, res.Error
 }
 
-// Start begins the polling loop in a background goroutine.
-// It sets up cancellation and waitgroup before returning, avoiding goroutine leaks on fast shutdown.
+// Start 在后台 goroutine 中启动轮询循环。
+// 它在返回前就设置好取消与 waitgroup，避免快速关闭时 goroutine 泄漏。
 func (r *Relay) Start(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -387,7 +387,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	return nil
 }
 
-// Run polls synchronously until Stop is called or ctx is cancelled.
+// Run 同步轮询，直到调用 Stop 或 ctx 被取消。
 func (r *Relay) Run(ctx context.Context) {
 	if r == nil {
 		return
@@ -434,7 +434,7 @@ func (r *Relay) runLoop(runCtx context.Context, interval time.Duration) {
 	}
 }
 
-// Stop cancels the Run loop and waits for it to exit.
+// Stop 取消 Run 循环并等待其退出。
 func (r *Relay) Stop() {
 	r.mu.Lock()
 	cancel := r.cancel

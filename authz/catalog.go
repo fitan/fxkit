@@ -13,17 +13,17 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// APIPermission is the catalog row for a protected API (Huma op metadata + path/method).
-// Separate from casbin_rule so admin UIs can list “what this permission is”.
+// APIPermission 是被保护 API 的目录行（Huma op 元数据 + path/method）。
+// 与 casbin_rule 分开存放，便于管理端 UI 展示「这条权限是什么」。
 type APIPermission struct {
 	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	Method      string    `gorm:"size:16;uniqueIndex:uk_authz_api;not null" json:"method"`
-	Path        string    `gorm:"size:255;uniqueIndex:uk_authz_api;not null" json:"path"` // Huma `{id}` form
-	Pattern     string    `gorm:"size:255" json:"pattern"`                                // Casbin `:id` form
+	Path        string    `gorm:"size:255;uniqueIndex:uk_authz_api;not null" json:"path"` // Huma 的 `{id}` 形式
+	Pattern     string    `gorm:"size:255" json:"pattern"`                                // Casbin 的 `:id` 形式
 	OperationID string    `gorm:"size:128" json:"operation_id"`
 	Summary     string    `gorm:"size:255" json:"summary"`
 	Description string    `gorm:"size:1024" json:"description"`
-	Tags        string    `gorm:"size:255" json:"tags"` // comma-separated
+	Tags        string    `gorm:"size:255" json:"tags"` // 逗号分隔
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
@@ -33,7 +33,7 @@ func ensurePermissionCatalog(db *gorm.DB) error {
 	return db.AutoMigrate(&APIPermission{})
 }
 
-// SyncRouteCatalog upserts Huma metadata for each route (idempotent on method+path).
+// SyncRouteCatalog 为每条路由 upsert Huma 元数据（按 method+path 幂等）。
 func (e *Enforcer) SyncRouteCatalog(routes []HTTPRoute) error {
 	if e == nil || e.db == nil || len(routes) == 0 {
 		return nil
@@ -74,7 +74,7 @@ func (e *Enforcer) SyncRouteCatalog(routes []HTTPRoute) error {
 	}).Create(&rows).Error
 }
 
-// ListRouteCatalog returns all registered API permissions (for admin / debugging).
+// ListRouteCatalog 返回全部已登记的 API 权限（供管理端 / 排查使用）。
 func (e *Enforcer) ListRouteCatalog() ([]APIPermission, error) {
 	if e == nil || e.db == nil {
 		return nil, nil
@@ -86,15 +86,15 @@ func (e *Enforcer) ListRouteCatalog() ([]APIPermission, error) {
 	return rows, nil
 }
 
-// ListRouteCatalogInput pages/filters the permission catalog.
+// ListRouteCatalogInput 对权限目录做分页/过滤。
 type ListRouteCatalogInput struct {
 	Start          int
 	Limit          int
-	Q              string // substring match on method/path/pattern/operation_id/summary/tags
+	Q              string // 在 method/path/pattern/operation_id/summary/tags 上做子串匹配
 	ReplyWithCount bool
 }
 
-// ListRouteCatalogResult is a paged catalog response.
+// ListRouteCatalogResult 是分页后的目录响应。
 type ListRouteCatalogResult struct {
 	Items []APIPermission
 	Total *int64
@@ -102,7 +102,7 @@ type ListRouteCatalogResult struct {
 	Limit int
 }
 
-// ListRouteCatalogPage returns a page of catalog rows.
+// ListRouteCatalogPage 返回一页目录行。
 func (e *Enforcer) ListRouteCatalogPage(ctx context.Context, in ListRouteCatalogInput) (ListRouteCatalogResult, error) {
 	_ = ctx
 	if e == nil || e.db == nil {
@@ -145,7 +145,7 @@ func (e *Enforcer) ListRouteCatalogPage(ctx context.Context, in ListRouteCatalog
 	return ListRouteCatalogResult{Items: rows, Total: total, Start: start, Limit: limit}, nil
 }
 
-// CreateAPIPermissionInput creates one catalog row (manual admin entry).
+// CreateAPIPermissionInput 创建一条目录行（管理端手工录入）。
 type CreateAPIPermissionInput struct {
 	Method      string
 	Path        string
@@ -155,7 +155,7 @@ type CreateAPIPermissionInput struct {
 	Tags        []string
 }
 
-// UpdateAPIPermissionInput updates a catalog row by id (method/path may change).
+// UpdateAPIPermissionInput 按 id 更新目录行（method/path 允许变更）。
 type UpdateAPIPermissionInput struct {
 	ID          uint
 	Method      string
@@ -166,7 +166,7 @@ type UpdateAPIPermissionInput struct {
 	Tags        []string
 }
 
-// DeleteAPIPermissionInput deletes a catalog row by id.
+// DeleteAPIPermissionInput 按 id 删除目录行。
 type DeleteAPIPermissionInput struct {
 	ID uint
 }
@@ -213,7 +213,7 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
-// CreateAPIPermission inserts a catalog row.
+// CreateAPIPermission 插入一条目录行。
 func (e *Enforcer) CreateAPIPermission(ctx context.Context, in CreateAPIPermissionInput) (*APIPermission, error) {
 	_ = ctx
 	if err := e.requireCatalogDB(); err != nil {
@@ -237,7 +237,7 @@ func (e *Enforcer) CreateAPIPermission(ctx context.Context, in CreateAPIPermissi
 	return &row, nil
 }
 
-// UpdateAPIPermission updates a catalog row by id.
+// UpdateAPIPermission 按 id 更新目录行。
 func (e *Enforcer) UpdateAPIPermission(ctx context.Context, in UpdateAPIPermissionInput) (*APIPermission, error) {
 	_ = ctx
 	if err := e.requireCatalogDB(); err != nil {
@@ -282,7 +282,7 @@ func (e *Enforcer) UpdateAPIPermission(ctx context.Context, in UpdateAPIPermissi
 	return &existing, nil
 }
 
-// DeleteAPIPermission removes a catalog row by id (does not touch Casbin p rules).
+// DeleteAPIPermission 按 id 删除目录行（不触碰 Casbin 的 p 规则）。
 func (e *Enforcer) DeleteAPIPermission(ctx context.Context, in DeleteAPIPermissionInput) error {
 	_ = ctx
 	if err := e.requireCatalogDB(); err != nil {
@@ -301,7 +301,7 @@ func (e *Enforcer) DeleteAPIPermission(ctx context.Context, in DeleteAPIPermissi
 	return nil
 }
 
-// GetAPIPermission returns one catalog row by id.
+// GetAPIPermission 按 id 返回一条目录行。
 func (e *Enforcer) GetAPIPermission(ctx context.Context, id uint) (*APIPermission, error) {
 	_ = ctx
 	if err := e.requireCatalogDB(); err != nil {
@@ -320,7 +320,7 @@ func (e *Enforcer) GetAPIPermission(ctx context.Context, id uint) (*APIPermissio
 	return &row, nil
 }
 
-// HTTPRouteFromOperation copies Huma operation identity fields into an [HTTPRoute].
+// HTTPRouteFromOperation 把 Huma operation 的身份字段复制到 [HTTPRoute]。
 func HTTPRouteFromOperation(op huma.Operation) HTTPRoute {
 	tags := append([]string(nil), op.Tags...)
 	return HTTPRoute{
@@ -333,7 +333,7 @@ func HTTPRouteFromOperation(op huma.Operation) HTTPRoute {
 	}
 }
 
-// HTTPRoutesFromOperations converts Huma operations to authz routes (skips empty Path).
+// HTTPRoutesFromOperations 把 Huma operation 转换为 authz 路由（跳过空 Path）。
 func HTTPRoutesFromOperations(ops ...huma.Operation) []HTTPRoute {
 	out := make([]HTTPRoute, 0, len(ops))
 	for _, op := range ops {
@@ -345,8 +345,8 @@ func HTTPRoutesFromOperations(ops ...huma.Operation) []HTTPRoute {
 	return out
 }
 
-// HTTPRoutesFromOpenAPI copies live Huma operations into HTTPRoute rows so
-// RegisterResource / Register without ProvideHTTPRoutes still get Casbin policies.
+// HTTPRoutesFromOpenAPI 把当前生效的 Huma operation 复制成 HTTPRoute 行，
+// 使未走 ProvideHTTPRoutes 的 RegisterResource / Register 也能获得 Casbin 策略。
 func HTTPRoutesFromOpenAPI(api huma.API) []HTTPRoute {
 	if api == nil {
 		return nil

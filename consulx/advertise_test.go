@@ -11,7 +11,7 @@ import (
 
 func TestDetectLocalIP_SkipsEmptyConsul(t *testing.T) {
 	ip := detectLocalIP("")
-	// May be empty on exotic hosts; when present must not be loopback.
+	// 在特殊主机上可能为空；存在时不得是回环地址。
 	if ip == "127.0.0.1" || ip == "::1" {
 		t.Fatalf("unexpected loopback %q", ip)
 	}

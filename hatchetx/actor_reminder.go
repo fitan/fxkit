@@ -11,27 +11,27 @@ import (
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 )
 
-// CreateReminderInput schedules a recurring Hatchet cron that delivers input to a workflow.
+// CreateReminderInput 定义一个周期性 Hatchet cron，向 workflow 投递输入。
 //
-// Semantics:
-//   - period only: runs on schedule until deleted (no dueTime / one-shot mode)
-//   - missed schedules are not replayed
-//   - when Upsert is true, any existing reminder with the same workflow and Name is replaced
+// 语义：
+//   - 仅 period：按计划一直运行直到被删除（没有 dueTime / 一次性模式）
+//   - 错过的调度不会补跑
+//   - Upsert 为 true 时，替换同一 workflow 和 Name 下已存在的定时提醒
 type CreateReminderInput struct {
-	WorkflowName string // actor / standalone task name
-	Name         string // cron trigger name; default reminderName-actorId
+	WorkflowName string // actor / standalone task 名称
+	Name         string // cron 触发器名称；默认 reminderName-actorId
 	ActorType    string
-	ActorID      string // required; stamped into input as actorId for concurrency
+	ActorID      string // 必填；作为 actorId 写入输入，用于并发
 	ReminderName string
-	Period       string         // standard cron (e.g. "*/15 * * * * *") or @hourly, @daily
-	Data         string         // optional payload data
-	Metadata     map[string]any // optional Hatchet cron metadata
-	Input        map[string]any // optional full cron input; default ReminderPayload fields
-	Upsert       bool           // if true, replace any existing cron with the same name
+	Period       string         // 标准 cron（例如 "*/15 * * * * *"）或 @hourly、@daily
+	Data         string         // 可选载荷数据
+	Metadata     map[string]any // 可选 Hatchet cron metadata
+	Input        map[string]any // 可选完整 cron 输入；默认使用 ReminderPayload 字段
+	Upsert       bool           // 为 true 时替换同名已存在的 cron
 }
 
-// ReminderPayload is the default input shape delivered to actor reminder workflows.
-// Embeds [ActorRef] so the target actor's concurrency key (input.actorId) is set.
+// ReminderPayload 是投递给 actor 定时提醒 workflow 的默认输入结构。
+// 内嵌 [ActorRef]，以便设置目标 actor 的并发键（input.actorId）。
 type ReminderPayload struct {
 	ActorRef
 	ActorType    string `json:"actorType"`
@@ -39,8 +39,8 @@ type ReminderPayload struct {
 	Data         string `json:"data,omitempty"`
 }
 
-// CreateReminder attaches a recurring Hatchet cron to a workflow (reminder-like ticks).
-// When in.Upsert is true, replaces any existing cron trigger with the same name.
+// CreateReminder 给 workflow 挂上周期性 Hatchet cron（类似定时提醒的滴答）。
+// 当 in.Upsert 为 true 时，替换同名已存在的 cron 触发器。
 func CreateReminder(ctx context.Context, client *Client, in CreateReminderInput) (cronID string, err error) {
 	if client == nil || !client.Enabled() || client.Crons() == nil {
 		return "", fmt.Errorf("hatchetx: client disabled")
@@ -85,7 +85,7 @@ func CreateReminder(ctx context.Context, client *Client, in CreateReminderInput)
 			return "", err
 		}
 	} else {
-		// Always stamp the validated actorId so concurrency keys stay correct.
+		// 始终写入已校验的 actorId，保证并发键正确。
 		payload = cloneMap(payload)
 		payload["actorId"] = actorID
 	}
@@ -117,13 +117,13 @@ func CreateReminder(ctx context.Context, client *Client, in CreateReminderInput)
 	return created.Metadata.Id, nil
 }
 
-// UpsertReminder creates or replaces a recurring reminder by name.
+// UpsertReminder 按名称创建或替换周期性定时提醒。
 func UpsertReminder(ctx context.Context, client *Client, in CreateReminderInput) (string, error) {
 	in.Upsert = true
 	return CreateReminder(ctx, client, in)
 }
 
-// FindReminder looks up an existing cron trigger for a workflow by cronName.
+// FindReminder 按 cronName 查找 workflow 已存在的 cron 触发器。
 func FindReminder(ctx context.Context, client *Client, workflowName, cronName string) (*rest.CronWorkflows, error) {
 	if client == nil || !client.Enabled() || client.Crons() == nil {
 		return nil, fmt.Errorf("hatchetx: client disabled")
@@ -154,7 +154,7 @@ func FindReminder(ctx context.Context, client *Client, workflowName, cronName st
 	return nil, nil
 }
 
-// FindActorReminder looks up an existing reminder for an actor instance by workflowName, reminderName and actorID.
+// FindActorReminder 按 workflowName、reminderName 和 actorID 查找 actor 实例已存在的定时提醒。
 func FindActorReminder(ctx context.Context, client *Client, workflowName, reminderName, actorID string) (*rest.CronWorkflows, error) {
 	reminder := strings.TrimSpace(reminderName)
 	id := strings.TrimSpace(actorID)
@@ -165,7 +165,7 @@ func FindActorReminder(ctx context.Context, client *Client, workflowName, remind
 	return FindReminder(ctx, client, workflowName, cronName)
 }
 
-// DeleteActorReminder removes an existing reminder for an actor instance by workflowName, reminderName and actorID.
+// DeleteActorReminder 按 workflowName、reminderName 和 actorID 删除 actor 实例已存在的定时提醒。
 func DeleteActorReminder(ctx context.Context, client *Client, workflowName, reminderName, actorID string) error {
 	reminder := strings.TrimSpace(reminderName)
 	id := strings.TrimSpace(actorID)
@@ -176,7 +176,7 @@ func DeleteActorReminder(ctx context.Context, client *Client, workflowName, remi
 	return DeleteReminderByName(ctx, client, workflowName, cronName)
 }
 
-// DeleteReminderByName deletes an existing cron trigger by workflow and cronName.
+// DeleteReminderByName 按 workflow 和 cronName 删除已存在的 cron 触发器。
 func DeleteReminderByName(ctx context.Context, client *Client, workflowName, cronName string) error {
 	found, err := FindReminder(ctx, client, workflowName, cronName)
 	if err != nil {
@@ -188,8 +188,8 @@ func DeleteReminderByName(ctx context.Context, client *Client, workflowName, cro
 	return DeleteReminder(ctx, client, found.Metadata.Id)
 }
 
-// DeleteReminder removes a Hatchet cron by id.
-// In-flight runs are not cancelled; only future cron triggers stop.
+// DeleteReminder 按 id 删除 Hatchet cron。
+// 正在进行的运行不会被取消；只是停止后续的 cron 触发。
 //
 // 已知 SDK 问题：Hatchet 服务端对 DELETE 返回 204 No Content，而 Go SDK（截至
 // v0.116.x）的 CronsClient.Delete 只接受 200，会把成功当失败返回。

@@ -35,8 +35,8 @@ func New(_ context.Context, next http.Handler, cfg *Config, _ string) (http.Hand
 			next.ServeHTTP(w, r)
 			return
 		}
-		// SPA fallback so Logto can redirect to /callback.
-		// Do not rewrite to /index.html: FileServer 301s that to / and drops ?code=.
+		// SPA 回退，好让 Logto 能重定向到 /callback。
+		// 不要重写到 /index.html：FileServer 会把它 301 到 / 并丢掉 ?code=。
 		if r.URL.Path == "/callback" || r.URL.Path == "/callback/" {
 			r.URL.Path = "/"
 		}

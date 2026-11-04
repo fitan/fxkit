@@ -364,7 +364,7 @@ func TestApplyList_inNull(t *testing.T) {
 		q    string
 		want int64
 	}{
-		// description: id1 NULL, id2 "notes", id3 "prod"
+		// description：id1 为 NULL，id2 为 "notes"，id3 为 "prod"
 		{"description.in:null", 1},
 		{"description.in:notes,null", 2},
 		{"description.notin:null", 2},

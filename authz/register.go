@@ -19,8 +19,8 @@ type autoRegisterParams struct {
 	API      huma.API
 }
 
-// registerRoutesOnStart syncs ProvideHTTPRoutes plus live Huma OpenAPI operations
-// into Casbin policies for bootstrap_role (so RegisterResource is covered).
+// registerRoutesOnStart 把 ProvideHTTPRoutes 与当前生效的 Huma OpenAPI operation
+// 同步为 bootstrap_role 的 Casbin 策略（从而覆盖 RegisterResource）。
 func registerRoutesOnStart(p autoRegisterParams) {
 	if p.LC != nil {
 		p.LC.Append(di.Hook{
@@ -78,8 +78,8 @@ func registerRoutesOnStart(p autoRegisterParams) {
 	}
 }
 
-// PoliciesFromRoutes builds Casbin p rules: role may Method on Path.
-// Empty Method becomes "*".
+// PoliciesFromRoutes 构建 Casbin p 规则：角色可以对 Path 执行 Method。
+// Method 为空时变为 "*"。
 func PoliciesFromRoutes(role string, routes []HTTPRoute) []Policy {
 	role = strings.TrimSpace(role)
 	if role == "" || len(routes) == 0 {

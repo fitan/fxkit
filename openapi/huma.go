@@ -19,8 +19,8 @@ func FromHuma(api huma.API) ([]byte, error) {
 	return b, nil
 }
 
-// MergeBaseHuma merges an optional base OpenAPI YAML with the live Huma document.
-// Empty base → Huma only; nil/empty Huma → base only.
+// MergeBaseHuma 将可选的 base OpenAPI YAML 与实时 Huma 文档合并。
+// base 为空 → 仅 Huma；Huma 为 nil/空 → 仅 base。
 func MergeBaseHuma(baseYAML []byte, api huma.API) ([]byte, error) {
 	humaYAML, err := FromHuma(api)
 	if err != nil {

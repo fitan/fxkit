@@ -47,7 +47,7 @@ discovery:
 	t.Setenv(envConsulHTTPToken, "secret-token")
 
 	cfg, err := New(Options{
-		ConfigFile:      "", // consul-only
+		ConfigFile:      "", // 仅用 consul
 		ConsulAddress:   srv.URL,
 		ConsulConfigKey: "config/myapp.yaml",
 	})
@@ -74,7 +74,7 @@ discovery:
 	if err := cfg.UnmarshalKey("discovery", &disc); err != nil {
 		t.Fatal(err)
 	}
-	// --consul is only the config source; discovery stays independent.
+	// --consul 只是配置来源；discovery 保持独立。
 	if disc.ConsulAddress != "" {
 		t.Fatalf("discovery.consul_address = %q, want empty (not seeded from --consul)", disc.ConsulAddress)
 	}

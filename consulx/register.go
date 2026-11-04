@@ -50,8 +50,8 @@ type registerSelfParams struct {
 	Server *server.Config
 }
 
-// registerSelfLifecycle registers app.name on the Consul agent when discovery.register is true.
-// Uses a TTL check (process heartbeats) so remote/Docker Consul need not HTTP-probe the app.
+// registerSelfLifecycle 在 discovery.register 为 true 时，把 app.name 注册到 Consul agent。
+// 使用 TTL 检查（进程心跳），这样远端/Docker 中的 Consul 无需对应用做 HTTP 探测。
 func registerSelfLifecycle(p registerSelfParams) {
 	if p.Disc == nil {
 		return

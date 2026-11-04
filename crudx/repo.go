@@ -11,8 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Repo is an optional generic GORM helper. Prefer [List] plus explicit service
-// methods for writes; new code does not need to embed *Repo[T].
+// Repo 是可选的泛型 GORM 辅助类型。写操作优先使用 [List] 加显式的 service 方法；
+// 新代码无需内嵌 *Repo[T]。
 type Repo[T any] struct {
 	client        *gormx.Client
 	spec          ListSpec
@@ -20,34 +20,34 @@ type Repo[T any] struct {
 	meta          *ModelMeta
 }
 
-// RepoConfig configures [NewRepo].
+// RepoConfig 配置 [NewRepo]。
 type RepoConfig struct {
 	Client        *gormx.Client
 	Spec          ListSpec
-	UpdateColumns []string // required for [Repo.Update] unless UpdateInput.Columns is set
+	UpdateColumns []string // [Repo.Update] 必需，除非设置了 UpdateInput.Columns
 }
 
-// UpdateInput is the write payload for [Repo.Update].
+// UpdateInput 是 [Repo.Update] 的写入载荷。
 type UpdateInput[T any] struct {
 	Entity  *T
-	Columns []string // optional Select whitelist; empty uses RepoConfig.UpdateColumns
+	Columns []string // 可选的 Select 白名单；为空时使用 RepoConfig.UpdateColumns
 }
 
-// ListOpt customizes [Repo.List] (preload / select).
+// ListOpt 定制 [Repo.List]（预加载 / select）。
 type ListOpt struct {
 	Preload []string
 	Select  []string
 }
 
-// WhereInput drives [Repo.First] / [Repo.Exists].
+// WhereInput 驱动 [Repo.First] / [Repo.Exists]。
 type WhereInput struct {
-	Query  string // e.g. "email = ?"
+	Query  string // 例如 "email = ?"
 	Args   []any
-	Detail string // optional NotFound detail, e.g. "email=a@example.com"
+	Detail string // 可选的 NotFound 详情，例如 "email=a@example.com"
 }
 
-// NewRepo constructs an optional typed repository. Call once at wiring time if you
-// use [Repo]; most services should call [List] / [FirstByID] instead.
+// NewRepo 构造可选的类型化仓储。若使用 [Repo]，在装配时调用一次即可；
+// 大多数 service 应改用 [List] / [FirstByID]。
 func NewRepo[T any](cfg RepoConfig) (*Repo[T], error) {
 	if cfg.Client == nil || cfg.Client.Pool() == nil {
 		return nil, fxerrors.Internal("crudx.Repo: nil gorm client")
@@ -64,34 +64,34 @@ func NewRepo[T any](cfg RepoConfig) (*Repo[T], error) {
 	}, nil
 }
 
-// Client returns the underlying gormx client (for outbox / shared tx helpers).
+// Client 返回底层 gormx 客户端（用于 outbox / 共享事务辅助函数）。
 func (r *Repo[T]) Client() *gormx.Client { return r.client }
 
-// Spec returns the list filter/sort registry.
+// Spec 返回列表过滤/排序注册表。
 func (r *Repo[T]) Spec() ListSpec { return r.spec }
 
-// Meta returns cached GORM model metadata.
+// Meta 返回缓存的 GORM 模型元数据。
 func (r *Repo[T]) Meta() *ModelMeta { return r.meta }
 
-// DB returns a request-scoped query already bound to model T / its table.
+// DB 返回已绑定模型 T 及其表的请求级查询。
 func (r *Repo[T]) DB(ctx context.Context) *gorm.DB {
 	var zero T
 	return r.client.Conn(ctx).Model(&zero).Table(r.meta.Table)
 }
 
-// Migrate runs AutoMigrate for T.
+// Migrate 对 T 执行 AutoMigrate。
 func (r *Repo[T]) Migrate(ctx context.Context) error {
 	var zero T
 	return r.client.Conn(ctx).AutoMigrate(&zero)
 }
 
-// Transaction runs fn inside a DB transaction (nested-safe via gormx).
+// Transaction 在数据库事务内执行 fn（借助 gormx 支持嵌套）。
 func (r *Repo[T]) Transaction(ctx context.Context, fn func(ctx context.Context) error) error {
 	return r.client.Transaction(ctx, fn)
 }
 
-// Create inserts entity. Only auto-increment numeric primary keys are cleared;
-// client-generated keys (UUID / business IDs) are preserved.
+// Create 插入 entity。仅自增数值主键会被清零；
+// 客户端生成的主键（UUID / 业务 ID）会被保留。
 func (r *Repo[T]) Create(ctx context.Context, entity *T) error {
 	if entity == nil {
 		return fxerrors.Internal("crudx.Repo.Create: nil entity")
@@ -103,13 +103,13 @@ func (r *Repo[T]) Create(ctx context.Context, entity *T) error {
 	return nil
 }
 
-// GetByID loads one row by primary-key string.
+// GetByID 按主键字符串加载单行。
 func (r *Repo[T]) GetByID(ctx context.Context, id string) (*T, error) {
 	return FirstByID[T](ctx, r.DB(ctx), id)
 }
 
-// ListTo runs ZStack-style list against T and maps each entity to row DTO type R.
-// Leverages Go 1.27+ generic methods on types.
+// ListTo 对 T 执行 ZStack 风格列表查询，并将每个实体映射为行 DTO 类型 R。
+// 借助 Go 1.27+ 的类型泛型方法。
 func (r *Repo[T]) ListTo[R any](ctx context.Context, params ListParams, toRow func(T) R, opts ...ListOpt) (ListResult[R], error) {
 	var opt ListOpt
 	if len(opts) > 0 {
@@ -128,13 +128,13 @@ func (r *Repo[T]) ListTo[R any](ctx context.Context, params ListParams, toRow fu
 	return List(ctx, in)
 }
 
-// GetByIDTo loads one row by primary key and maps it to target type R.
-// Leverages Go 1.27+ generic methods on types.
+// GetByIDTo 按主键加载单行，并将其映射为目标类型 R。
+// 借助 Go 1.27+ 的类型泛型方法。
 func (r *Repo[T]) GetByIDTo[R any](ctx context.Context, id string, toRow func(T) R) (R, error) {
 	return GetByID[T, R](ctx, r.DB(ctx), id, toRow)
 }
 
-// List runs ZStack-style list against T and returns model rows.
+// List 对 T 执行 ZStack 风格列表查询，并返回模型行。
 func (r *Repo[T]) List(ctx context.Context, params ListParams, opts ...ListOpt) (ListResult[T], error) {
 	var opt ListOpt
 	if len(opts) > 0 {
@@ -153,9 +153,9 @@ func (r *Repo[T]) List(ctx context.Context, params ListParams, opts ...ListOpt) 
 	return List(ctx, in)
 }
 
-// Update writes columns on the entity identified by its primary key.
-// Existence is checked first so unchanged values never surface as NotFound
-// (MySQL may report RowsAffected=0 when data is identical).
+// Update 按主键定位实体并写入指定列。
+// 先检查存在性，避免值未变化时误报 NotFound
+// （MySQL 在数据完全相同时可能返回 RowsAffected=0）。
 func (r *Repo[T]) Update(ctx context.Context, in UpdateInput[T]) error {
 	if in.Entity == nil {
 		return fxerrors.Internal("crudx.Repo.Update: nil entity")
@@ -191,7 +191,7 @@ func (r *Repo[T]) Update(ctx context.Context, in UpdateInput[T]) error {
 	return nil
 }
 
-// Delete removes the row identified by id string (single statement).
+// Delete 删除 id 字符串标识的行（单条语句）。
 func (r *Repo[T]) Delete(ctx context.Context, id string) error {
 	idVal, err := ParseIDString(&r.meta.PKInfo, id)
 	if err != nil {
@@ -209,7 +209,7 @@ func (r *Repo[T]) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// First loads the first row matching in.Query.
+// First 加载匹配 in.Query 的第一行。
 func (r *Repo[T]) First(ctx context.Context, in WhereInput) (*T, error) {
 	if in.Query == "" {
 		return nil, fxerrors.Internal("crudx.Repo.First: empty query")
@@ -228,8 +228,8 @@ func (r *Repo[T]) First(ctx context.Context, in WhereInput) (*T, error) {
 	return &entity, nil
 }
 
-// FirstTo loads the first row matching in.Query and maps it to target type R.
-// Leverages Go 1.27+ generic methods on types.
+// FirstTo 加载匹配 in.Query 的第一行，并将其映射为目标类型 R。
+// 借助 Go 1.27+ 的类型泛型方法。
 func (r *Repo[T]) FirstTo[R any](ctx context.Context, in WhereInput, toRow func(T) R) (R, error) {
 	var zero R
 	entity, err := r.First(ctx, in)
@@ -239,13 +239,13 @@ func (r *Repo[T]) FirstTo[R any](ctx context.Context, in WhereInput, toRow func(
 	return toRow(*entity), nil
 }
 
-// FirstWhere loads the first row matching query (e.g. "email = ?", email).
-// Prefer [First] with Detail for clearer NotFound messages.
+// FirstWhere 加载匹配 query 的第一行（例如 "email = ?", email）。
+// 需要更清晰的 NotFound 消息时优先用带 Detail 的 [First]。
 func (r *Repo[T]) FirstWhere(ctx context.Context, query string, args ...any) (*T, error) {
 	return r.First(ctx, WhereInput{Query: query, Args: args})
 }
 
-// Exists reports whether any row matches in.Query.
+// Exists 报告是否有行匹配 in.Query。
 func (r *Repo[T]) Exists(ctx context.Context, in WhereInput) (bool, error) {
 	if in.Query == "" {
 		return false, fxerrors.Internal("crudx.Repo.Exists: empty query")
@@ -257,7 +257,7 @@ func (r *Repo[T]) Exists(ctx context.Context, in WhereInput) (bool, error) {
 	return n > 0, nil
 }
 
-// ExistsWhere reports whether any row matches query.
+// ExistsWhere 报告是否有行匹配 query。
 func (r *Repo[T]) ExistsWhere(ctx context.Context, query string, args ...any) (bool, error) {
 	return r.Exists(ctx, WhereInput{Query: query, Args: args})
 }

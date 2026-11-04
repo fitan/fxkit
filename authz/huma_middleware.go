@@ -56,7 +56,7 @@ func provideHumaMiddleware(inj di.Injector) fxhuma.MiddlewareRegistrar {
 	})
 }
 
-// HumaMiddlewareConfig configures [NewHumaMiddleware].
+// HumaMiddlewareConfig 配置 [NewHumaMiddleware]。
 type HumaMiddlewareConfig struct {
 	Enabled           bool
 	DevHeaderUser     bool
@@ -165,7 +165,7 @@ func NewHumaMiddleware(cfg HumaMiddlewareConfig) fxhuma.MiddlewareRegistrar {
 	})
 }
 
-// OpPublic is the huma.Operation.Metadata key that skips authz for that operation.
+// OpPublic 是 huma.Operation.Metadata 中用于跳过该 operation 鉴权的键。
 const OpPublic = "authz.public"
 
 func isPublicOperation(op *huma.Operation) bool {
@@ -190,7 +190,7 @@ func resolveSubject(ctx huma.Context, cfg HumaMiddlewareConfig, subjectFn Subjec
 			}
 			return cfg.Validator.Validate(ctx.Context(), raw)
 		}
-		// No JWT validator (typical: casbin + dev_header_user): ignore leftover Bearer.
+		// 没有 JWT 校验器时（典型场景：casbin + dev_header_user）：忽略残留的 Bearer。
 	}
 	if cfg.DevHeaderUser {
 		// 先读 header，避免无 X-User 的请求每次都分配一个 http.Header。
@@ -205,7 +205,7 @@ func resolveSubject(ctx huma.Context, cfg HumaMiddlewareConfig, subjectFn Subjec
 	return Subject{}, errUnauthorized
 }
 
-// maybeAutoBindBootstrap binds subject → bootstrapRole when the subject has no roles yet.
+// maybeAutoBindBootstrap 在主体尚无角色时绑定 主体 → bootstrapRole。
 func maybeAutoBindBootstrap(ctx context.Context, enf *Enforcer, subject, role string) {
 	subject = strings.TrimSpace(subject)
 	role = strings.TrimSpace(role)

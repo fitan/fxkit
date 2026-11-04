@@ -11,7 +11,7 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-// RunStatus represents the execution state of a workflow run.
+// RunStatus 表示 workflow 运行的执行状态。
 type RunStatus string
 
 const (
@@ -23,7 +23,7 @@ const (
 	RunStatusUnknown   RunStatus = "UNKNOWN"
 )
 
-// RunInfo contains structured execution details and status of a workflow run.
+// RunInfo 包含 workflow 运行的结构化执行详情与状态。
 type RunInfo struct {
 	ID           string                     `json:"id"`
 	Status       RunStatus                  `json:"status"`
@@ -35,7 +35,7 @@ type RunInfo struct {
 	Raw          *rest.V1WorkflowRunDetails `json:"-"`
 }
 
-// GetRun returns full details of a workflow run by its run ID as a clean RunInfo domain model.
+// GetRun 按 run ID 返回 workflow 运行的完整详情，并整理为干净的 RunInfo 领域模型。
 func (c *Client) GetRun(ctx context.Context, runID string) (*RunInfo, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("hatchetx: client disabled")
@@ -69,7 +69,7 @@ func (c *Client) GetRun(ctx context.Context, runID string) (*RunInfo, error) {
 	return info, nil
 }
 
-// GetRunStatus returns the current execution status of a workflow run.
+// GetRunStatus 返回 workflow 运行的当前执行状态。
 func (c *Client) GetRunStatus(ctx context.Context, runID string) (RunStatus, error) {
 	if !c.Enabled() {
 		return "", fmt.Errorf("hatchetx: client disabled")
@@ -105,7 +105,7 @@ func mapTaskStatus(s rest.V1TaskStatus) RunStatus {
 	}
 }
 
-// CancelRun requests cancellation of an active workflow run.
+// CancelRun 请求取消活跃的 workflow 运行。
 func (c *Client) CancelRun(ctx context.Context, runID string) error {
 	if !c.Enabled() {
 		return fmt.Errorf("hatchetx: client disabled")
@@ -125,7 +125,7 @@ func (c *Client) CancelRun(ctx context.Context, runID string) error {
 	return err
 }
 
-// ReplayRun requests a replay/retry of a workflow run.
+// ReplayRun 请求重放/重试 workflow 运行。
 func (c *Client) ReplayRun(ctx context.Context, runID string) error {
 	if !c.Enabled() {
 		return fmt.Errorf("hatchetx: client disabled")
@@ -145,7 +145,7 @@ func (c *Client) ReplayRun(ctx context.Context, runID string) error {
 	return err
 }
 
-// SubscribeToStream subscribes to the real-time event/log stream of a workflow run.
+// SubscribeToStream 订阅 workflow 运行的实时事件/日志流。
 func (c *Client) SubscribeToStream(ctx context.Context, runID string) (<-chan string, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("hatchetx: client disabled")

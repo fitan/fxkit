@@ -27,7 +27,7 @@ func NewMux(p MuxParams) *chi.Mux {
 	r := chi.NewRouter()
 
 	slog.Info("──── http mux (middleware) ────")
-	// recover must be outermost so panics in CORS/OTel/body-log are caught.
+	// recover 必须位于最外层，这样 CORS/OTel/body-log 中的 panic 才能被捕获。
 	r.Use(recoverMiddleware)
 	r.Use(sseWriteDeadlineMiddleware)
 	if p.Server != nil && p.Server.AccessLog {
@@ -265,20 +265,18 @@ var ListenerModule = di.Module("fxkit/server/listener",
 				Runtime:   rt,
 			}), nil
 		})
-		// NOTE: intentionally no eager di.Invoke[*HTTPServer] here.
-		// NewMux snapshots the Route/Middleware groups at construction time, so
-		// resolving the listener during graph assembly would build the mux before
-		// modules assembled later (docs / mcpx / host services) contribute their
-		// routes and middlewares, silently dropping every one of them.
+		// 注意：此处刻意不做急切的 di.Invoke[*HTTPServer]。
+		// NewMux 在构造时对 Route/Middleware group 做快照，因此在对象图装配
+		// 期间解析 listener，会让 mux 在后续装配的模块（docs / mcpx / host
+		// services）贡献各自的路由与中间件之前就被构建，从而把它们全部静默丢弃。
 		//
-		// The listener is resolved during PreStart (after PhaseMountHTTP), i.e. once
-		// the whole object graph exists, every module has contributed, and the
-		// routes are mounted. NewHTTPServer registers its bind/shutdown hook at that
-		// point; Lifecycle.Start snapshots lc.hooks *after* PreStart, so the hook is
-		// guaranteed to run.
+		// listener 在 PreStart 阶段（PhaseMountHTTP 之后）解析，也就是在整个对象图
+		// 已就绪、所有模块均已贡献、路由已挂载之后。NewHTTPServer 在此时注册其
+		// bind/shutdown 钩子；Lifecycle.Start 在 PreStart *之后* 才对 lc.hooks
+		// 做快照，因此该钩子必定会执行。
 		//
-		// Resolving it from a Lifecycle.OnStart hook instead would append the bind
-		// hook after the snapshot and the server would never listen.
+		// 若改为在 Lifecycle.OnStart 钩子中解析，bind 钩子会被追加到快照之后，
+		// 服务器将永远不会监听。
 		if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {
 			lc.AppendPreStartPhase(di.PhaseMountHTTP+1, di.Hook{
 				OnStart: func(context.Context) error {

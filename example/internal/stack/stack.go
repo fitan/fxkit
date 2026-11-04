@@ -1,5 +1,5 @@
-// Package stack is fxkit.Default() with docs.MergedModule instead of the
-// placeholder Scalar skeleton. Example services need live Huma on /docs.
+// Package stack 就是 fxkit.Default()，只是用 docs.MergedModule 替换了
+// 占位的 Scalar 骨架。示例服务需要 /docs 上有实时的 Huma。
 package stack
 
 import (
@@ -26,7 +26,7 @@ import (
 )
 
 func init() {
-	// Showcase: gitignored example/tmp/hatchet.token (do not put JWT in tracked yaml).
+	// 示例用途：被 gitignore 的 example/tmp/hatchet.token（不要把 JWT 放进受版本控制的 yaml）。
 	if strings.TrimSpace(os.Getenv("HATCHET_CLIENT_TOKEN")) != "" {
 		return
 	}
@@ -44,9 +44,9 @@ func init() {
 	}
 }
 
-// WithMergedDocs matches [github.com/fitan/fxkit.Default] except /docs and
-// /openapi.{yaml,json} merge baseYAML with the live Huma spec.
-// Pass nil/empty baseYAML for Huma-only.
+// WithMergedDocs 与 [github.com/fitan/fxkit.Default] 一致，区别在于 /docs 和
+// /openapi.{yaml,json} 会把 baseYAML 与实时的 Huma spec 合并。
+// 只想要 Huma 时传 nil/空 baseYAML 即可。
 //
 // 相比 Default()，这里额外注册了一个**启动自检**：在 PreStart 的最后阶段
 // 校验关键 group 非空。如果某个业务模块忘记加进 Run(...)、或贡献点签名

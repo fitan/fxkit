@@ -9,9 +9,9 @@ import (
 func TestPoliciesFromRoutes(t *testing.T) {
 	got := authz.PoliciesFromRoutes("admin", []authz.HTTPRoute{
 		{Method: "GET", Path: "/users"},
-		{Method: "GET", Path: "/users"}, // dedupe
+		{Method: "GET", Path: "/users"}, // 去重
 		{Method: "", Path: "/users/{id}"},
-		{Method: "POST", Path: ""}, // skip
+		{Method: "POST", Path: ""}, // 跳过
 	})
 	if len(got) != 2 {
 		t.Fatalf("len=%d got=%+v", len(got), got)

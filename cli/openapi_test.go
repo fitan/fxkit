@@ -52,7 +52,7 @@ func TestCollectOpenAPI_liveSpec(t *testing.T) {
 }
 
 func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
-	// Simulate an environment where DB or Hatchet fails in OnStart, but OpenAPI can still be generated offline.
+	// 模拟 DB 或 Hatchet 在 OnStart 中失败、但 OpenAPI 仍可离线生成的环境。
 	// 默认（bestEffort=false）会直接失败；输出部分 spec 必须显式选择 best-effort。
 	opts := []di.Option{
 		config.Module,

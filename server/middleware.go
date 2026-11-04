@@ -103,8 +103,8 @@ func corsMiddleware(cfg *Config) func(http.Handler) http.Handler {
 	}
 }
 
-// sseWriteDeadlineMiddleware clears the server WriteTimeout for SSE so
-// long-lived streams are not killed at http.Server.WriteTimeout.
+// sseWriteDeadlineMiddleware 为 SSE 清除服务器 WriteTimeout，使
+// 长连接流不会被 http.Server.WriteTimeout 杀掉。
 func sseWriteDeadlineMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isSSERequest(r) {

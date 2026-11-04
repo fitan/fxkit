@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ListResult is the standard list response envelope.
+// ListResult 是标准的列表响应封装。
 type ListResult[T any] struct {
 	Items      []T     `json:"items"`
 	Total      *int64  `json:"total,omitempty"`
@@ -19,8 +19,8 @@ type ListResult[T any] struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
-// Map transforms ListResult[T] into ListResult[R] using fn, preserving pagination metadata.
-// Leverages Go 1.27+ generic methods on types.
+// Map 用 fn 将 ListResult[T] 转换为 ListResult[R]，并保留分页元数据。
+// 借助 Go 1.27+ 的类型泛型方法。
 func (lr ListResult[T]) Map[R any](fn func(T) R) ListResult[R] {
 	items := make([]R, len(lr.Items))
 	for i, item := range lr.Items {
@@ -35,26 +35,25 @@ func (lr ListResult[T]) Map[R any](fn func(T) R) ListResult[R] {
 	}
 }
 
-// ListInput drives the generic [List] helper for GORM model M into rows of type Row.
+// ListInput 驱动 GORM 模型 M 到 Row 类型行的通用 [List] 辅助函数。
 //
-// DB must already be scoped to the model/table, e.g.:
+// DB 必须已限定到模型/表，例如：
 //
 //	client.Conn(ctx).Model(&M{}).Table("things")
 //
-// ToRow projects each fetched model into the API list row.
+// ToRow 将每个取出的模型投影为 API 列表行。
 type ListInput[M, Row any] struct {
-	DB       *gorm.DB                // scoped base query (Model+Table already set)
-	Spec     ListSpec                // ZStack-style filter/sort registry
-	Params   ListParams              // request params (offset or cursor)
-	ToRow    func(M) Row             // required projection
-	Select   []string                // optional SQL column whitelist for SELECT
-	Preload  func(*gorm.DB) *gorm.DB // optional preload applied before Find
-	Preloads []string                // optional association names to preload e.g. []string{"Profile"}
+	DB       *gorm.DB                // 已限定范围的基准查询（已设置 Model+Table）
+	Spec     ListSpec                // ZStack 风格的过滤/排序注册表
+	Params   ListParams              // 请求参数（offset 或游标）
+	ToRow    func(M) Row             // 必需的投影
+	Select   []string                // 可选的 SELECT 列白名单
+	Preload  func(*gorm.DB) *gorm.DB // 可选，在 Find 之前应用的预加载
+	Preloads []string                // 可选，需要预加载的关联名，例如 []string{"Profile"}
 }
 
-// List runs a ZStack-style list query (filters, sort, offset or keyset cursor),
-// optional count, nextCursor, and DTO projection. Callers own the *gorm.DB.
-// List 执行白名单列表查询（offset 或 keyset cursor）。
+// List 执行 ZStack 风格的白名单列表查询（过滤、排序、offset 或 keyset 游标），
+// 并可选返回 count、nextCursor 与 DTO 投影；*gorm.DB 的所有权归调用方。
 //
 // 内部实现见 listImpl；这里额外记录耗时/行数/错误原因指标。
 func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row], error) {
@@ -101,7 +100,7 @@ func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult
 
 	params := in.Params
 	pkCol := qualifiedColumn(meta.Table, meta.Column)
-	// Filter/sort/cursor without Limit/Offset so Count is accurate regardless of GORM version.
+	// 先应用过滤/排序/游标而不加 Limit/Offset，这样无论 GORM 版本如何 Count 都准确。
 	tx, _, err = applyList(tx, in.Spec, &params, listApplyOpts{
 		PKColumn:   pkCol,
 		PKKind:     meta.Kind,
@@ -117,7 +116,7 @@ func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult
 			return ListResult[Row]{}, fxerrors.BadRequest("replyWithCount is not supported with cursor pagination")
 		}
 		var n int64
-		// Distinct on PK avoids inflated totals when filters introduce JOINs.
+		// 按 PK 去重，避免过滤条件引入 JOIN 时总数被放大。
 		countTx := tx.Session(&gorm.Session{})
 		if pkCol != "" {
 			countTx = countTx.Distinct(pkCol)
@@ -168,8 +167,8 @@ func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult
 	return out, nil
 }
 
-// GetByID loads one row by id string and projects it via toDetail.
-// scopes run before First (e.g. [Preload]).
+// GetByID 按 id 字符串加载单行，并通过 toDetail 投影。
+// scopes 在 First 之前执行（例如 [Preload]）。
 func GetByID[M, Detail any](
 	ctx context.Context,
 	db *gorm.DB,
@@ -188,8 +187,8 @@ func GetByID[M, Detail any](
 	return toDetail(*row), nil
 }
 
-// selectHasColumn reports whether cols already project name (qualified or bare),
-// a bare "*", or an equivalent aliased expression.
+// selectHasColumn 报告 cols 是否已投影 name（限定或裸列名）、
+// 裸 "*"，或等价的带别名表达式。
 func selectHasColumn(cols []string, names ...string) bool {
 	for _, c := range cols {
 		c = strings.TrimSpace(c)

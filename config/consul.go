@@ -16,15 +16,15 @@ const (
 	envConsulHTTPToken     = "CONSUL_HTTP_TOKEN"
 )
 
-// fetchConsulKVInput is the parameter struct for [fetchConsulKV].
+// fetchConsulKVInput 是 [fetchConsulKV] 的参数结构体。
 type fetchConsulKVInput struct {
 	Address string
 	Key     string
-	Token   string // optional; falls back to CONSUL_HTTP_TOKEN
+	Token   string // 可选；为空时回退到 CONSUL_HTTP_TOKEN
 	Timeout time.Duration
 }
 
-// fetchConsulKV reads a raw KV value from Consul (GET /v1/kv/{key}?raw).
+// fetchConsulKV 从 Consul 读取原始 KV 值（GET /v1/kv/{key}?raw）。
 func fetchConsulKV(ctx context.Context, in fetchConsulKVInput) ([]byte, error) {
 	base, err := normalizeConsulHTTPAddr(in.Address)
 	if err != nil {

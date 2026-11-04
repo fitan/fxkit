@@ -16,11 +16,10 @@ type listApplyOpts struct {
 	SkipPaging bool
 }
 
-// ApplyList applies q= filters, sort, JOINs, and LIMIT/OFFSET.
-// Keyset cursor works when tx is bound to a GORM model with a single primary key
-// (schema PK is read from tx). Prefer [List] when you need total, DTO projection,
-// or nextCursor: ApplyList already applies Limit, so Count on the returned session
-// is truncated.
+// ApplyList 应用 q= 过滤、排序、JOIN 与 LIMIT/OFFSET。
+// 当 tx 绑定到具有单一主键的 GORM 模型时 keyset 游标可用（schema 主键从 tx 读取）。
+// 需要 total、DTO 投影或 nextCursor 时优先用 [List]：ApplyList 已应用 Limit，
+// 因此在返回的 session 上做 Count 会被截断。
 func ApplyList(tx *gorm.DB, spec ListSpec, params *ListParams) (*gorm.DB, error) {
 	if tx == nil {
 		return nil, fxerrors.Internal("crudx.ApplyList: nil db")
@@ -230,7 +229,7 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		if ok && isForeignColumn(col, opts.PKColumn) {
 			return nil, joinCount, InvalidQueryCondition("", ReasonDistinctRelationSort)
 		}
-		// SELECT DISTINCT of the root model collapses 1:N JOIN duplicates.
+		// 对根模型做 SELECT DISTINCT 以合并 1:N JOIN 产生的重复行。
 		tx = tx.Distinct()
 	}
 
@@ -403,14 +402,14 @@ func coerceCursorPK(pk string, kind reflect.Kind) any {
 	return pk
 }
 
-// escapeLikePattern escapes the LIKE escape char '!', plus % and _ so user input
-// is matched literally inside LIKE ... ESCAPE '!'.
+// escapeLikePattern 转义 LIKE 的转义符 '!' 以及 % 和 _，使用户输入
+// 在 LIKE ... ESCAPE '!' 中按字面量匹配。
 func escapeLikePattern(s string) string {
 	replacer := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
 	return replacer.Replace(s)
 }
 
-// splitNullValues separates nil entries from real IN/NOT IN values.
+// splitNullValues 将 nil 元素与真正的 IN/NOT IN 值分开。
 func splitNullValues(values []any) ([]any, bool) {
 	out := make([]any, 0, len(values))
 	hasNull := false

@@ -8,12 +8,12 @@ import (
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 )
 
-// NormalizeCronExpression validates standard Hatchet cron expressions (5- or 6-field, seconds optional)
-// and expands standard cron aliases (@hourly, @daily, @weekly, @monthly, @yearly, @annually).
+// NormalizeCronExpression 校验标准 Hatchet cron 表达式（5 或 6 字段，秒可选），
+// 并展开标准 cron 别名（@hourly、@daily、@weekly、@monthly、@yearly、@annually）。
 //
-// Note: @every duration syntax is intentionally not supported to prevent cron modulo boundary
-// issues (e.g. */45 uneven intervals). Please use explicit standard cron expressions instead
-// (e.g. "*/15 * * * * *" for every 15 seconds, or "0 * * * *" for hourly).
+// 注意：故意不支持 @every 时长语法，以避免 cron 取模边界问题
+// （例如 */45 间隔不均）。请改用显式标准 cron 表达式
+// （例如每 15 秒用 "*/15 * * * * *"，每小时用 "0 * * * *"）。
 func NormalizeCronExpression(schedule string) (string, error) {
 	s := strings.TrimSpace(schedule)
 	if s == "" {
@@ -40,7 +40,7 @@ func NormalizeCronExpression(schedule string) (string, error) {
 	return s, nil
 }
 
-// ParsePeriodDuration parses standard duration strings or cron aliases into time.Duration.
+// ParsePeriodDuration 把标准时长字符串或 cron 别名解析为 time.Duration。
 func ParsePeriodDuration(period string) (time.Duration, error) {
 	s := strings.TrimSpace(period)
 	if s == "" {

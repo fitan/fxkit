@@ -395,9 +395,9 @@ func fieldByColumn(fields []resourceField, column string) *resourceField {
 	return nil
 }
 
-// ensureSearchIndexes adds a GORM index on --search columns so q=~ is legal
-// (crudx requires Indexed). TEXT columns are skipped: MySQL cannot index them
-// without a prefix length.
+// ensureSearchIndexes 为 --search 指定的列添加 GORM 索引，使 q=~ 合法
+// （crudx 要求 Indexed）。TEXT 列会被跳过：MySQL 无法在没有前缀长度的
+// 情况下为它们建索引。
 func (data *resourceTemplate) ensureSearchIndexes() {
 	for _, col := range data.SearchOn {
 		f := fieldByColumn(data.Fields, col)

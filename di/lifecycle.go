@@ -227,14 +227,14 @@ func (lc *Lifecycle) Stop(ctx context.Context) error {
 	return firstErr
 }
 
-// RequireStart starts the lifecycle or panics/fails (for testing).
+// RequireStart 启动生命周期，失败时 panic（用于测试）。
 func (lc *Lifecycle) RequireStart() {
 	if err := lc.Start(context.Background()); err != nil {
 		panic(fmt.Sprintf("lifecycle start failed: %v", err))
 	}
 }
 
-// RequireStop stops the lifecycle or panics/fails (for testing).
+// RequireStop 停止生命周期，失败时 panic（用于测试）。
 func (lc *Lifecycle) RequireStop() {
 	if err := lc.Stop(context.Background()); err != nil {
 		panic(fmt.Sprintf("lifecycle stop failed: %v", err))

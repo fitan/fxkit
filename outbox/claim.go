@@ -10,13 +10,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// claimParams configures a single claimBatch call.
+// claimParams 配置单次 claimBatch 调用。
 type claimParams struct {
 	Limit       int
-	StaleBefore time.Time // processing rows with LockedAt before this are reclaimable
+	StaleBefore time.Time // LockedAt 早于此时间的 processing 行可被重新认领
 }
 
-// claimBatch marks up to limit pending (or stale processing) rows as processing and returns them.
+// claimBatch 将最多 limit 条 pending（或陈旧的 processing）行标记为 processing 并返回。
 func claimBatch(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent, error) {
 	if p.Limit <= 0 {
 		return nil, fmt.Errorf("outbox: claim limit must be > 0")
@@ -87,7 +87,7 @@ func claimSQLite(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent
 	leaseID := newLeaseID()
 	var claimed []OutboxEvent
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// SQLite lacks SKIP LOCKED; subquery UPDATE is atomic within the transaction.
+		// SQLite 不支持 SKIP LOCKED；子查询 UPDATE 在事务内是原子的。
 		if err := tx.Raw(
 			`UPDATE outbox_events SET status = ?, locked_at = ?, lease_id = ?, attempts = attempts + 1 WHERE id IN (
 				SELECT id FROM outbox_events

@@ -120,7 +120,7 @@ func TestResourceOperations(t *testing.T) {
 }
 
 func TestResourceOperations_TogglesAndPascalCase(t *testing.T) {
-	// Test disabling specific operations and PascalCase OperationIDs
+	// 测试关闭特定 operation 以及 PascalCase 形式的 OperationID
 	ops := ResourceOperations(RegisterResourceInput[struct{}]{
 		Path:                  "/order-items",
 		Tags:                  []string{"Orders"},

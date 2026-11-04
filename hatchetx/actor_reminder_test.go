@@ -11,28 +11,28 @@ func TestCreateReminder_Validation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// nil client
+	// client 为 nil
 	if _, err := CreateReminder(ctx, nil, CreateReminderInput{}); err == nil || !strings.Contains(err.Error(), "client disabled") {
 		t.Fatalf("expected client disabled error, got %v", err)
 	}
 
-	// disabled client
+	// 禁用的 client
 	disabled := &Client{}
 	if _, err := CreateReminder(ctx, disabled, CreateReminderInput{}); err == nil || !strings.Contains(err.Error(), "client disabled") {
 		t.Fatalf("expected client disabled error, got %v", err)
 	}
 
-	// dummy client wrapper without SDK initialized
+	// 未初始化 SDK 的空 client 包装
 	client := &Client{}
 
-	// empty workflow
+	// 空 workflow
 	in := CreateReminderInput{
 		WorkflowName: "",
 		ActorID:      "a1",
 		ReminderName: "r1",
 		Period:       "@hourly",
 	}
-	// Since client is disabled, will return client disabled first
+	// client 已禁用，会先返回 client disabled
 	if _, err := CreateReminder(ctx, client, in); err == nil {
 		t.Fatal("expected error")
 	}

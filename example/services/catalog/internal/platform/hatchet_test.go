@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ArticleViewedEvent represents a sample event for declarative event handling.
+// ArticleViewedEvent 表示一个用于声明式事件处理的示例事件。
 type ArticleViewedEvent struct {
 	ArticleID string    `json:"articleId"`
 	UserID    string    `json:"userId"`
@@ -21,12 +21,12 @@ type ArticleViewedEvent struct {
 func TestHatchet_EscapeHatchAndSubclients(t *testing.T) {
 	t.Parallel()
 
-	// When client is disabled / nil SDK
+	// 客户端被禁用 / SDK 为 nil 时
 	client := &hatchetx.Client{}
 	assert.False(t, client.Enabled())
 	assert.Nil(t, client.Raw(), "Raw SDK escape hatch should return nil when client is disabled")
 
-	// Subclient accessors must return nil safely without panic
+	// 子客户端访问器必须安全返回 nil 而不 panic
 	assert.Nil(t, client.Runs())
 	assert.Nil(t, client.Schedules())
 	assert.Nil(t, client.Crons())
@@ -46,7 +46,7 @@ func TestHatchet_DeclarativeProvideEventHandler(t *testing.T) {
 
 	injector := di.New()
 
-	// 1. Declaratively register an event handler
+	// 1. 以声明式方式注册一个事件处理器
 	eventOpt := hatchetx.ProvideEventHandler(
 		"catalog-on-article-viewed",
 		"article-viewed",
@@ -57,7 +57,7 @@ func TestHatchet_DeclarativeProvideEventHandler(t *testing.T) {
 	)
 	eventOpt(injector)
 
-	// 2. Declaratively register a standalone background task
+	// 2. 以声明式方式注册一个独立后台任务
 	taskOpt := hatchetx.ProvideTask(
 		"catalog-cache-refresh",
 		func(ctx hatchetx.Context) error {
@@ -67,7 +67,7 @@ func TestHatchet_DeclarativeProvideEventHandler(t *testing.T) {
 	)
 	taskOpt(injector)
 
-	// 3. Verify both registrars were registered in the DI group
+	// 3. 验证两个 registrar 都已注册到 DI group
 	registrars := di.GetGroup[hatchetx.Registrar](injector)
 	require.Len(t, registrars, 2, "both event handler and task should be registered as registrars")
 
@@ -84,7 +84,7 @@ func TestHatchet_DAGWorkflowRegistration(t *testing.T) {
 
 	injector := di.New()
 
-	// Register workflows using ProvideWorkflow and ProvideWorkflows
+	// 使用 ProvideWorkflow 和 ProvideWorkflows 注册工作流
 	opt1 := hatchetx.ProvideWorkflow(nil)
 	opt1(injector)
 
@@ -106,7 +106,7 @@ func TestHatchet_ScheduleOnce(t *testing.T) {
 
 	client := &hatchetx.Client{}
 
-	// 1. Validation on disabled client
+	// 1. 在禁用客户端上的校验
 	_, err := client.ScheduleOnce(ctx, hatchetx.ScheduleOnceInput{
 		WorkflowName: "order-delayed-check",
 		RunAt:        time.Now().Add(10 * time.Minute),
@@ -114,18 +114,18 @@ func TestHatchet_ScheduleOnce(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "client disabled")
 
-	// 2. Standalone helper function validation
+	// 2. 独立辅助函数的校验
 	_, err = hatchetx.ScheduleOnce(ctx, client, hatchetx.ScheduleOnceInput{
 		WorkflowName: "order-delayed-check",
 		RunAt:        time.Now().Add(10 * time.Minute),
 	})
 	assert.ErrorContains(t, err, "client disabled")
 
-	// 3. Cancel scheduled run validation
+	// 3. 取消已调度运行的校验
 	err = client.CancelScheduled(ctx, "sched-999")
 	assert.ErrorContains(t, err, "client disabled")
 
-	// 4. List scheduled runs returns clean ScheduledRun domain models
+	// 4. 列出已调度运行，返回干净的 ScheduledRun 领域模型
 	runs, err := client.ListScheduled(ctx, hatchetx.WorkflowScheduledListParams{})
 	assert.ErrorContains(t, err, "client disabled")
 	assert.Nil(t, runs)
@@ -137,32 +137,32 @@ func TestHatchet_RunInfoAndLifecycle(t *testing.T) {
 
 	client := &hatchetx.Client{}
 
-	// 1. GetRun domain model validation
+	// 1. GetRun 领域模型校验
 	info, err := client.GetRun(ctx, "run-555")
 	assert.ErrorContains(t, err, "client disabled")
 	assert.Nil(t, info)
 
-	// 2. GetRunStatus domain enum validation
+	// 2. GetRunStatus 领域枚举校验
 	status, err := client.GetRunStatus(ctx, "run-555")
 	assert.ErrorContains(t, err, "client disabled")
 	assert.Empty(t, status)
 
-	// Verify domain status enum values
+	// 验证领域状态枚举值
 	assert.Equal(t, hatchetx.RunStatus("QUEUED"), hatchetx.RunStatusQueued)
 	assert.Equal(t, hatchetx.RunStatus("RUNNING"), hatchetx.RunStatusRunning)
 	assert.Equal(t, hatchetx.RunStatus("COMPLETED"), hatchetx.RunStatusCompleted)
 	assert.Equal(t, hatchetx.RunStatus("FAILED"), hatchetx.RunStatusFailed)
 	assert.Equal(t, hatchetx.RunStatus("CANCELLED"), hatchetx.RunStatusCancelled)
 
-	// 3. CancelRun validation
+	// 3. CancelRun 校验
 	err = client.CancelRun(ctx, "run-555")
 	assert.ErrorContains(t, err, "client disabled")
 
-	// 4. ReplayRun validation
+	// 4. ReplayRun 校验
 	err = client.ReplayRun(ctx, "run-555")
 	assert.ErrorContains(t, err, "client disabled")
 
-	// 5. SubscribeToStream validation
+	// 5. SubscribeToStream 校验
 	stream, err := client.SubscribeToStream(ctx, "run-555")
 	assert.ErrorContains(t, err, "client disabled")
 	assert.Nil(t, stream)
@@ -174,16 +174,16 @@ func TestHatchet_RateLimiting(t *testing.T) {
 
 	client := &hatchetx.Client{}
 
-	// Rate limit upsert validation
+	// 限流 upsert 校验
 	err := client.UpsertRateLimit(ctx, "view-counter-limit", 500, hatchetx.RateLimitMinute)
 	assert.ErrorContains(t, err, "client disabled")
 
-	// Rate limit list validation
+	// 限流列表校验
 	rlList, err := client.ListRateLimits(ctx, nil)
 	assert.ErrorContains(t, err, "client disabled")
 	assert.Nil(t, rlList)
 
-	// RateLimit duration constants
+	// RateLimit 时长常量
 	assert.Equal(t, hatchetx.RateLimitDuration("second"), hatchetx.RateLimitSecond)
 	assert.Equal(t, hatchetx.RateLimitDuration("minute"), hatchetx.RateLimitMinute)
 	assert.Equal(t, hatchetx.RateLimitDuration("hour"), hatchetx.RateLimitHour)
@@ -196,7 +196,7 @@ func TestHatchet_UpsertReminder(t *testing.T) {
 
 	client := &hatchetx.Client{}
 
-	// UpsertReminder validation
+	// UpsertReminder 校验
 	_, err := hatchetx.UpsertReminder(ctx, client, hatchetx.CreateReminderInput{
 		WorkflowName: "catalog-heartbeat",
 		ActorID:      "node-1",
@@ -206,7 +206,7 @@ func TestHatchet_UpsertReminder(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "client disabled")
 
-	// DeleteActorReminder validation
+	// DeleteActorReminder 校验
 	err = hatchetx.DeleteActorReminder(ctx, client, "catalog-heartbeat", "tick", "node-1")
 	assert.ErrorContains(t, err, "client disabled")
 }

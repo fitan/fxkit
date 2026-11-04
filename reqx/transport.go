@@ -19,19 +19,18 @@ import (
 
 const (
 	defaultMaxFailover       = 5
-	defaultMaxRewindBodySize = 4 * 1024 * 1024 // 4MB ceiling for buffering request body
+	defaultMaxRewindBodySize = 4 * 1024 * 1024 // 缓冲请求体的上限 4MB
 )
 
-// resolveTransport picks a discovered endpoint and rewrites the request host,
-// then delegates to the next RoundTripper (typically otelhttp → base transport).
-// On transport / selected 5xx failures it tries another endpoint, for any method.
+// resolveTransport 选择一个已发现的端点并改写请求 host，
+// 然后委托给下一个 RoundTripper（通常是 otelhttp → 基础传输层）。
+// 遇到传输层失败或选中的 5xx 时，会尝试另一个端点，对任意方法都适用。
 //
-// By default the request URL.Host/Host are rewritten to the selected endpoint
-// (historical behavior). When preserveHost is set (ServerName configured, or
-// https + a named Consul service), the logical service name stays in URL.Host
-// and the selected endpoint is injected into the dial context instead, so TLS
-// SNI / certificate verification can use the service DNS name even when Consul
-// returns bare IPs. See [ClientInput.ServerName].
+// 默认情况下请求的 URL.Host/Host 会被改写为选中的端点（历史行为）。
+// 当设置了 preserveHost（配置了 ServerName，或 https + 命名的 Consul
+// 服务）时，逻辑服务名保留在 URL.Host 中，选中的端点改为注入到拨号
+// context 里，这样即使 Consul 返回裸 IP，TLS SNI / 证书校验也能使用
+// 服务 DNS 名。参见 [ClientInput.ServerName]。
 type resolveTransport struct {
 	pool        *endpointPool
 	scheme      string
@@ -77,7 +76,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			return nil, fmt.Errorf("reqx(%s): %w", t.name, err)
 		}
 		if _, ok := tried[ep]; ok {
-			// Already tried this host; keep rotating until fresh or exhausted.
+			// 已尝试过该 host；继续轮换直到出现新端点或耗尽。
 			if len(tried) >= n {
 				break
 			}
@@ -100,7 +99,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		if err == nil {
 			if shouldFailoverStatus(resp.StatusCode) && i+1 < attempts && len(tried) < n {
 				if hasUnrewindableBody {
-					// Cannot rewind large or streaming body safely; do not retry with empty body
+					// 无法安全回卷大体积或流式 body；不要用空 body 重试
 					return resp, nil
 				}
 				_, _ = io.Copy(io.Discard, resp.Body)
@@ -123,10 +122,9 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return nil, lastErr
 }
 
-// shouldPreserveHost reports whether this particular endpoint should keep the
-// logical host. Auto mode (https + named service, no explicit ServerName) only
-// needs it when Consul returns a bare IP; DNS endpoints keep the historical
-// endpoint-as-SNI behavior.
+// shouldPreserveHost 报告该端点是否应保留逻辑 host。自动模式
+// （https + 命名服务，且未显式设置 ServerName）仅在 Consul 返回裸 IP
+// 时才需要保留；DNS 端点保持原有的「端点即 SNI」行为。
 func (t *resolveTransport) shouldPreserveHost(ep string) bool {
 	if !t.preserveHost {
 		return false
@@ -167,8 +165,8 @@ func cloneForEndpoint(req *http.Request, ep string, o endpointRewrite) (*http.Re
 		if host == "" {
 			host = req.URL.Host
 		}
-		// The actual TCP target travels in the context and is consumed by the
-		// custom DialContext (see prepareEndpointDialer).
+		// 实际 TCP 目标通过 context 传递，由自定义 DialContext 消费
+		// （见 prepareEndpointDialer）。
 		r2 = r2.WithContext(withDialEndpoint(r2.Context(), ep))
 	}
 
@@ -180,7 +178,7 @@ func cloneForEndpoint(req *http.Request, ep string, o endpointRewrite) (*http.Re
 		r2.Host = host
 	}
 
-	// Rewind body for failover retries.
+	// 为故障转移重试回卷 body。
 	if req.GetBody != nil {
 		body, err := req.GetBody()
 		if err != nil {
@@ -205,16 +203,16 @@ func dialEndpointFromContext(ctx context.Context) (string, bool) {
 	return ep, true
 }
 
-// prepareEndpointDialer injects an endpoint-aware DialContext into the base
-// transport so URL.Host can stay the logical service name.
+// prepareEndpointDialer 向基础传输层注入能感知端点的 DialContext，
+// 以便 URL.Host 可以保持为逻辑服务名。
 //
-// Supported bases are *http.Transport and req's *req.Transport. Any other
-// RoundTripper cannot be intercepted at the dial layer, so host-preserving mode
-// returns a clear error instead of silently connecting to the wrong host.
+// 支持的基础传输层为 *http.Transport 与 req 的 *req.Transport。其他
+// RoundTripper 无法在拨号层被拦截，因此保留 host 模式会返回明确错误，
+// 而不是静默连接到错误的 host。
 func prepareEndpointDialer(rt http.RoundTripper, serverName string, own bool) (http.RoundTripper, error) {
 	switch t := rt.(type) {
 	case *http.Transport:
-		// Always clone: BaseTransport may be shared (e.g. httptest's client).
+		// 始终克隆：BaseTransport 可能被共享（例如 httptest 的 client）。
 		c := t.Clone()
 		c.DialContext = wrapEndpointDialer(c.DialContext)
 		if c.DialTLSContext != nil {
@@ -284,7 +282,7 @@ func rewindBody(req *http.Request, max int64) error {
 		return nil
 	}
 	if req.ContentLength > max {
-		// Body exceeds rewind buffer limit; avoid OOM by keeping stream as-is without GetBody
+		// body 超过回卷缓冲区上限；保持流原样且不设置 GetBody，避免 OOM。
 		return nil
 	}
 
@@ -295,8 +293,8 @@ func rewindBody(req *http.Request, max int64) error {
 		return err
 	}
 	if int64(len(buf)) > max {
-		// Chunked / unknown length exceeded the buffer. Keep the original
-		// closer so the remainder is still readable; do not set GetBody.
+		// 分块或未知长度超过了缓冲区。保留原始 closer，以便剩余内容
+		// 仍可读取；不要设置 GetBody。
 		req.Body = &readCloser{Reader: io.MultiReader(bytes.NewReader(buf), orig), Closer: orig}
 		return nil
 	}
@@ -404,7 +402,7 @@ func tuneStdTransport(t *http.Transport) {
 	if t == nil {
 		return
 	}
-	// Never inherit the global transport's MaxIdleConnsPerHost=2 default.
+	// 绝不继承全局传输层的 MaxIdleConnsPerHost=2 默认值。
 	if t.MaxIdleConnsPerHost <= 0 {
 		t.MaxIdleConnsPerHost = defaultMaxIdleConnsPerHost
 	}
@@ -427,8 +425,8 @@ type buildTransportInput struct {
 	SpanName     string
 	MaxFailover  int
 	PreserveHost bool
-	// AutoPreserve means PreserveHost was inferred (https + named service,
-	// no explicit ServerName) and should only apply to IP endpoints.
+	// AutoPreserve 表示 PreserveHost 是推断出来的（https + 命名服务，
+	// 未显式设置 ServerName），应只对 IP 端点生效。
 	AutoPreserve bool
 	ServerName   string
 	HostOverride string

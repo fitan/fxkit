@@ -9,7 +9,7 @@ import (
 	fxhuma "github.com/fitan/fxkit/huma"
 )
 
-// Admin Huma operations — single source for OpenAPI + authz route catalog.
+// 管理端 Huma operation —— OpenAPI 与 authz 路由目录的唯一来源。
 var (
 	opListPermissions = huma.Operation{
 		OperationID: "listAuthzPermissions", Method: http.MethodGet, Path: "/authz/permissions",
@@ -89,8 +89,8 @@ var (
 	}
 )
 
-// AdminPermission is the fallback Subject.Has key for /authz/* when Casbin is off.
-// Casbin-on authorization still uses Enforce(sub, path, method) and ignores this.
+// AdminPermission 是 Casbin 关闭时 /authz/* 回退使用的 Subject.Has 键。
+// Casbin 开启时仍走 Enforce(sub, path, method)，忽略此项。
 const AdminPermission = "authz:admin"
 
 func adminHTTPRoutes() []HTTPRoute {
@@ -107,7 +107,7 @@ func adminHTTPRoutes() []HTTPRoute {
 	return routes
 }
 
-// Unique named types so Huma OpenAPI registry does not collide on Body schema names.
+// 使用独立的具名类型，避免 Huma OpenAPI registry 在 Body schema 名上冲突。
 type permissionView struct {
 	ID          uint     `json:"id"`
 	Method      string   `json:"method"`

@@ -97,8 +97,8 @@ type Client struct {
 	autoMigrate bool
 }
 
-// NewTestClient wraps an existing DB handle for unit tests.
-// Tests rely on AutoMigrate, so it is enabled here (production defaults to off).
+// NewTestClient 包装一个已有的 DB 句柄用于单元测试。
+// 测试依赖 AutoMigrate，因此这里开启（生产默认关闭）。
 func NewTestClient(db *gorm.DB) *Client {
 	return &Client{pool: db, autoMigrate: true}
 }

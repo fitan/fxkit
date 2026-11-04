@@ -6,7 +6,7 @@ import (
 	"github.com/fitan/fxkit/crudx"
 )
 
-// ListQueryInput is the standard Huma GET list query parameter set (ZStack-style).
+// ListQueryInput 是标准的 Huma GET 列表查询参数集（ZStack 风格）。
 type ListQueryInput struct {
 	Q              []string `query:"q,explode" doc:"Filter conditions (AND). Example: state=Running. OR group: or(a=1,b=2)"`
 	Limit          int      `query:"limit" default:"100" minimum:"1" maximum:"1000" doc:"Max rows per page"`
@@ -18,8 +18,8 @@ type ListQueryInput struct {
 	UseCursor      bool     `query:"useCursor" default:"false" doc:"Return nextCursor on first page"`
 }
 
-// ListParamsFromInput maps Huma-bound query params to [crudx.ListParams].
-// Q values are URL-decoded via [crudx.ParseHTTPQValues].
+// ListParamsFromInput 将 Huma 绑定的查询参数映射为 [crudx.ListParams]。
+// Q 值通过 [crudx.ParseHTTPQValues] 做 URL 解码。
 func ListParamsFromInput(in *ListQueryInput) (crudx.ListParams, error) {
 	q, err := crudx.ParseHTTPQValues(in.Q)
 	if err != nil {
@@ -37,7 +37,7 @@ func ListParamsFromInput(in *ListQueryInput) (crudx.ListParams, error) {
 	}, nil
 }
 
-// ParseHTTPListParams reads list params from an http.Request (for non-Huma handlers).
+// ParseHTTPListParams 从 http.Request 读取列表参数（供非 Huma handler 使用）。
 func ParseHTTPListParams(r *http.Request) (crudx.ListParams, error) {
 	q := r.URL.Query()["q"]
 	decoded, err := crudx.ParseHTTPQValues(q)

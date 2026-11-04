@@ -10,13 +10,13 @@ import (
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 )
 
-// RateLimitDuration aliases Hatchet's native rate limit time windows.
+// RateLimitDuration 是 Hatchet 原生限流时间窗口的别名。
 type RateLimitDuration = types.RateLimitDuration
 
-// RateLimitListParams aliases query options for listing rate limits.
+// RateLimitListParams 是列出限流规则的查询选项别名。
 type RateLimitListParams = rest.RateLimitListParams
 
-// RateLimitList aliases the result of listing rate limits.
+// RateLimitList 是列出限流规则结果的别名。
 type RateLimitList = rest.RateLimitList
 
 const (
@@ -29,7 +29,7 @@ const (
 	RateLimitYear   RateLimitDuration = types.Year
 )
 
-// UpsertRateLimit creates or updates a global rate limit rule.
+// UpsertRateLimit 创建或更新全局限流规则。
 func (c *Client) UpsertRateLimit(ctx context.Context, key string, limit int, duration RateLimitDuration) error {
 	if !c.Enabled() {
 		return fmt.Errorf("hatchetx: client disabled")
@@ -52,7 +52,7 @@ func (c *Client) UpsertRateLimit(ctx context.Context, key string, limit int, dur
 	})
 }
 
-// ListRateLimits retrieves all configured rate limits matching the criteria.
+// ListRateLimits 获取所有符合条件已配置的限流规则。
 func (c *Client) ListRateLimits(ctx context.Context, opts *RateLimitListParams) (*RateLimitList, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("hatchetx: client disabled")

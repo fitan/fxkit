@@ -100,7 +100,7 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 		shutdowns = append(shutdowns, mp.Shutdown)
 
 		if cfg.Metrics.RuntimeMetrics {
-			// Instruments register on the global MeterProvider; mp.Shutdown above tears them down.
+			// Instrument 会注册到全局 MeterProvider；上面的 mp.Shutdown 会把它们拆除。
 			if err := startRuntimeMetrics(); err != nil {
 				return err
 			}
@@ -305,7 +305,7 @@ func newLogExporter(ctx context.Context, c Config) (sdklog.Exporter, error) {
 	return otlploggrpc.New(ctx, opts...)
 }
 
-// normalizeOTLPEndpoint strips http(s):// so WithEndpoint receives host:port.
+// normalizeOTLPEndpoint 去除 http(s)://，以便 WithEndpoint 接收 host:port。
 func normalizeOTLPEndpoint(endpoint string) string {
 	ep := strings.TrimSpace(endpoint)
 	ep = strings.TrimPrefix(ep, "https://")

@@ -11,7 +11,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// middlewareHost is satisfied by *hatchet.Worker.
+// middlewareHost 由 *hatchet.Worker 满足。
 type middlewareHost interface {
 	Use(mws ...worker.MiddlewareFunc)
 }
@@ -31,15 +31,15 @@ func registerHatchetSpanProcessor(tp *sdktrace.TracerProvider) {
 	registeredTracerProviders[tp] = struct{}{}
 }
 
-// attachWorkerTracing registers Hatchet's consumer-span middleware on the worker.
+// attachWorkerTracing 在 worker 上注册 Hatchet 的消费者 span 中间件。
 //
-// Producer spans (hatchet.run_workflow) already start from SDK Run() against the
-// global TracerProvider. This hook adds hatchet.start_step_run on the worker.
+// 生产者 span（hatchet.run_workflow）已由 SDK Run() 基于全局 TracerProvider
+// 启动。本钩子在 worker 上补充 hatchet.start_step_run。
 //
-// The otelx SDK provider is reused so we do not call otel.SetTracerProvider with
-// a second SDK, and we never Shutdown that shared provider from hatchetx.
-// Spans go only to otelx (DisableHatchetCollector): the engine OTLP path does
-// not join catalog traces with hatchet.run/* SERVER_OTEL spans.
+// 复用 otelx 的 SDK provider，因此不会用第二个 SDK 调用 otel.SetTracerProvider，
+// hatchetx 也从不 Shutdown 这个共享 provider。
+// span 只发往 otelx（DisableHatchetCollector）：engine 的 OTLP 路径
+// 不会把 catalog trace 与 hatchet.run/* 的 SERVER_OTEL span 关联起来。
 func attachWorkerTracing(w middlewareHost, enabled bool) bool {
 	if !enabled || w == nil {
 		return false
@@ -57,16 +57,16 @@ func attachWorkerTracing(w middlewareHost, enabled bool) bool {
 		slog.Warn("hatchetx: worker traces disabled", "error", err)
 		return false
 	}
-	// Collector is off, so NewInstrumentor does not register the attribute
-	// processor. Attach a passthrough wrapper so child spans still get hatchet.*.
+	// Collector 已关闭，NewInstrumentor 不会注册属性
+	// 处理器。挂一个透传包装，让子 span 仍能带上 hatchet.*。
 	registerHatchetSpanProcessor(tp)
 	w.Use(inst.Middleware())
 	slog.Info("hatchetx: worker traces enabled")
 	return true
 }
 
-// passthroughSpanProcessor lets HatchetAttributeSpanProcessor inject attributes
-// without owning an exporter. otelx already exports via its own processors.
+// passthroughSpanProcessor 让 HatchetAttributeSpanProcessor 注入属性
+// 而不持有 exporter。otelx 已通过自己的处理器导出。
 type passthroughSpanProcessor struct{}
 
 func (passthroughSpanProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}

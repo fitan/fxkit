@@ -29,8 +29,8 @@ func unmarshalYAML(k *koanf.Koanf, path string, out any) error {
 	})
 }
 
-// durationDecodeHook parses time.Duration from Go duration strings ("5s", "1h")
-// or from unquoted YAML numbers, which are treated as seconds.
+// durationDecodeHook 从 Go duration 字符串（"5s"、"1h"）解析 time.Duration，
+// 或从 YAML 中未加引号的数字解析（按秒处理）。
 func durationDecodeHook() mapstructure.DecodeHookFunc {
 	target := reflect.TypeOf(time.Duration(0))
 	return func(_ reflect.Type, to reflect.Type, data any) (any, error) {

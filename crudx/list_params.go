@@ -2,7 +2,7 @@ package crudx
 
 import "strings"
 
-// ListParams carries ZStack-style list query parameters (after URL decode for Q values).
+// ListParams 承载 ZStack 风格的列表查询参数（Q 值已完成 URL 解码）。
 type ListParams struct {
 	Limit          int
 	Start          int
@@ -10,8 +10,8 @@ type ListParams struct {
 	SortDirection  string // asc | desc
 	ReplyWithCount bool
 	Q              []string
-	Cursor         string // opaque keyset cursor; when set, Start is ignored
-	UseCursor      bool   // request nextCursor even on the first page (no Cursor yet)
+	Cursor         string // 不透明的 keyset 游标；设置后 Start 被忽略
+	UseCursor      bool   // 即使首页（尚无 Cursor）也返回 nextCursor
 
 	// sortByExplicit / sortDirExplicit 记录调用方在 Normalize 补齐默认值之前
 	// 是否显式传入了排序字段/方向。游标翻页时以游标内的排序为准，只有显式
@@ -21,7 +21,7 @@ type ListParams struct {
 	normalized      bool
 }
 
-// Limits configures guardrails for list queries.
+// Limits 配置列表查询的保护限制。
 type Limits struct {
 	MaxConditions int
 	MaxInValues   int
@@ -58,7 +58,7 @@ func (l Limits) normalized() Limits {
 	return out
 }
 
-// Normalize applies defaults and caps from spec to params (mutates p).
+// Normalize 将 spec 中的默认值与上限应用到 params（会修改 p）。
 func (spec *ListSpec) Normalize(p *ListParams) {
 	if p == nil {
 		return
@@ -96,8 +96,8 @@ func (spec *ListSpec) Normalize(p *ListParams) {
 	}
 }
 
-// deriveSortFields copies Spec and fills SortFields from Fields when a name is missing.
-// Does not mutate the caller's map.
+// deriveSortFields 复制 Spec，并在某名称缺失时用 Fields 填充 SortFields。
+// 不会修改调用方的 map。
 func deriveSortFields(spec ListSpec) ListSpec {
 	if len(spec.Fields) == 0 {
 		return spec

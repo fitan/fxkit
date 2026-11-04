@@ -8,8 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Command is a host Cobra extra command (cli.AddCommand) that reads YAML
-// without starting the HTTP listener.
+// Command 是一个宿主 Cobra 扩展命令（cli.AddCommand），它读取 YAML
+// 而不启动 HTTP 监听器。
 func Command() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",

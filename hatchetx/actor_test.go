@@ -118,13 +118,13 @@ func TestExtractActorIDDynamic_UnexportedEmbed(t *testing.T) {
 func TestActorTypeCache(t *testing.T) {
 	t.Parallel()
 
-	// Verify embedInput cache
+	// 校验 embedInput 缓存
 	c1 := getActorTypeCache(reflect.TypeFor[embedInput]())
 	if !c1.hasActorID || !c1.jsonTagFound || len(c1.fieldIndex) == 0 {
 		t.Fatalf("expected embedInput to have cached actorId field, got: %+v", c1)
 	}
 
-	// Verify methodOnlyInput cache
+	// 校验 methodOnlyInput 缓存
 	c2 := getActorTypeCache(reflect.TypeFor[methodOnlyInput]())
 	if c2.getter == nil {
 		t.Fatalf("expected methodOnlyInput to have getter, got: %+v", c2)
@@ -133,13 +133,13 @@ func TestActorTypeCache(t *testing.T) {
 		t.Fatalf("expected methodOnlyInput to NOT have jsonTagFound, got: %+v", c2)
 	}
 
-	// Verify pointer type cache
+	// 校验指针类型缓存
 	c3 := getActorTypeCache(reflect.TypeFor[*fieldInput]())
 	if !c3.isPtr || !c3.hasActorID || len(c3.fieldIndex) == 0 {
 		t.Fatalf("expected *fieldInput to be ptr with fieldIndex, got: %+v", c3)
 	}
 
-	// Verify structFieldNoTagInput cache: hasActorID is true, but jsonTagFound MUST BE FALSE!
+	// 校验 structFieldNoTagInput 缓存：hasActorID 为 true，但 jsonTagFound 必须为 false！
 	c4 := getActorTypeCache(reflect.TypeFor[structFieldNoTagInput]())
 	if !c4.hasActorID {
 		t.Fatalf("expected structFieldNoTagInput to have hasActorID=true, got: %+v", c4)
@@ -148,13 +148,13 @@ func TestActorTypeCache(t *testing.T) {
 		t.Fatalf("expected structFieldNoTagInput to have jsonTagFound=false, got: %+v", c4)
 	}
 
-	// Verify namedRefInput cache: non-anonymous field must NOT be treated as root actorId
+	// 校验 namedRefInput 缓存：非匿名字段不得当作根级 actorId
 	c5 := getActorTypeCache(reflect.TypeFor[namedRefInput]())
 	if c5.hasActorID || c5.jsonTagFound {
 		t.Fatalf("expected namedRefInput to NOT have hasActorID or jsonTagFound, got: %+v", c5)
 	}
 
-	// Verify customMarshalInput cache: custom json.Marshaler must NOT have jsonTagFound=true
+	// 校验 customMarshalInput 缓存：自定义 json.Marshaler 不得令 jsonTagFound=true
 	c6 := getActorTypeCache(reflect.TypeFor[customMarshalInput]())
 	if c6.jsonTagFound {
 		t.Fatalf("expected customMarshalInput to have jsonTagFound=false due to MarshalJSON, got: %+v", c6)
@@ -308,7 +308,7 @@ func TestActor_Call_RequiresActorID(t *testing.T) {
 	a := NewActor[embedInput, int]("x",
 		func(ctx context.Context, in embedInput) (int, error) { return 0, nil },
 	)
-	// Disabled client fails first.
+	// 禁用的 client 会先失败。
 	if _, err := a.Call(context.Background(), &Client{}, embedInput{}); err == nil {
 		t.Fatal("expected error")
 	}

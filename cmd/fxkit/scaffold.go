@@ -423,8 +423,8 @@ func ensureDir(path string) error {
 	return nil
 }
 
-// ensureWritableDir creates path if missing, or accepts an existing directory that
-// only contains ignorable VCS files (so `fxkit init foo --out .` works in a fresh git repo).
+// ensureWritableDir 在 path 缺失时创建它，或接受一个仅包含可忽略的
+// VCS 文件的已存在目录（这样 `fxkit init foo --out .` 在全新的 git 仓库中也能工作）。
 // force 时才允许直接使用非空目录。
 func ensureWritableDir(path string, force bool) error {
 	info, err := os.Stat(path)

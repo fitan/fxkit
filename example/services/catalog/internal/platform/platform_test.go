@@ -49,21 +49,21 @@ func TestPlatform_HumaEndpoints(t *testing.T) {
 	_, api := humatest.New(t)
 	platform.Register(svc).Register(api)
 
-	// 1. /public/ping (public endpoint)
+	// 1. /public/ping（公开端点）
 	resp := api.Get("/public/ping")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Body.String(), `"ok":true`)
 
-	// 2. /counters/{id} (get initial count)
+	// 2. /counters/{id}（获取初始计数）
 	resp = api.Get("/counters/test-actor")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Body.String(), `"value":0`)
 
-	// 3. /me without subject context -> 401 Unauthorized
+	// 3. /me 没有 subject 上下文 -> 401 Unauthorized
 	resp = api.Get("/me")
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 
-	// 4. /heartbeat (initial)
+	// 4. /heartbeat（初始状态）
 	resp = api.Get("/heartbeat")
 	assert.Equal(t, http.StatusOK, resp.Code)
 }

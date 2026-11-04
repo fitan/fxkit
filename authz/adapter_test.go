@@ -123,7 +123,7 @@ func TestEnforcer_ReloadSeesOtherReplica(t *testing.T) {
 func TestGormAdapter_LongPath(t *testing.T) {
 	db := openSQLite(t, "file:casbin_longpath?mode=memory&cache=shared")
 	e := testDBEnforcer(t, db)
-	path := "/" + strings.Repeat("seg/", 40) + "item" // > 100 chars
+	path := "/" + strings.Repeat("seg/", 40) + "item" // 超过 100 个字符
 	if len(path) < 101 {
 		t.Fatalf("path too short: %d", len(path))
 	}
@@ -231,18 +231,18 @@ func TestGormAdapter_RemoveFilteredPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Remove with fieldIndex = 1 (matching obj="/users")
+	// 用 fieldIndex = 1 删除（匹配 obj="/users"）
 	if _, err := e.RemoveFilteredPolicy(1, "/users"); err != nil {
 		t.Fatal(err)
 	}
 
-	// admin, /users, GET should be removed
+	// admin, /users, GET 应被删除
 	ok, err := e.Enforce("admin", "/users", "GET")
 	if err != nil || ok {
 		t.Fatalf("expected admin /users removed, got ok=%v err=%v", ok, err)
 	}
 
-	// editor, /orders, GET MUST still be present
+	// editor, /orders, GET 必须仍然存在
 	ok, err = e.Enforce("editor", "/orders", "GET")
 	if err != nil || !ok {
 		t.Fatalf("expected editor /orders preserved, got ok=%v err=%v", ok, err)

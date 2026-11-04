@@ -53,8 +53,8 @@ type IncInput struct {
 
 type IncOutput struct {
 	Value         int64 `json:"value"`
-	Inflight      int32 `json:"inflight"`      // process-wide incCounter at handler entry
-	ActorInflight int32 `json:"actorInflight"` // this actorId at handler entry
+	Inflight      int32 `json:"inflight"`      // 进入处理器时的进程级 incCounter
+	ActorInflight int32 `json:"actorInflight"` // 进入处理器时该 actorId 的计数
 }
 
 type HeartbeatIn struct {
@@ -196,7 +196,7 @@ func (s *Service) maybeReminder(ctx context.Context) {
 		Period:       period,
 	})
 	if err != nil {
-		slog.Info("hatchetx reminder skipped", "error", err) // duplicate Name+Expression on replica restart
+		slog.Info("hatchetx reminder skipped", "error", err) // 副本重启时 Name+Expression 重复
 	}
 }
 

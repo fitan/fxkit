@@ -16,9 +16,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// defaultRBACModel is classic RBAC (sub, obj, act) with role inheritance.
-// Dom is reserved for a future multi-tenant matcher; v1 ignores it.
-// keyMatch2 matches /users/:id style patterns against request paths.
+// defaultRBACModel 是经典 RBAC（sub, obj, act），带角色继承。
+// Dom 预留给未来的多租户 matcher；v1 忽略它。
+// keyMatch2 让 /users/:id 这类模式与请求路径匹配。
 const defaultRBACModel = `
 [request_definition]
 r = sub, obj, act
@@ -36,32 +36,32 @@ e = some(where (p.eft == allow))
 m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && (r.act == p.act || p.act == "*")
 `
 
-// EnforceInput is the authorization request. Dom is reserved (unused in v1).
+// EnforceInput 是授权请求。Dom 为预留字段（v1 未使用）。
 type EnforceInput struct {
 	Sub string
-	Dom string // reserved for multi-tenant RBAC
-	Obj string // e.g. "/users/1" or "/users"
-	Act string // e.g. "GET"
+	Dom string // 预留给多租户 RBAC
+	Obj string // 例如 "/users/1" 或 "/users"
+	Act string // 例如 "GET"
 }
 
-// Policy is a casbin p rule: role/user may Act on Obj.
+// Policy 是一条 casbin p 规则：角色/用户可以对 Obj 执行 Act。
 type Policy struct {
-	Sub string // role or subject
-	Obj string // path pattern, e.g. "/users/:id"
-	Act string // HTTP method or "*"
+	Sub string // 角色或主体
+	Obj string // 路径模式，例如 "/users/:id"
+	Act string // HTTP 方法或 "*"
 }
 
-// RoleBinding is a casbin g rule: user inherits role.
+// RoleBinding 是一条 casbin g 规则：用户继承角色。
 type RoleBinding struct {
 	User string
 	Role string
 }
 
-// Enforcer is the fxkit Casbin facade.
+// Enforcer 是 fxkit 的 Casbin 门面。
 type Enforcer struct {
 	mu      sync.RWMutex
 	e       *casbin.Enforcer
-	db      *gorm.DB // permission catalog (nil for memory enforcer)
+	db      *gorm.DB // 权限目录（内存执行器为 nil）
 	enabled bool
 
 	reloadMu     sync.Mutex
@@ -75,8 +75,8 @@ type enforcerParams struct {
 	LC     *di.Lifecycle `optional:"true"`
 }
 
-// NewEnforcer builds a Postgres-backed Casbin enforcer when auth.casbin.enabled.
-// Returns a disabled no-op enforcer when Casbin is off (never nil).
+// NewEnforcer 在 auth.casbin.enabled 时构建基于 Postgres 的 Casbin 执行器。
+// Casbin 关闭时返回一个禁用状态的空执行器（绝不返回 nil）。
 func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 	out := &Enforcer{}
 	if p.Config == nil || !p.Config.Enabled || !p.Config.Casbin.Enabled {
@@ -124,7 +124,7 @@ func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 	return out, nil
 }
 
-// NewMemoryEnforcer builds an in-memory Casbin enforcer for tests.
+// NewMemoryEnforcer 构建供测试使用的内存版 Casbin 执行器。
 func NewMemoryEnforcer() (*Enforcer, error) {
 	m, err := model.NewModelFromString(defaultRBACModel)
 	if err != nil {
@@ -137,12 +137,12 @@ func NewMemoryEnforcer() (*Enforcer, error) {
 	return &Enforcer{e: e, enabled: true}, nil
 }
 
-// Enabled reports whether Casbin authorization is active.
+// Enabled 报告 Casbin 授权是否生效。
 func (e *Enforcer) Enabled() bool {
 	return e != nil && e.enabled && e.e != nil
 }
 
-// ReloadPolicies replaces the in-memory model from the adapter (other replicas' writes).
+// ReloadPolicies 从适配器重新加载内存模型（用于感知其它副本的写入）。
 func (e *Enforcer) ReloadPolicies() error {
 	if !e.Enabled() {
 		return nil
@@ -197,10 +197,10 @@ func (e *Enforcer) reloadLoop(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Enforce checks whether Sub may Act on Obj.
+// Enforce 检查 Sub 是否可以对 Obj 执行 Act。
 func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 	_ = ctx
-	_ = in.Dom // reserved
+	_ = in.Dom // 预留
 	if !e.Enabled() {
 		return true, nil
 	}
@@ -218,7 +218,7 @@ func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 	return allowed, err
 }
 
-// AddPolicies adds p rules (idempotent via Casbin).
+// AddPolicies 添加 p 规则（由 Casbin 保证幂等）。
 func (e *Enforcer) AddPolicies(policies []Policy) error {
 	if !e.Enabled() {
 		return fxerrors.Internal("auth casbin not enabled")
@@ -238,7 +238,7 @@ func (e *Enforcer) AddPolicies(policies []Policy) error {
 	return nil
 }
 
-// AddRoleBindings adds g rules (user → role).
+// AddRoleBindings 添加 g 规则（用户 → 角色）。
 func (e *Enforcer) AddRoleBindings(bindings []RoleBinding) error {
 	if !e.Enabled() {
 		return fxerrors.Internal("auth casbin not enabled")
@@ -257,7 +257,7 @@ func (e *Enforcer) AddRoleBindings(bindings []RoleBinding) error {
 	return nil
 }
 
-// HumaPathToCasbin converts Huma `{id}` placeholders to Casbin `:id` for keyMatch2 policies.
+// HumaPathToCasbin 把 Huma 的 `{id}` 占位符转换成 Casbin 的 `:id`，供 keyMatch2 策略使用。
 func HumaPathToCasbin(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {

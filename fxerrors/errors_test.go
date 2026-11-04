@@ -32,7 +32,7 @@ func TestWrapPreservesMessageAndCause(t *testing.T) {
 		t.Fatal("expected KindInternal")
 	}
 
-	// When serialized for HTTP clients, WriteError sanitizes KindInternal to "internal error"
+	// 序列化为 HTTP 响应时，WriteError 会把 KindInternal 清洗为 "internal error"
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	fxerrors.WriteError(rec, req, err)

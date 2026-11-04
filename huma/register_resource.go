@@ -9,8 +9,8 @@ import (
 	"github.com/fitan/fxkit/crudx"
 )
 
-// ResourceHandlers is the optional REST surface [RegisterResource] needs.
-// List should be implemented with [crudx.List]; writes stay as ordinary service methods.
+// ResourceHandlers 是 [RegisterResource] 所需的可选 REST 接口。
+// List 应使用 [crudx.List] 实现；写操作仍是普通的 service 方法。
 type ResourceHandlers[ListRow, Detail, CreateReq, UpdateReq any] interface {
 	List(ctx context.Context, params crudx.ListParams) (crudx.ListResult[ListRow], error)
 	Get(ctx context.Context, id string) (Detail, error)
@@ -19,30 +19,30 @@ type ResourceHandlers[ListRow, Detail, CreateReq, UpdateReq any] interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// RegisterResourceInput configures path prefixes and operation metadata.
+// RegisterResourceInput 配置路径前缀与 operation 元数据。
 type RegisterResourceInput[UpdateReq any] struct {
-	Path        string   // e.g. "/users"
-	Tags        []string // OpenAPI tags
+	Path        string   // 例如 "/users"
+	Tags        []string // OpenAPI 标签
 	ListSummary string
-	// BindUpdate extracts the path id into UpdateReq before calling Update.
-	// If nil, PUT is not registered.
+	// BindUpdate 在调用 Update 之前将路径 id 注入 UpdateReq。
+	// 若为 nil，则不注册 PUT。
 	BindUpdate func(id string, body UpdateReq) UpdateReq
 
-	// Optional operation toggles (default false = enabled)
-	DisableList   bool // If true, GET {path} is not registered
-	DisableGet    bool // If true, GET {path}/{id} is not registered
-	DisableCreate bool // If true, POST {path} is not registered
-	DisableUpdate bool // If true, PUT {path}/{id} is not registered even if BindUpdate is set
-	DisableDelete bool // If true, DELETE {path}/{id} is not registered
+	// 可选的 operation 开关（默认 false = 启用）
+	DisableList   bool // 为 true 时不注册 GET {path}
+	DisableGet    bool // 为 true 时不注册 GET {path}/{id}
+	DisableCreate bool // 为 true 时不注册 POST {path}
+	DisableUpdate bool // 为 true 时不注册 PUT {path}/{id}，即使已设置 BindUpdate
+	DisableDelete bool // 为 true 时不注册 DELETE {path}/{id}
 
-	// PascalCaseOperationID generates PascalCase operationId (e.g. ListArticles / GetArticles).
-	// Default false keeps backwards compatibility with existing specs (listarticles).
+	// PascalCaseOperationID 生成 PascalCase 形式的 operationId（例如 ListArticles / GetArticles）。
+	// 默认 false 以保持与现有 spec 的向后兼容（listarticles）。
 	PascalCaseOperationID bool
 }
 
-// ResourceOperations returns the Huma operations [RegisterResource] mounts.
-// Use with [authz.HTTPRoutesFromOperations] when also publishing HTTPRoute;
-// with auto_register_routes the OpenAPI scrape already covers these paths.
+// ResourceOperations 返回 [RegisterResource] 挂载的 Huma operation。
+// 若同时要发布 HTTPRoute，可配合 [authz.HTTPRoutesFromOperations] 使用；
+// 启用 auto_register_routes 时，OpenAPI 抓取已覆盖这些路径。
 func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []huma.Operation {
 	path := in.Path
 	tags := in.Tags
@@ -144,16 +144,16 @@ type updateIn[T any] struct {
 
 type emptyOut struct{}
 
-// RegisterResource optionally mounts the five JSON routes for a resource.
-// Use it when you want a uniform REST shape; a single [Register] is enough for list-only APIs.
+// RegisterResource 可选地为资源挂载五个 JSON 路由。
+// 需要统一的 REST 形态时使用；仅提供列表的 API 用单个 [Register] 即可。
 //
-//	GET    {path}       list (ZStack q=)
-//	GET    {path}/{id}  get
-//	POST   {path}       create
-//	PUT    {path}/{id}  update (requires BindUpdate)
-//	DELETE {path}/{id}  delete
+//	GET    {path}       列表（ZStack q=）
+//	GET    {path}/{id}  获取
+//	POST   {path}       创建
+//	PUT    {path}/{id}  更新（需要 BindUpdate）
+//	DELETE {path}/{id}  删除
 //
-// Intended for JSON/Huma resources on the shared chi mux.
+// 面向共享 chi mux 上的 JSON/Huma 资源。
 func RegisterResource[ListRow, Detail, CreateReq, UpdateReq any](
 	api huma.API,
 	svc ResourceHandlers[ListRow, Detail, CreateReq, UpdateReq],
@@ -286,7 +286,7 @@ func sanitizeOpID(path string, pascalCase bool) string {
 		return b.String()
 	}
 
-	// PascalCase (e.g. "/order-items" -> "OrderItems")
+	// PascalCase 转换（例如 "/order-items" -> "OrderItems"）
 	parts := strings.FieldsFunc(path, func(r rune) bool {
 		return r == '/' || r == '-' || r == '_'
 	})

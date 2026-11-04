@@ -14,7 +14,7 @@ type opToken struct {
 	op     Operator
 }
 
-// Longer and more specific operators must appear first.
+// 更长、更具体的操作符必须排在前面。
 var opTokens = []opToken{
 	{".notin:", OpNotIn},
 	{".in:", OpIn},
@@ -30,9 +30,9 @@ var opTokens = []opToken{
 	{"<", OpLT},
 }
 
-// ParseHTTPQValues safely decodes raw q query values.
-// If an element contains percent-encoded escape sequences, it unescapes them.
-// If it is already unescaped plain text, it preserves the literal string.
+// ParseHTTPQValues 安全地解码原始 q 查询值。
+// 若元素包含百分号编码的转义序列，则对其反转义；
+// 若元素已是未转义的纯文本，则保留原始字符串。
 func ParseHTTPQValues(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	for _, r := range raw {
@@ -55,8 +55,8 @@ func ParseHTTPQValues(raw []string) ([]string, error) {
 	return out, nil
 }
 
-// ParseQConditions parses and validates all q= conditions against spec (AND only).
-// Prefer [ParseQGroups] when or(...) groups are needed.
+// ParseQConditions 按 spec 解析并校验所有 q= 条件（仅 AND）。
+// 需要 or(...) 分组时优先用 [ParseQGroups]。
 func ParseQConditions(spec ListSpec, rawQs []string) ([]Condition, error) {
 	groups, err := ParseQGroups(spec, rawQs)
 	if err != nil {
@@ -72,8 +72,8 @@ func ParseQConditions(spec ListSpec, rawQs []string) ([]Condition, error) {
 	return out, nil
 }
 
-// ParseQGroups parses q= values into AND groups and controlled OR groups.
-// OR syntax: or(field=a,field2=b) — commas separate conditions inside or(...).
+// ParseQGroups 将 q= 值解析为 AND 组与受控 OR 组。
+// OR 语法：or(field=a,field2=b) —— 逗号分隔 or(...) 内的各个条件。
 func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 	lim := spec.Limits.normalized()
 	groups := make([]ConditionGroup, 0, len(rawQs))
@@ -179,12 +179,12 @@ func splitFieldOpValue(expr string) (field string, op Operator, valueRaw string,
 	for _, tok := range opTokens {
 		idx := strings.Index(expr, tok.suffix)
 		if idx <= 0 {
-			// idx < 0: not found; idx == 0: field would be empty
+			// idx < 0：未找到；idx == 0：字段会为空
 			continue
 		}
-		// The earliest operator in the expression is the one that divides the field from the value.
-		// When two operators start at the exact same index (e.g. ">=" vs ">", or ".notin:" vs ".in:"),
-		// the one appearing earlier in opTokens is more specific and takes precedence.
+		// 表达式中位置最靠前的操作符才是分隔字段与值的那个。
+		// 当两个操作符起始于同一位置（例如 ">=" 与 ">"，或 ".notin:" 与 ".in:"）时，
+		// 在 opTokens 中出现更早的那个更具体，优先生效。
 		if bestIdx < 0 || idx < bestIdx {
 			bestIdx = idx
 			bestTok = tok
@@ -288,7 +288,7 @@ func splitList(s string, sep byte) []string {
 
 func parseLiteral(s string) (any, error) {
 	s = strings.TrimSpace(s)
-	// Quoted strings: "hello", 'hello'
+	// 带引号的字符串："hello"、'hello'
 	if (strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`)) || (strings.HasPrefix(s, `'`) && strings.HasSuffix(s, `'`)) {
 		if len(s) >= 2 {
 			return s[1 : len(s)-1], nil
@@ -511,8 +511,8 @@ func coerceTimeValueOK(v any) error {
 	}
 }
 
-// validateTimeLiteral accepts RFC3339 / common SQL layouts / date-only / unix
-// seconds. ApplyList keeps the original string for SQL drivers.
+// validateTimeLiteral 接受 RFC3339 / 常见 SQL 布局 / 仅日期 / unix 秒。
+// ApplyList 会为 SQL 驱动保留原始字符串。
 func validateTimeLiteral(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -571,7 +571,7 @@ func resolveFieldSpec(spec ListSpec, path string) (FieldSpec, error) {
 	return f, nil
 }
 
-// resolveField resolves API field path to SQL column and required joins.
+// resolveField 将 API 字段路径解析为 SQL 列与所需 JOIN。
 func resolveField(spec ListSpec, path string) (resolvedField, error) {
 	parts := strings.Split(path, ".")
 	if len(parts) > maxFieldDepth {
@@ -619,7 +619,7 @@ func resolveField(spec ListSpec, path string) (resolvedField, error) {
 	return resolvedField{}, errInvalid
 }
 
-// NormalizeEqualToIn converts = with multiple values to OpIn for SQL building.
+// NormalizeEqualToIn 将多值的 = 转换为 OpIn，以便构建 SQL。
 func NormalizeEqualToIn(c Condition) Condition {
 	if c.Op == OpEqual && len(c.Values) > 1 {
 		c.Op = OpIn

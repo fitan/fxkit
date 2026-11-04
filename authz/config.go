@@ -41,7 +41,7 @@ type Config struct {
 	Casbin CasbinConfig `yaml:"casbin"`
 }
 
-// CasbinConfig Casbin enforcer。
+// CasbinConfig Casbin 执行器。
 type CasbinConfig struct {
 	// Enabled 打开 Enforce(sub, path, METHOD)。默认 false。
 	Enabled bool `yaml:"enabled"`

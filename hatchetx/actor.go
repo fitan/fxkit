@@ -16,28 +16,28 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// DefaultActorConcurrencyExpr keys Hatchet concurrency on the actor instance id.
-// Input payloads must JSON-serialize field "actorId" (see [ActorRef]).
+// DefaultActorConcurrencyExpr 以 actor 实例 id 作为 Hatchet 并发键。
+// 输入载荷必须把 "actorId" 字段 JSON 序列化出来（见 [ActorRef]）。
 const DefaultActorConcurrencyExpr = "input.actorId"
 
-// ActorRef embeds into command payloads so concurrency Expression "input.actorId" works.
-// Prefer embedding this over a bare GetActorID() — Call/CallAsync require the
-// marshaled JSON to contain "actorId".
+// ActorRef 嵌入到命令载荷中，使并发 Expression "input.actorId" 生效。
+// 优先嵌入本类型，而不是只实现裸 GetActorID()——Call/CallAsync 要求
+// 序列化后的 JSON 包含 "actorId"。
 type ActorRef struct {
 	ActorID string `json:"actorId"`
 }
 
-// GetActorID implements the actor-id contract used by [Actor.Call].
+// GetActorID 实现 [Actor.Call] 使用的 actor-id 约定。
 func (a ActorRef) GetActorID() string { return a.ActorID }
 
-// ActorHandler is the business handler for one actor command.
-// Serialization is guaranteed per actorId by Hatchet concurrency (MaxRuns=1).
-// Handlers should load/store durable state externally; the worker process is not sticky.
+// ActorHandler 是单个 actor 命令的业务处理器。
+// Hatchet 并发（MaxRuns=1）保证同一 actorId 内串行。
+// 处理器应在外部加载/存储持久状态；worker 进程不具备粘性。
 type ActorHandler[In, Out any] func(ctx context.Context, in In) (Out, error)
 
-// Actor is a typed concurrency mailbox on Hatchet (semantic actor):
-// one queue per actorId, processed with MaxRuns=1 and GROUP_ROUND_ROBIN.
-// It does not provide sticky workers or in-memory actor activation.
+// Actor 是 Hatchet 上带类型的并发邮箱（语义 actor）：
+// 每个 actorId 一个队列，以 MaxRuns=1 和 GROUP_ROUND_ROBIN 处理。
+// 它不提供粘性 worker，也不提供内存内 actor 激活。
 type Actor[In, Out any] struct {
 	name      string
 	handler   ActorHandler[In, Out]
@@ -51,20 +51,20 @@ type actorOptions struct {
 	maxRuns         int32
 }
 
-// ActorOption configures [NewActor].
+// ActorOption 配置 [NewActor]。
 type ActorOption func(*actorOptions)
 
-// WithActorDescription sets the Hatchet workflow description.
+// WithActorDescription 设置 Hatchet workflow 描述。
 func WithActorDescription(desc string) ActorOption {
 	return func(o *actorOptions) { o.description = desc }
 }
 
-// WithActorConcurrencyExpr overrides the CEL concurrency key (default: input.actorId).
+// WithActorConcurrencyExpr 覆盖 CEL 并发键（默认：input.actorId）。
 func WithActorConcurrencyExpr(expr string) ActorOption {
 	return func(o *actorOptions) { o.concurrencyExpr = expr }
 }
 
-// WithActorMaxRuns overrides MaxRuns for the concurrency group (default: 1).
+// WithActorMaxRuns 覆盖并发 group 的 MaxRuns（默认：1）。
 func WithActorMaxRuns(n int32) ActorOption {
 	return func(o *actorOptions) {
 		if n > 0 {
@@ -73,13 +73,13 @@ func WithActorMaxRuns(n int32) ActorOption {
 	}
 }
 
-// NewActor defines a semantic actor command backed by a Hatchet standalone task.
+// NewActor 定义一个由 Hatchet standalone task 承载的语义 actor 命令。
 //
-// In must JSON-serialize "actorId" for the default concurrency CEL (embed
-// [ActorRef] or an exported field with json:"actorId"). A GetActorID() method
-// alone is not enough — Hatchet evaluates concurrency on the JSON input, not Go methods.
-// If you override the CEL with [WithActorConcurrencyExpr], still keep actorId in
-// JSON unless the custom expression keys on another input field you guarantee.
+// In 必须把 "actorId" JSON 序列化出来，以配合默认的并发 CEL（嵌入
+// [ActorRef]，或使用带 json:"actorId" 的导出字段）。只有 GetActorID() 方法
+// 是不够的——Hatchet 基于 JSON 输入而非 Go 方法计算并发。
+// 若用 [WithActorConcurrencyExpr] 覆盖 CEL，仍需在 JSON 中保留 actorId，
+// 除非自定义表达式改用另一个你能保证存在的输入字段。
 func NewActor[In, Out any](name string, handler ActorHandler[In, Out], opts ...ActorOption) *Actor[In, Out] {
 	name = strings.TrimSpace(name)
 	o := actorOptions{
@@ -99,7 +99,7 @@ func NewActor[In, Out any](name string, handler ActorHandler[In, Out], opts ...A
 	cache := getActorTypeCache(inType)
 
 	if o.concurrencyExpr == DefaultActorConcurrencyExpr {
-		// Warn early at initialization time if input type has actor ID but lacks json:"actorId"
+		// 初始化时提前告警：输入类型带 actor ID 但缺少 json:"actorId"
 		if cache != nil && !cache.jsonTagFound && (cache.getter != nil || cache.hasActorID) {
 			slog.Warn("hatchetx: NewActor: input type has actor ID but does not JSON-serialize 'actorId' (embed hatchetx.ActorRef or field with json:\"actorId\")",
 				"actor", name, "type", inType.String())
@@ -119,7 +119,7 @@ func NewActor[In, Out any](name string, handler ActorHandler[In, Out], opts ...A
 	return &Actor[In, Out]{name: name, handler: handler, opts: o, typeCache: cache}
 }
 
-// Name returns the Hatchet workflow / task name.
+// Name 返回 Hatchet workflow / task 名称。
 func (a *Actor[In, Out]) Name() string {
 	if a == nil {
 		return ""
@@ -127,14 +127,14 @@ func (a *Actor[In, Out]) Name() string {
 	return a.name
 }
 
-// Registrar returns a [Registrar] that registers this actor on the shared worker.
+// Registrar 返回把该 actor 注册到共享 worker 的 [Registrar]。
 func (a *Actor[In, Out]) Registrar() Registrar {
 	return func(client *Client) ([]WorkflowBase, error) {
 		return a.Register(client)
 	}
 }
 
-// Register builds the Hatchet standalone task with per-actorId concurrency.
+// Register 构建带 per-actorId 并发的 Hatchet standalone task。
 func (a *Actor[In, Out]) Register(client *Client) ([]WorkflowBase, error) {
 	if a == nil || a.handler == nil {
 		return nil, fmt.Errorf("hatchetx: actor is nil")
@@ -201,16 +201,16 @@ func (a *Actor[In, Out]) validateActorID(in In) error {
 	if id == "" {
 		return fmt.Errorf("hatchetx: actorId is required (embed hatchetx.ActorRef or field with json:\\\"actorId\\\")")
 	}
-	// Fast path: if the type statically has an actorId struct field tagged json:"actorId",
-	// and does not customize marshaling, json.Marshal is guaranteed to output "actorId": id.
-	// In this case, we avoid a redundant pre-marshal and let SDK Run perform the sole serialization.
+	// 快速路径：若该类型静态含有标记为 json:"actorId" 的 actorId struct 字段，
+	// 且未自定义序列化，则 json.Marshal 必然输出 "actorId": id。
+	// 此时跳过冗余的预序列化，交由 SDK Run 完成唯一的序列化。
 	if a.typeCache != nil && a.typeCache.jsonTagFound && a.typeCache.hasActorID {
 		return nil
 	}
 	return assertActorIDInJSON(in, id)
 }
 
-// Call enqueues the actor command and waits for the result (serialized by actorId).
+// Call 把 actor 命令入队并等待结果（按 actorId 串行）。
 func (a *Actor[In, Out]) Call(ctx context.Context, client *Client, in In, opts ...hatchet.RunOptFunc) (Out, error) {
 	var zero Out
 	if a == nil {
@@ -245,7 +245,7 @@ func (a *Actor[In, Out]) Call(ctx context.Context, client *Client, in In, opts .
 	return zero, nil
 }
 
-// CallAsync fires the actor command without waiting. Returns the Hatchet run id.
+// CallAsync 触发 actor 命令且不等待，返回 Hatchet run id。
 func (a *Actor[In, Out]) CallAsync(ctx context.Context, client *Client, in In, opts ...hatchet.RunOptFunc) (string, error) {
 	if a == nil {
 		return "", fmt.Errorf("hatchetx: actor is nil")
@@ -269,8 +269,8 @@ func (a *Actor[In, Out]) CallAsync(ctx context.Context, client *Client, in In, o
 	return client.RunNoWait(ctx, name, in, opts...)
 }
 
-// ProvideActor publishes the actor's [Registrar] into the hatchet_registrars fx group.
-// Prefer constructing the Actor inside a registrar factory when the handler needs Fx deps.
+// ProvideActor 把该 actor 的 [Registrar] 发布到 hatchet_registrars fx group。
+// 当处理器需要 Fx 依赖时，优先在 registrar 工厂内构造 Actor。
 func ProvideActor[In, Out any](actor *Actor[In, Out]) di.Option {
 	return ProvideRegistrar(func() Registrar {
 		if actor == nil {
@@ -280,7 +280,7 @@ func ProvideActor[In, Out any](actor *Actor[In, Out]) di.Option {
 	})
 }
 
-// actorTypeCache holds precomputed reflection metadata for an actor input type.
+// actorTypeCache 保存 actor 输入类型的预计算反射元数据。
 type actorTypeCache struct {
 	hasActorID   bool
 	fieldIndex   []int
@@ -366,14 +366,14 @@ func buildActorTypeCache(origType reflect.Type) *actorTypeCache {
 		}
 	}
 
-	// If the type implements json.Marshaler, custom serialization may omit or rename actorId.
-	// In that case, we must not bypass assertActorIDInJSON.
+	// 若类型实现了 json.Marshaler，自定义序列化可能省略或重命名 actorId。
+	// 此时不得绕过 assertActorIDInJSON。
 	var jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
 	if origType.Implements(jsonMarshalerType) || reflect.PointerTo(origType).Implements(jsonMarshalerType) {
 		info.jsonTagFound = false
 	}
 
-	// Check if origType or pointer implements interface{ GetActorID() string }
+	// 检查 origType 或其指针是否实现 interface{ GetActorID() string }
 	checkType := origType
 	if checkType.Kind() != reflect.Pointer {
 		checkType = reflect.PointerTo(checkType)
@@ -508,8 +508,8 @@ func requireActorID(in any) (string, error) {
 	return id, nil
 }
 
-// assertActorIDInJSON ensures Hatchet CEL input.actorId sees the same id Call validated.
-// Uses gjson for high-performance zero-allocation extraction from raw JSON bytes.
+// assertActorIDInJSON 确保 Hatchet CEL input.actorId 看到的 id 与 Call 校验的一致。
+// 使用 gjson 从原始 JSON 字节中高性能、零分配地提取。
 func assertActorIDInJSON(in any, want string) error {
 	var raw []byte
 	switch v := in.(type) {

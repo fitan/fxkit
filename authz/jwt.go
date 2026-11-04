@@ -15,15 +15,15 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwt"
 )
 
-// TokenValidator validates a raw Bearer access token into a [Subject].
-// Implementation follows Logto’s Go guide: fetch JWKS, jwt.Parse with key set,
-// then check issuer / audience / organization / scopes.
-// See https://docs.logto.io/api-protection/go/chi
+// TokenValidator 把原始 Bearer access token 校验为 [Subject]。
+// 实现遵循 Logto 的 Go 指南：拉取 JWKS、用 key set 做 jwt.Parse，
+// 再校验 issuer / audience / organization / scopes。
+// 参见 https://docs.logto.io/api-protection/go/chi
 type TokenValidator interface {
 	Validate(ctx context.Context, rawToken string) (Subject, error)
 }
 
-// NewValidator builds a JWKS-backed validator when auth.enabled；否则返回 nil。
+// NewValidator 在 auth.enabled 时构建基于 JWKS 的校验器；否则返回 nil。
 // Casbin + DevHeaderUser 本地模式可不配置 issuer/audience（仅用 X-User 认人）。
 func NewValidator(p validatorParams) (TokenValidator, error) {
 	if p.Config == nil || !p.Config.Enabled {
@@ -49,9 +49,9 @@ func NewValidator(p validatorParams) (TokenValidator, error) {
 	}
 	orgClaim := strings.TrimSpace(c.OrgClaim)
 
-	// jwx/v3 cache (auto-refresh JWKS). Logto docs use jwk.Fetch once; Cache is the
-	// production equivalent for a stable IdP JWKS endpoint.
-	// Note: Register ignores the client-level HTTPClient unless passed as a Register option.
+	// jwx/v3 缓存（自动刷新 JWKS）。Logto 文档用一次性的 jwk.Fetch；对稳定的
+	// IdP JWKS 端点，Cache 才是生产等价物。
+	// 注意：除非作为 Register 的选项传入，Register 会忽略 client 级的 HTTPClient。
 	var httpClient *http.Client
 	var httprcOpts []httprc.NewClientOption
 	if c.TLSInsecure {
@@ -167,7 +167,7 @@ func collectPermissions(tok jwt.Token) []string {
 			out = append(out, p)
 		}
 	}
-	// Logto: scopes are space-separated in the "scope" claim.
+	// Logto：scopes 在 "scope" claim 中以空格分隔。
 	add(claimString(tok, "scope"))
 	add(claimString(tok, "scp"))
 	for _, p := range claimStringSlice(tok, "permissions") {

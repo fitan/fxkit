@@ -10,22 +10,22 @@ import (
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 )
 
-// WorkflowScheduledListParams aliases Hatchet's scheduled run query filter options.
+// WorkflowScheduledListParams 是 Hatchet 定时运行查询过滤选项的别名。
 type WorkflowScheduledListParams = rest.WorkflowScheduledListParams
 
-// ScheduleOnceInput configures a one-off scheduled workflow execution at a future time.
+// ScheduleOnceInput 配置未来某一时刻的一次性 workflow 执行。
 //
-// Unlike recurring cron reminders ([CreateReminder]), ScheduleOnce fires once at RunAt
-// and can be queried or canceled by its returned scheduledRunID.
+// 与周期性 cron 定时提醒（[CreateReminder]）不同，ScheduleOnce 只在 RunAt
+// 触发一次，可通过返回的 scheduledRunID 查询或取消。
 type ScheduleOnceInput struct {
-	WorkflowName string         // Target workflow name
-	RunAt        time.Time      // Time at which the workflow should execute
-	Input        any            // Payload delivered to the workflow
-	Priority     *RunPriority   // Optional priority
-	Metadata     map[string]any // Optional metadata attached to the scheduled run
+	WorkflowName string         // 目标 workflow 名称
+	RunAt        time.Time      // workflow 应执行的时间
+	Input        any            // 投递给 workflow 的载荷
+	Priority     *RunPriority   // 可选优先级
+	Metadata     map[string]any // 附加到定时运行的可选 metadata
 }
 
-// ScheduledRun represents a scheduled one-off workflow run.
+// ScheduledRun 表示一次性的定时 workflow 运行。
 type ScheduledRun struct {
 	ID           string                   `json:"id"`
 	WorkflowName string                   `json:"workflowName"`
@@ -34,7 +34,7 @@ type ScheduledRun struct {
 	Raw          *rest.ScheduledWorkflows `json:"-"`
 }
 
-// ScheduleOnce schedules a workflow to execute once at a future time (dueTime semantics).
+// ScheduleOnce 安排 workflow 在未来某一时刻执行一次（dueTime 语义）。
 func ScheduleOnce(ctx context.Context, client *Client, in ScheduleOnceInput) (scheduledRunID string, err error) {
 	if client == nil || !client.Enabled() || client.Schedules() == nil {
 		return "", fmt.Errorf("hatchetx: client disabled")
@@ -69,7 +69,7 @@ func ScheduleOnce(ctx context.Context, client *Client, in ScheduleOnceInput) (sc
 	return res.Metadata.Id, nil
 }
 
-// CancelScheduled cancels a previously scheduled one-off workflow run.
+// CancelScheduled 取消先前安排的一次性 workflow 运行。
 func CancelScheduled(ctx context.Context, client *Client, scheduledRunID string) error {
 	if client == nil || !client.Enabled() || client.Schedules() == nil {
 		return fmt.Errorf("hatchetx: client disabled")
@@ -81,7 +81,7 @@ func CancelScheduled(ctx context.Context, client *Client, scheduledRunID string)
 	return client.Schedules().Delete(ctx, id)
 }
 
-// ListScheduled lists scheduled workflow runs matching the given filter params as clean ScheduledRun models.
+// ListScheduled 列出符合给定过滤参数的定时 workflow 运行，并整理为干净的 ScheduledRun 模型。
 func ListScheduled(ctx context.Context, client *Client, opts WorkflowScheduledListParams) ([]ScheduledRun, error) {
 	if client == nil || !client.Enabled() || client.Schedules() == nil {
 		return nil, fmt.Errorf("hatchetx: client disabled")
@@ -111,17 +111,17 @@ func ListScheduled(ctx context.Context, client *Client, opts WorkflowScheduledLi
 	return runs, nil
 }
 
-// ScheduleOnce schedules a one-off workflow execution at a future time on this client.
+// ScheduleOnce 通过该 client 安排未来某一时刻的一次性 workflow 执行。
 func (c *Client) ScheduleOnce(ctx context.Context, in ScheduleOnceInput) (string, error) {
 	return ScheduleOnce(ctx, c, in)
 }
 
-// CancelScheduled cancels a previously scheduled workflow run on this client.
+// CancelScheduled 通过该 client 取消先前安排的 workflow 运行。
 func (c *Client) CancelScheduled(ctx context.Context, scheduledRunID string) error {
 	return CancelScheduled(ctx, c, scheduledRunID)
 }
 
-// ListScheduled lists scheduled workflow runs matching the given filter params on this client.
+// ListScheduled 通过该 client 列出符合给定过滤参数的定时 workflow 运行。
 func (c *Client) ListScheduled(ctx context.Context, opts WorkflowScheduledListParams) ([]ScheduledRun, error) {
 	return ListScheduled(ctx, c, opts)
 }

@@ -23,7 +23,7 @@ import (
 
 const articleCreatedTopic = "article-created"
 
-// Article is the GORM model. JSON tags are "-" because the API uses DTOs.
+// Article 是 GORM 模型。JSON tag 都是 "-"，因为 API 使用 DTO。
 //
 // 过滤/排序白名单见 NewService 里的 crudx.ListSpec（map 字面量，每行自包含）。
 type Article struct {
@@ -64,14 +64,14 @@ type UpdateArticleReq struct {
 	Body  string `json:"body,omitempty"`
 }
 
-// ArticleCreatedEvent is the outbox / Hatchet payload for article-created.
+// ArticleCreatedEvent 是 article-created 的 outbox / Hatchet 负载。
 type ArticleCreatedEvent struct {
 	ID     int64  `json:"id"`
 	Title  string `json:"title"`
 	Author string `json:"author"`
 }
 
-// ArticleFanout is a second consumer of the same Hatchet event (fan-out by task name).
+// ArticleFanout 是同一个 Hatchet 事件的第二个消费者（按 task 名称 fan-out）。
 type ArticleFanout struct {
 	ID        int64  `gorm:"primaryKey"`
 	ArticleID int64  `gorm:"index;not null"`
@@ -293,7 +293,7 @@ func RegisterWorker(svc *Service) hatchetx.Registrar {
 			},
 			hatchet.WithWorkflowEvents(articleCreatedTopic),
 		)
-		// Same event key, different task name = MQ fan-out (second consumer group).
+		// 同一个事件 key、不同 task 名称 = MQ fan-out（第二个消费组）。
 		fanout := client.SDK.NewStandaloneTask(
 			"catalog-on-article-created-fanout",
 			func(ctx hatchet.Context, ev ArticleCreatedEvent) (map[string]any, error) {

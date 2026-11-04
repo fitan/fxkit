@@ -6,66 +6,66 @@ import (
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 )
 
-// Re-export common Hatchet context and task types for seamless developer experience.
+// 重新导出常用 Hatchet context 与 task 类型，提供顺畅的开发体验。
 type (
-	// Context is the execution context passed into task functions.
+	// Context 是传入任务函数的执行上下文。
 	Context = hatchet.Context
 
-	// DurableContext is the durable execution context supporting SleepFor, WaitForEvent, Memo, etc.
+	// DurableContext 是支持 SleepFor、WaitForEvent、Memo 等的持久执行上下文。
 	DurableContext = hatchet.DurableContext
 
-	// Workflow represents a Hatchet multi-step DAG workflow.
+	// Workflow 表示 Hatchet 多步骤 DAG workflow。
 	Workflow = hatchet.Workflow
 
-	// Task represents a step inside a workflow.
+	// Task 表示 workflow 内的一个 step。
 	Task = hatchet.Task
 
-	// StandaloneTask represents an independent single-step task.
+	// StandaloneTask 表示独立的单步 task。
 	StandaloneTask = hatchet.StandaloneTask
 
-	// WorkflowOption configures a Workflow.
+	// WorkflowOption 配置 Workflow。
 	WorkflowOption = hatchet.WorkflowOption
 
-	// TaskOption configures a Task.
+	// TaskOption 配置 Task。
 	TaskOption = hatchet.TaskOption
 
-	// WorkerOption configures a Hatchet Worker.
+	// WorkerOption 配置 Hatchet Worker。
 	WorkerOption = hatchet.WorkerOption
 
-	// StandaloneTaskOption configures a StandaloneTask.
+	// StandaloneTaskOption 配置 StandaloneTask。
 	StandaloneTaskOption = hatchet.StandaloneTaskOption
 
-	// WorkflowResult contains the return value of a completed workflow run.
+	// WorkflowResult 包含已完成的 workflow 运行的返回值。
 	WorkflowResult = hatchet.WorkflowResult
 
-	// WorkflowRunRef is a lightweight handle to a workflow run.
+	// WorkflowRunRef 是 workflow 运行的轻量句柄。
 	WorkflowRunRef = hatchet.WorkflowRunRef
 
-	// RunManyOpt specifies input and options for bulk workflow runs.
+	// RunManyOpt 指定批量 workflow 运行的输入与选项。
 	RunManyOpt = hatchet.RunManyOpt
 
-	// RunOptFunc configures an individual workflow run.
+	// RunOptFunc 配置单个 workflow 运行。
 	RunOptFunc = hatchet.RunOptFunc
 
-	// RunPriority defines the execution priority of a workflow run.
+	// RunPriority 定义 workflow 运行的执行优先级。
 	RunPriority = hatchet.RunPriority
 
-	// Concurrency configures workflow or task concurrency limits.
+	// Concurrency 配置 workflow 或 task 的并发上限。
 	Concurrency = types.Concurrency
 
-	// EvictionPolicy defines the eviction strategy for long-running durable tasks.
+	// EvictionPolicy 定义长时间运行的 durable task 的驱逐策略。
 	EvictionPolicy = hatchet.EvictionPolicy
 )
 
-// Re-export common option constructors to minimize foreign import dependencies.
+// 重新导出常用选项构造函数，减少外部 import 依赖。
 var (
-	// Run options
+	// Run 选项
 	WithRunKey      = hatchet.WithRunKey
 	WithRunMetadata = hatchet.WithRunMetadata
 	WithRunPriority = hatchet.WithRunPriority
 	WithRunSticky   = hatchet.WithRunSticky
 
-	// Workflow options
+	// Workflow 选项
 	WithWorkflowConcurrency = hatchet.WithWorkflowConcurrency
 	WithWorkflowCron        = hatchet.WithWorkflowCron
 	WithWorkflowCronInput   = hatchet.WithWorkflowCronInput
@@ -73,7 +73,7 @@ var (
 	WithWorkflowDescription = hatchet.WithWorkflowDescription
 	WithWorkflowVersion     = hatchet.WithWorkflowVersion
 
-	// Task options
+	// Task 选项
 	WithConcurrency      = hatchet.WithConcurrency
 	WithCron             = hatchet.WithCron
 	WithEvents           = hatchet.WithEvents
@@ -84,11 +84,11 @@ var (
 	WithRetryBackoff     = hatchet.WithRetryBackoff
 	WithRateLimits       = hatchet.WithRateLimits
 
-	// Worker options
+	// Worker 选项
 	WithSlots        = hatchet.WithSlots
 	WithDurableSlots = hatchet.WithDurableSlots
 	WithLabels       = hatchet.WithLabels
 )
 
-// TaskDefaults is re-exported for workflow-level task default configurations.
+// TaskDefaults 为 workflow 级 task 默认配置而重新导出。
 type TaskDefaults = create.TaskDefaults

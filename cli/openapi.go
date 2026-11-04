@@ -80,8 +80,8 @@ func flagString(cmd *cobra.Command, name string) string {
 	return v
 }
 
-// collectOpenAPI starts the host graph without binding HTTP, then encodes
-// the live Huma OpenAPI document.
+// collectOpenAPI 在不绑定 HTTP 的前提下启动宿主对象图，然后编码
+// 运行期的 Huma OpenAPI 文档。
 func collectOpenAPI(opts []di.Option, cfg config.Options, in openapi.EncodeInput, bestEffort bool) ([]byte, error) {
 	supplyOpt := func(i di.Injector) {
 		di.ProvideValue(i, cfg)

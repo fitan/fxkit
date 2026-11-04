@@ -270,7 +270,7 @@ func TestInbox_Once(t *testing.T) {
 		t.Fatalf("expected fn once, got %d", runs)
 	}
 
-	// empty key always runs
+	// 空 key 总是执行
 	if err := inbox.Once(ctx, outbox.OnceInput{Key: "", Fn: fn}); err != nil {
 		t.Fatal(err)
 	}

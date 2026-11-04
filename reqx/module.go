@@ -5,8 +5,8 @@ import (
 	"github.com/fitan/fxkit/di"
 )
 
-// Module provides [Factory] and stops Consul watches on shutdown.
-// Included in fxkit.Default.
+// Module 提供 [Factory]，并在关闭时停止 Consul 监听。
+// 已包含在 fxkit.Default 中。
 var Module = di.Module("fxkit/reqx",
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (*Factory, error) {

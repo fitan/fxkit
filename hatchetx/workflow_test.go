@@ -89,7 +89,7 @@ func TestProvideWorkflow_Registration(t *testing.T) {
 	})
 	opt3(injector)
 
-	// 4. ProvideRegistrar with single WorkflowBase func
+	// 4. ProvideRegistrar 接收单个 WorkflowBase 构造函数
 	opt4 := ProvideRegistrar(func(*Client) (WorkflowBase, error) {
 		return nil, nil
 	})
@@ -114,7 +114,7 @@ func TestProvideWorkflow_Registration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("registrar %d failed: %v", i, err)
 		}
-		// when client is disabled, NewStandaloneTask returns nil, so wfs may contain nil elements or be empty
+		// client 禁用时 NewStandaloneTask 返回 nil，所以 wfs 可能包含 nil 元素或为空
 		_ = wfs
 	}
 }

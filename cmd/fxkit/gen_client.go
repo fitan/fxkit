@@ -13,8 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// oapiCodegenPkg is the generator `go run` target. Pinned so `fxkit gen client`
-// and the written //go:generate line stay in sync.
+// oapiCodegenPkg 是生成器的 `go run` 目标。固定版本，使 `fxkit gen client`
+// 与写出的 //go:generate 行保持同步。
 const oapiCodegenPkg = "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0"
 
 // clientGeneratedFiles 是每次都能安全重写的纯生成物。

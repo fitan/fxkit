@@ -9,7 +9,7 @@ import (
 	"github.com/fitan/fxkit/outbox"
 )
 
-// outboxPublisher pushes outbox rows as Hatchet events (event key = topic name).
+// outboxPublisher 把 outbox 记录作为 Hatchet 事件推送（event key = topic 名称）。
 type outboxPublisher struct {
 	client *Client
 }

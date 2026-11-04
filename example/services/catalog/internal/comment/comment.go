@@ -16,8 +16,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Comment is a second resource used for explicit Huma Register (not RegisterResource)
-// plus crudx q= / cursor / JOIN / isnull.
+// Comment 是第二个资源，用于演示显式 Huma Register（而非 RegisterResource），
+// 以及 crudx 的 q= / cursor / JOIN / isnull。
 // Comment 的 gorm/model 字段。
 //
 // 过滤/排序白名单见 NewService 里的 crudx.ListSpec（含跨表 JOIN）。

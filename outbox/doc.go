@@ -1,26 +1,25 @@
-// Package outbox implements the transactional outbox pattern.
+// Package outbox 实现事务性 outbox 模式。
 //
-// Enqueue outbox rows inside the same [gormx.Client.Transaction] as business writes;
-// [Store.Enqueue] and [EnqueueTopic] / [EnqueueTopicMsg] use [gormx.Client.Conn] so they
-// join the active tx. After commit, [Relay] polls pending rows and publishes via
-// an [EventPublisher]:
+// 在业务写入所在的同一个 [gormx.Client.Transaction] 内入队 outbox 行；
+// [Store.Enqueue] 与 [EnqueueTopic] / [EnqueueTopicMsg] 使用 [gormx.Client.Conn]，
+// 因此会加入当前活跃的事务。提交之后，[Relay] 轮询 pending 行，并通过
+// 一个 [EventPublisher] 投递：
 //
-//   - Hatchet Events (hatchetx, when hatchet.enabled && hatchet.outbox_publisher)
-//   - or a custom driver registered with [ProvidePublisher] (Kafka, NATS, …)
+//   - Hatchet Events（hatchetx，当 hatchet.enabled && hatchet.outbox_publisher 时）
+//   - 或用 [ProvidePublisher] 注册的自定义驱动（Kafka、NATS、…）
 //
-// Crash recovery (multi-replica): claiming a row sets status=processing, a LeaseID,
-// LockedAt, and increments Attempts. The claiming relay heartbeats LockedAt while
-// publishing. Another replica may reclaim when LockedAt is older than
-// outbox.claim_timeout (default 30s). markPublished / markFailed are compare-and-swap
-// on LeaseID so a stale failure cannot resurrect a published row. Delivery remains
-// at-least-once on the wire.
+// 崩溃恢复（多副本）：认领一行会设置 status=processing、一个 LeaseID、
+// LockedAt，并递增 Attempts。认领该行的 relay 在投递期间心跳刷新 LockedAt。
+// 当 LockedAt 早于 outbox.claim_timeout（默认 30s）时，另一个副本可以重新认领。
+// markPublished / markFailed 基于 LeaseID 做比较并交换（compare-and-swap），
+// 因此陈旧的失败标记不会让已投递的行复活。投递在链路上仍是至少一次。
 //
-// Idempotency:
-//   - Producer: set [Message.IdempotencyKey] (or [EnqueueTopicInput.IdempotencyKey]) so
-//     duplicate Enqueue is a no-op (pending/processing/published) and the key is
-//     published as metadata ([MetadataIdempotencyKey]). A failed row with the same
-//     key is reset to pending so the producer can retry after max_retries.
-//   - Consumer: use [Inbox.Once] with the same key for at-most-once handler application.
+// 幂等：
+//   - 生产端：设置 [Message.IdempotencyKey]（或 [EnqueueTopicInput.IdempotencyKey]），
+//     使重复 Enqueue 成为空操作（pending/processing/published），并让该 key 作为
+//     metadata 投递（[MetadataIdempotencyKey]）。同 key 的 failed 行会被重置为
+//     pending，以便生产端在 max_retries 之后重试。
+//   - 消费端：使用 [Inbox.Once] 与相同的 key，实现处理器的最多一次应用。
 //
-// [Module] is included in [github.com/fitan/fxkit.Default]; set outbox.enabled=true to start the relay.
+// [Module] 已包含在 [github.com/fitan/fxkit.Default] 中；设置 outbox.enabled=true 即可启动 relay。
 package outbox

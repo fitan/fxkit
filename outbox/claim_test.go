@@ -169,7 +169,7 @@ func TestClaim_ReclaimsProcessingWithNilLockedAt(t *testing.T) {
 	client := testDB(t)
 	ctx := context.Background()
 
-	// Legacy / crash mid-claim rows may lack locked_at; treat as reclaimable.
+	// 历史遗留 / 认领中途崩溃的行可能没有 locked_at；视为可重新认领。
 	row := outbox.OutboxEvent{
 		Pubsub:  "pubsub",
 		Topic:   "user-created",

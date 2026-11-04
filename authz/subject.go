@@ -41,7 +41,7 @@ func (s Subject) Has(permission string) bool {
 		if p == "*" || p == permission {
 			return true
 		}
-		// resource:* matches a single action segment (orders:read), not orders:a:b
+		// resource:* 只匹配单个 action 段（orders:read），不匹配 orders:a:b
 		if strings.HasSuffix(p, ":*") {
 			prefix := strings.TrimSuffix(p, "*")
 			if !strings.HasPrefix(permission, prefix) {

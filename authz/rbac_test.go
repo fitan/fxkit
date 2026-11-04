@@ -32,7 +32,7 @@ func TestRBAC_RolePermissionsAndBindings(t *testing.T) {
 	if perms[0].Path != "/users" && perms[1].Path != "/users" {
 		t.Fatalf("expected /users in %+v", perms)
 	}
-	// Huma {id} stored as :id
+	// Huma 的 {id} 会存成 :id
 	foundDetail := false
 	for _, p := range perms {
 		if p.Path == "/users/:id" && p.Method == "GET" {
@@ -53,7 +53,7 @@ func TestRBAC_RolePermissionsAndBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// One subject may bind multiple roles; permissions are the union.
+	// 一个主体可以绑定多个角色；权限取并集。
 	if err := e.SetSubjectRoles(ctx, authz.SubjectRolesInput{
 		Subject: "bob",
 		Roles:   []string{"editor", "writer", "editor"},

@@ -56,8 +56,8 @@ func TestCloneForEndpoint_HostOverride(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "http://orders/v1", nil)
 	require.NoError(t, err)
 
-	// Rewrite mode + Host override: connection goes to the endpoint, but the
-	// Host header stays a vhost-friendly name.
+	// 改写模式 + Host 覆盖：连接指向端点，但 Host 头保持为
+	// 便于虚拟主机路由的名称。
 	r2, err := cloneForEndpoint(req, "10.1.2.3:8080", endpointRewrite{
 		scheme:       "http",
 		hostOverride: "api.internal",
@@ -66,7 +66,7 @@ func TestCloneForEndpoint_HostOverride(t *testing.T) {
 	assert.Equal(t, "10.1.2.3:8080", r2.URL.Host)
 	assert.Equal(t, "api.internal", r2.Host)
 
-	// Preserve mode + Host override.
+	// 保留模式 + Host 覆盖。
 	r3, err := cloneForEndpoint(req, "10.1.2.3:8443", endpointRewrite{
 		scheme:       "https",
 		preserveHost: true,
@@ -228,8 +228,8 @@ func TestClient_SeedOnlyHTTPSKeepsRewriteBehavior(t *testing.T) {
 	defer f.Close()
 	off := false
 
-	// Seeds-only + https keeps the historical endpoint-as-SNI behavior, so IP
-	// certificates (e.g. httptest.NewTLSServer) keep working.
+	// 仅种子地址 + https 保持原有的「端点即 SNI」行为，因此 IP 证书
+	// （例如 httptest.NewTLSServer）依然可用。
 	cli, err := f.Client(ClientInput{
 		Seeds:  []string{"127.0.0.1:8443"},
 		Scheme: "https",

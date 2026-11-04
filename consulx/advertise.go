@@ -12,8 +12,8 @@ type advertiseResult struct {
 	Explicit bool
 }
 
-// resolveAdvertise returns the address written into the Consul catalog.
-// Priority: discovery.advertise_address → auto-detect → 127.0.0.1.
+// resolveAdvertise 返回写入 Consul catalog 的地址。
+// 优先级：discovery.advertise_address → 自动探测 → 127.0.0.1。
 func resolveAdvertise(disc *Config) advertiseResult {
 	if disc != nil {
 		if v := strings.TrimSpace(disc.AdvertiseAddress); v != "" {
@@ -41,8 +41,8 @@ func isLoopbackAddr(addr string) bool {
 	return strings.EqualFold(host, "localhost")
 }
 
-// detectLocalIP prefers the outbound NIC toward Consul when it is not a VPN
-// (point-to-point) interface; otherwise picks the best non-loopback IPv4.
+// detectLocalIP 优先选择通往 Consul 的出站网卡，前提是它不是 VPN
+// （点对点）接口；否则挑选最合适的非回环 IPv4 地址。
 func detectLocalIP(consulAddress string) string {
 	if host := consulHostname(consulAddress); host != "" {
 		if ip := outboundIP(net.JoinHostPort(host, "8500")); ip != "" && !isPointToPointIP(ip) {

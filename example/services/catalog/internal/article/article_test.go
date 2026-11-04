@@ -44,7 +44,7 @@ func TestArticleService_CRUD(t *testing.T) {
 	client := setupTestDB(t)
 	svc := setupArticleService(t, client)
 
-	// 1. Create Article
+	// 1. 创建 Article
 	created, err := svc.Create(ctx, article.CreateArticleReq{
 		Title: "Go 1.27 Generics",
 		Body:  "Deep dive into reverse type inference",
@@ -57,26 +57,26 @@ func TestArticleService_CRUD(t *testing.T) {
 
 	idStr := fmt.Sprintf("%d", created.ID)
 
-	// 2. Conflict on Duplicate Title
+	// 2. 重复标题应冲突
 	_, err = svc.Create(ctx, article.CreateArticleReq{
 		Title: "Go 1.27 Generics",
 		Body:  "Another duplicate",
 	})
 	assert.Error(t, err)
 
-	// 3. Validation on Empty Title
+	// 3. 空标题应校验失败
 	_, err = svc.Create(ctx, article.CreateArticleReq{
 		Title: "   ",
 	})
 	assert.Error(t, err)
 
-	// 4. Get by ID
+	// 4. 按 ID 查询
 	detail, err := svc.Get(ctx, idStr)
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, detail.ID)
 	assert.Equal(t, "Go 1.27 Generics", detail.Title)
 
-	// 5. Update
+	// 5. 更新
 	updated, err := svc.Update(ctx, article.UpdateArticleReq{
 		ID:    idStr,
 		Title: "Go 1.27 Generics Updated",
@@ -86,7 +86,7 @@ func TestArticleService_CRUD(t *testing.T) {
 	assert.Equal(t, "Go 1.27 Generics Updated", updated.Title)
 	assert.Equal(t, "Updated body content", updated.Body)
 
-	// 6. List with filter
+	// 6. 带过滤条件的列表查询
 	listRes, err := svc.List(ctx, crudx.ListParams{
 		Limit: 10,
 	})
@@ -94,11 +94,11 @@ func TestArticleService_CRUD(t *testing.T) {
 	assert.Equal(t, 1, len(listRes.Items))
 	assert.Equal(t, "Go 1.27 Generics Updated", listRes.Items[0].Title)
 
-	// 7. Delete
+	// 7. 删除
 	err = svc.Delete(ctx, idStr)
 	require.NoError(t, err)
 
-	// 8. Get after delete should fail
+	// 8. 删除后再查询应失败
 	_, err = svc.Get(ctx, idStr)
 	assert.Error(t, err)
 }
@@ -108,7 +108,7 @@ func TestArticleService_Fanout(t *testing.T) {
 	client := setupTestDB(t)
 	svc := setupArticleService(t, client)
 
-	// Test fanout list initially empty
+	// 测试 fan-out 列表初始为空
 	rows, err := svc.ListFanout(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, rows)

@@ -19,11 +19,11 @@ func TestMemoryCache_Basic(t *testing.T) {
 	ctx := context.Background()
 	c := NewMemoryCache()
 
-	// 1. Get not found
+	// 1. 读取未命中
 	_, err := c.Get(ctx, "k1")
 	assert.ErrorIs(t, err, ErrCacheMiss)
 
-	// 2. Set and Get
+	// 2. 写入并读取
 	err = c.Set(ctx, "k1", []byte("val1"), time.Hour)
 	require.NoError(t, err)
 
@@ -31,13 +31,13 @@ func TestMemoryCache_Basic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "val1", string(val))
 
-	// 3. Delete
+	// 3. 删除
 	err = c.Delete(ctx, "k1")
 	require.NoError(t, err)
 	_, err = c.Get(ctx, "k1")
 	assert.ErrorIs(t, err, ErrCacheMiss)
 
-	// 4. Expiration
+	// 4. 过期
 	err = c.Set(ctx, "k_exp", []byte("val_exp"), 10*time.Millisecond)
 	require.NoError(t, err)
 	time.Sleep(20 * time.Millisecond)
@@ -71,17 +71,17 @@ func TestPrefixWrapper(t *testing.T) {
 	err := c.Set(ctx, "foo", []byte("bar"), time.Hour)
 	require.NoError(t, err)
 
-	// Direct check on underlying memory
+	// 直接检查底层内存缓存
 	val, err := mem.Get(ctx, "test:foo")
 	require.NoError(t, err)
 	assert.Equal(t, "bar", string(val))
 
-	// Get via prefixed wrapper
+	// 通过带前缀的包装器读取
 	val, err = c.Get(ctx, "foo")
 	require.NoError(t, err)
 	assert.Equal(t, "bar", string(val))
 
-	// MGet via prefixed wrapper
+	// 通过带前缀的包装器批量读取
 	res, err := c.MGet(ctx, "foo", "none")
 	require.NoError(t, err)
 	assert.Equal(t, "bar", string(res["foo"]))

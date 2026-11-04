@@ -52,7 +52,7 @@ func extractMySQLDBName(dsn string) string {
 	return rest
 }
 
-// prepareDSN applies driver-specific DSN defaults (SQLite busy timeout / WAL).
+// prepareDSN 应用驱动相关的 DSN 默认值（SQLite busy timeout / WAL）。
 func prepareDSN(driver, dsn string) string {
 	if !strings.EqualFold(strings.TrimSpace(driver), "sqlite") {
 		return dsn

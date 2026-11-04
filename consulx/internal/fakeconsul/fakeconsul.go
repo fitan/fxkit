@@ -170,7 +170,7 @@ func (s *Server) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp(req, http.StatusOK, "false", s.index), nil
 		}
 
-		// blocking query
+		// 阻塞查询
 		s.WatchQueries = append(s.WatchQueries, q)
 		s.index++
 		if _, ok := s.KV[key]; !ok {

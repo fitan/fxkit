@@ -18,23 +18,23 @@ import (
 const (
 	defaultTimeout = 30 * time.Second
 
-	// defaultMaxIdleConnsPerHost avoids the stdlib global default of 2, which
-	// causes connection churn for services that fan out to a few upstreams.
+	// defaultMaxIdleConnsPerHost 避免使用标准库全局默认值 2，
+	// 该默认值会让扇出到少量上游的服务频繁重建连接。
 	defaultMaxIdleConnsPerHost = 32
 	defaultMaxIdleConns        = 200
 	defaultIdleConnTimeout     = 90 * time.Second
 
-	// defaultWatchWait is Consul's blocking-query default. It is a max idle
-	// hold: an index change returns immediately, so a longer wait does not
-	// delay endpoint discovery.
+	// defaultWatchWait 是 Consul blocking query 的默认值。它是最大空闲
+	// 挂起时间：index 变化会立即返回，因此更长的 wait 不会延迟
+	// 端点发现。
 	defaultWatchWait = 5 * time.Minute
 
-	// maxWatchWait is Consul's blocking-query wait ceiling (10 minutes).
+	// maxWatchWait 是 Consul blocking query 的 wait 上限（10 分钟）。
 	maxWatchWait = 10 * time.Minute
 )
 
-// Factory builds [req.Client] instances that resolve targets via Consul watch
-// (and/or static Seeds). Provided by [Module] (included in fxkit.Default).
+// Factory 构建通过 Consul 监听（和/或静态种子地址）解析目标的 [req.Client] 实例。
+// 由 [Module] 提供（已包含在 fxkit.Default 中）。
 type Factory struct {
 	cfg *config.Config
 
@@ -52,70 +52,66 @@ type managedPool struct {
 	cancel context.CancelFunc
 }
 
-// ClientInput configures a discovered HTTP client.
+// ClientInput 配置一个带服务发现的 HTTP 客户端。
 type ClientInput struct {
-	// Name is the Consul service name. Required when using Consul watch.
-	// Endpoints are read from Consul health service entries (Service.Address or Node.Address + Port).
+	// Name 是 Consul 服务名。使用 Consul 监听时必填。
+	// 端点从 Consul 健康服务条目读取（Service.Address 或 Node.Address + Port）。
 	Name string
 
-	// Seeds are optional static endpoints for local/dev when Consul is unavailable, e.g.
-	// "10.0.0.1:8080", "api.example.com:443". Production normally relies on Consul only.
+	// Seeds 是可选的静态端点，用于 Consul 不可用的本地/开发环境，例如
+	// "10.0.0.1:8080"、"api.example.com:443"。生产环境通常只依赖 Consul。
 	Seeds []string
 
-	// Scheme is "http" (default) or "https".
+	// Scheme 为 "http"（默认）或 "https"。
 	Scheme string
 
-	// Timeout for the underlying http.Client (default 30s).
+	// Timeout 是底层 http.Client 的超时时间（默认 30s）。
 	Timeout time.Duration
 
-	// PassingOnly selects only healthy Consul instances.
-	// Default true. Set to a pointer to false to include non-passing.
+	// PassingOnly 只选择健康的 Consul 实例。
+	// 默认为 true。设为指向 false 的指针可包含非 passing 实例。
 	PassingOnly *bool
 
-	// OTel enables otelhttp wrapping (default true).
+	// OTel 启用 otelhttp 包装（默认 true）。
 	OTel *bool
 
-	// SpanName overrides the otel span name formatter result (optional).
+	// SpanName 覆盖 otel span 名称格式化器的结果（可选）。
 	SpanName string
 
-	// BaseTransport is an optional underlying RoundTripper (before otel + resolve).
+	// BaseTransport 是可选的底层 RoundTripper（位于 otel 与解析层之前）。
 	//
-	// When nil, the req.Client's own transport is used as the base, so
-	// SetTLSClientConfig / SetProxy / SetDial / SetDialTLS etc. on the returned
-	// client still affect real requests. When set, it replaces that transport
-	// entirely; req-level transport settings are then ignored.
+	// 为 nil 时，使用 req.Client 自身的传输层作为 base，因此在返回的 client 上
+	// 调用 SetTLSClientConfig / SetProxy / SetDial / SetDialTLS 等仍会影响真实请求。
+	// 设置后则完全替换该传输层；此时 req 层面的传输层设置会被忽略。
 	BaseTransport http.RoundTripper
 
-	// ServerName is the TLS server name (SNI + certificate verification) used
-	// when Scheme is "https". Set it when discovery returns bare IPs but the
-	// certificate is issued for a DNS name.
+	// ServerName 是 TLS 服务器名（用于 SNI 与证书校验），在 Scheme 为 "https" 时使用。
+	// 当服务发现返回裸 IP、而证书签发对象是 DNS 名时设置它。
 	//
-	// When set, the logical service name is preserved as URL.Host / Host, and
-	// each request dials the selected endpoint through a custom DialContext.
-	// Without ServerName, https + a named service preserves the logical host
-	// when discovery returns an IP endpoint, using it as the default SNI (so
-	// Consul IP endpoints still verify). DNS endpoints keep the historical
-	// behavior (endpoint used as SNI). Seeds-only clients also keep the
-	// historical behavior.
+	// 设置后，逻辑服务名会保留在 URL.Host / Host 中，每个请求通过自定义
+	// DialContext 拨号到选中的端点。未设置 ServerName 时，https + 命名服务在
+	// 服务发现返回 IP 端点的情况下会保留逻辑 host，并将其作为默认 SNI
+	// （因此 Consul 返回的 IP 端点仍能通过校验）。DNS 端点保持原有行为
+	// （端点即 SNI）。仅使用种子地址的 client 也保持原有行为。
 	//
-	// Host-preserving mode dials the selected endpoint directly, so an HTTP(S)
-	// proxy configured on the client is bypassed for these requests.
+	// 保留 host 模式会直接拨号到选中的端点，因此 client 上配置的 HTTP(S)
+	// 代理对这类请求会被绕过。
 	ServerName string
 
-	// HostOverride overrides the HTTP Host header while still connecting to the
-	// discovered endpoint. Useful for virtual-host routing through gateways.
+	// HostOverride 覆盖 HTTP Host 头，同时仍连接到服务发现的端点。
+	// 适用于通过网关进行虚拟主机路由的场景。
 	HostOverride string
 
-	// WatchWait is the Consul blocking query wait (default 5m, capped at 10m).
-	// Longer waits do not delay change detection; Consul returns as soon as
-	// the catalog index changes. Wait is only how long an idle query may hang.
+	// WatchWait 是 Consul blocking query 的 wait（默认 5m，上限 10m）。
+	// 更长的 wait 不会延迟变更检测；catalog index 一变化 Consul 就会返回。
+	// wait 只是空闲查询最多可以挂起多久。
 	WatchWait time.Duration
 
-	// MaxFailover is max distinct endpoints to try on failure (default 5).
+	// MaxFailover 是失败时最多尝试的不同端点数量（默认 5）。
 	MaxFailover int
 }
 
-// NewFactory constructs a [Factory]. Prefer injecting via [Module].
+// NewFactory 构造 [Factory]。优先通过 [Module] 注入。
 func NewFactory(lc *di.Lifecycle, cfg *config.Config) *Factory {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &Factory{
@@ -135,7 +131,7 @@ func NewFactory(lc *di.Lifecycle, cfg *config.Config) *Factory {
 	return f
 }
 
-// Close stops all Consul watches. Called automatically on Fx shutdown.
+// Close 停止所有 Consul 监听。Fx 关闭时会自动调用。
 //
 // 关闭后 Factory 不可再用于创建带 Consul watch 的 client —— 内部 root context
 // 已被取消，新建的 watch 会立即退出（表现为「endpoints 永远不更新」）。
@@ -166,22 +162,20 @@ func (f *Factory) IsClosed() bool {
 	return f.closed
 }
 
-// Client returns a ready-to-use [req.Client]. Use relative paths; Host is filled
-// from Consul healthy instances (round-robin + failover).
+// Client 返回一个开箱即用的 [req.Client]。使用相对路径；Host 由 Consul 健康实例填充
+// （round-robin + 故障转移）。
 //
 //	cli, _ := factory.Client(reqx.ClientInput{Name: "orders"})
 //	cli.R().SetContext(ctx).Get("/v1/orders")
 //
-// HTTPS:
+// HTTPS：
 //
 //	cli, _ := factory.Client(reqx.ClientInput{Name: "orders", Scheme: "https"})
 //
-// Transport customization: when ClientInput.BaseTransport is nil, the returned
-// client's transport chain delegates to req's own transport, so
-// SetTLSClientConfig / SetProxy / SetDial / SetDialTLS remain effective. In
-// ServerName (host-preserving) mode the endpoint dialer wraps DialContext;
-// calling SetDial afterwards replaces that wrapper, so configure custom dialers
-// through BaseTransport instead.
+// 传输层定制：当 ClientInput.BaseTransport 为 nil 时，返回 client 的传输层链会委托给
+// req 自身的传输层，因此 SetTLSClientConfig / SetProxy / SetDial / SetDialTLS 仍然有效。
+// 在 ServerName（保留 host）模式下，端点拨号器会包装 DialContext；之后再调用 SetDial
+// 会替换掉该包装，因此请通过 BaseTransport 配置自定义拨号器。
 func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	if f == nil {
 		return nil, fmt.Errorf("reqx: nil factory")
@@ -228,11 +222,11 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	serverName := normalizeServerName(in.ServerName)
 	hostOverride := strings.TrimSpace(in.HostOverride)
 	explicitServerName := serverName != ""
-	// Preserve the logical host when an explicit TLS name is requested, or for
-	// https + Consul-discovered named services (endpoint may be a bare IP).
+	// 显式要求 TLS 名称时保留逻辑 host，或对 https + Consul 发现的命名服务
+	// 保留（端点可能是裸 IP）。
 	preserveHost := explicitServerName || (scheme == "https" && name != "")
-	// In the inferred case only IP endpoints need host preservation; DNS
-	// endpoints keep the historical behavior (endpoint used as SNI).
+	// 在推断场景下只有 IP 端点需要保留 host；DNS 端点保持原有行为
+	// （端点即 SNI）。
 	autoPreserve := preserveHost && !explicitServerName
 
 	cli := req.C().
@@ -242,8 +236,8 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	base := in.BaseTransport
 	ownBase := false
 	if base == nil {
-		// Chain req's own transport: SetTLSClientConfig / SetProxy / SetDial
-		// mutate cli.Transport, which must be on the request path.
+		// 串联 req 自身的传输层：SetTLSClientConfig / SetProxy / SetDial
+		// 会修改 cli.Transport，它必须位于请求路径上。
 		reqTransport := cli.GetTransport()
 		tuneReqTransport(reqTransport)
 		base = reqTransport
@@ -276,11 +270,11 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	return cli, nil
 }
 
-// tuneReqTransport adjusts req's per-client transport defaults.
+// tuneReqTransport 调整 req 的每 client 传输层默认值。
 //
-// req.C() creates a fresh transport per client (never the global
-// http.DefaultTransport), so tuning it here avoids sharing connection-pool
-// state across clients while keeping sane keep-alive settings.
+// req.C() 会为每个 client 创建新的传输层（从不使用全局的
+// http.DefaultTransport），因此在这里调整可以避免在 client 之间共享
+// 连接池状态，同时保留合理的 keep-alive 设置。
 func tuneReqTransport(t *req.Transport) {
 	if t == nil {
 		return
@@ -296,8 +290,8 @@ func tuneReqTransport(t *req.Transport) {
 	}
 }
 
-// normalizeServerName strips an accidental scheme/port so tls.Config.ServerName
-// always receives a bare host name.
+// normalizeServerName 去掉误加上的 scheme/port，确保 tls.Config.ServerName
+// 总能收到裸 host 名。
 func normalizeServerName(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -312,11 +306,11 @@ func normalizeServerName(raw string) string {
 	return strings.TrimRight(s, "/")
 }
 
-// TransportClient returns the stdlib [http.Client] whose Transport resolves
-// Consul endpoints (failover + OTel) and the logical server URL
-// (`scheme://service-name`, or `scheme://static` when only Seeds are set).
+// TransportClient 返回标准库 [http.Client]，其 Transport 会解析
+// Consul 端点（故障转移 + OTel），并返回逻辑服务 URL
+// （`scheme://service-name`，仅设置 Seeds 时为 `scheme://static`）。
 //
-// Use with OpenAPI-generated clients (oapi-codegen `WithHTTPClient`):
+// 用于 OpenAPI 生成的客户端（oapi-codegen `WithHTTPClient`）：
 //
 //	httpClient, server, err := factory.TransportClient(reqx.ClientInput{Name: "users"})
 //	sdk, err := users.NewClientWithResponses(server, users.WithHTTPClient(httpClient))
@@ -381,10 +375,9 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 			httpClient:  &http.Client{Timeout: 10 * time.Second},
 		}
 		if eps, _, err := w.fetch(watchCtx, 0); err != nil {
-			// Discovery failing at startup used to be silent: the client was
-			// created with an empty pool and requests failed with a confusing
-			// "no healthy endpoints". Log it loudly; the watch below keeps
-			// retrying so a temporary Consul outage still recovers.
+			// 启动时服务发现失败过去是静默的：client 会带着空端点池创建，
+			// 请求以令人困惑的 "no healthy endpoints" 失败。这里要大声记录；
+			// 下面的监听会持续重试，因此临时性的 Consul 故障仍可恢复。
 			slog.Warn("reqx: initial service discovery failed",
 				"service", in.Name,
 				"error", err,
@@ -443,7 +436,7 @@ func poolKey(name string, passingOnly bool, seeds []string) string {
 	return b.String()
 }
 
-// Endpoints returns the current discovered targets for a previously created client key.
+// Endpoints 返回此前创建的 client key 当前发现的目标。
 func (f *Factory) Endpoints(in ClientInput) []string {
 	if f == nil {
 		return nil

@@ -2,7 +2,7 @@ package crudx
 
 import "strings"
 
-// ParseSort parses "col desc", "col,desc", "-col" (desc), "+col" or "col" (asc).
+// ParseSort 解析 "col desc"、"col,desc"、"-col"（降序）、"+col" 或 "col"（升序）。
 func ParseSort(spec string) (field, dir string) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {

@@ -153,7 +153,7 @@ func openPool(c *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-// sqlDriverName maps config db.driver to database/sql driver names.
+// sqlDriverName 把配置中的 db.driver 映射为 database/sql 驱动名。
 func sqlDriverName(driver string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(driver)) {
 	case "postgres":

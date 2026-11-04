@@ -74,8 +74,8 @@ func (m *mergedSpec) jsonBytes() ([]byte, error) {
 	return b, nil
 }
 
-// MergedRoutes serves Scalar at /docs and OpenAPI at /openapi.{yaml,json},
-// merging optional baseYAML with the live Huma spec.
+// MergedRoutes 在 /docs 提供 Scalar，在 /openapi.{yaml,json} 提供 OpenAPI，
+// 把可选的 baseYAML 与当前生效的 Huma spec 合并。
 func MergedRoutes(baseYAML []byte, api huma.API) []server.Route {
 	spec := &mergedSpec{baseYAML: baseYAML, api: api}
 
