@@ -8,10 +8,6 @@ import (
 	"github.com/fitan/fxkit/di"
 )
 
-type dummyWorkflow struct {
-	name string
-}
-
 func TestClient_DisabledAccessors(t *testing.T) {
 	t.Parallel()
 	c := &Client{}

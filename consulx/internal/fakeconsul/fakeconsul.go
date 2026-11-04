@@ -241,15 +241,6 @@ func (s *Server) Doom(sessionID string) {
 	s.Doomed[sessionID] = true
 }
 
-// DoomAll 标记当前所有 session 的续租失败。
-func (s *Server) DoomAll() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id := range s.Sessions {
-		s.Doomed[id] = true
-	}
-}
-
 // RenewCount 返回该 session 的续租尝试次数。
 func (s *Server) RenewCount(sessionID string) int {
 	s.mu.Lock()
@@ -297,16 +288,6 @@ func (s *Server) SessionTTL(sessionID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.KV["__meta__/"+sessionID]
-}
-
-// LastToken 返回最近一次请求携带的 token。
-func (s *Server) LastToken() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.Tokens) == 0 {
-		return ""
-	}
-	return s.Tokens[len(s.Tokens)-1]
 }
 
 // RegisterCount 返回服务注册次数。

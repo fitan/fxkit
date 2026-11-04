@@ -71,12 +71,6 @@ func provideServer(p serverParams) (*Server, error) {
 	return srv, nil
 }
 
-type syncParams struct {
-	Lc     *di.Lifecycle
-	Server *Server
-	API    huma.API
-}
-
 func provideRoutes(srv *Server, cfg Config) []server.Route {
 	// mcp.enabled 未开启时不对外暴露 HTTP 端点（stdio 仍可用 `fxkit-app mcp`）。
 	if !cfg.Enabled {

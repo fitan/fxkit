@@ -108,12 +108,6 @@ func consumerTypes(key string) ([]reflect.Type, bool) {
 	return out, true
 }
 
-// unusedKey 是一条「写进了配置但未被任何结构体读取」的记录。
-type unusedKey struct {
-	Key    string
-	Reason string
-}
-
 // Unused 返回配置树中疑似未被使用的键。
 //
 // 判定方式：

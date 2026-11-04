@@ -33,32 +33,6 @@ type HTTPRoute struct {
 	Tags        []string // Huma Tags
 }
 
-func (r HTTPRoute) match(method, path string) bool {
-	if r.Method != "" && !strings.EqualFold(r.Method, method) {
-		return false
-	}
-	return pathMatches(r.Path, path)
-}
-
-func pathMatches(pattern, path string) bool {
-	pattern = normalizeRequestPath(pattern)
-	path = normalizeRequestPath(path)
-	pp := splitPath(pattern)
-	sp := splitPath(path)
-	if len(pp) != len(sp) {
-		return false
-	}
-	for i := range pp {
-		if strings.HasPrefix(pp[i], "{") && strings.HasSuffix(pp[i], "}") {
-			continue
-		}
-		if pp[i] != sp[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // normalizeRequestPath trims space and a trailing slash so findRoute and Casbin
 // Enforce see the same path (GET /users/ ≡ /users).
 func normalizeRequestPath(path string) string {
@@ -294,11 +268,6 @@ func ProvideHTTPRoutes(fn any) di.Option {
 			},
 		})
 	}
-}
-
-// defaultHTTPRoutes 提供空默认；业务通过 [ProvideHTTPRoutes] 追加。
-func defaultHTTPRoutes() []HTTPRoute {
-	return nil
 }
 
 // Method helpers for route tables.

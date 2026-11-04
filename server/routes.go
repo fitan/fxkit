@@ -12,7 +12,6 @@ import (
 	"reflect"
 
 	"github.com/fitan/fxkit/di"
-	"github.com/go-chi/chi/v5"
 )
 
 // Route 是在共享 chi mux 上的单个挂载点。以 `/` 结尾的 pattern 会自动改写为 `/<pat>*`，
@@ -147,13 +146,3 @@ func ProvideMiddleware(fn any) di.Option {
 		})
 	}
 }
-
-// defaultRoutes 在无其他模块贡献路由时使用。
-func defaultRoutes() []Route { return nil }
-
-func defaultMiddleware() Middleware {
-	return func(next http.Handler) http.Handler { return next }
-}
-
-// 保留 chi import 引用，避免仅使用 [Route] 与 [Middleware] 的最小构建触发 go vet 警告。
-var _ = chi.NewRouter

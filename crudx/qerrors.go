@@ -11,7 +11,6 @@ const (
 	ReasonEmptyLikeValue         = "EMPTY_LIKE_VALUE"
 	ReasonTooManyConditions      = "TOO_MANY_CONDITIONS"
 	ReasonIllegalORSyntax        = "ILLEGAL_OR_SYNTAX"
-	ReasonURLDecodeFailed        = "URL_DECODE_FAILED"
 	ReasonTooManyInValues        = "TOO_MANY_IN_VALUES"
 	ReasonTooManyJoins           = "TOO_MANY_JOINS"
 	ReasonTooManyLikeConditions  = "TOO_MANY_LIKE_CONDITIONS"

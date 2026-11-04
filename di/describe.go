@@ -5,8 +5,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-
-	"github.com/samber/do/v2"
 )
 
 // ServiceInfo 是容器中一个已注册服务的诊断信息。
@@ -63,15 +61,6 @@ func Describe(i Injector) (services []ServiceInfo, groups []GroupInfo) {
 		})
 	}
 	return services, groups
-}
-
-// Explain 返回 samber/do 原生的依赖图字符串（含 scope 树与依赖关系）。
-func Explain(i Injector) string {
-	if i == nil {
-		return ""
-	}
-	out := do.ExplainInjector(i)
-	return out.String()
 }
 
 // Report 以人类可读的文本汇总容器状态。供启动自检与 CLI 使用。

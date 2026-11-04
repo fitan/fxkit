@@ -30,18 +30,6 @@ var opTokens = []opToken{
 	{"<", OpLT},
 }
 
-// CleanHTTPQValues trims and removes empty elements from already decoded query parameter slices.
-func CleanHTTPQValues(raw []string) []string {
-	out := make([]string, 0, len(raw))
-	for _, r := range raw {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // ParseHTTPQValues safely decodes raw q query values.
 // If an element contains percent-encoded escape sequences, it unescapes them.
 // If it is already unescaped plain text, it preserves the literal string.

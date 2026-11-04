@@ -97,16 +97,6 @@ func modelMetaCached[T any]() (*ModelMeta, bool) {
 	return v.(*ModelMeta), true
 }
 
-// ResolvePrimaryKey 解析 T 的主键（委托 [ResolveModel]）。
-func ResolvePrimaryKey[T any](db *gorm.DB) (*PKInfo, error) {
-	m, err := ResolveModel[T](db)
-	if err != nil {
-		return nil, err
-	}
-	pk := m.PKInfo
-	return &pk, nil
-}
-
 // FormatPrimaryKey 将实体主键格式化为 URL/JSON 安全的 id 字符串。需已调用 [ResolveModel]。
 func FormatPrimaryKey[T any](m *T) (string, error) {
 	meta, ok := modelMetaCached[T]()

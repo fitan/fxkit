@@ -242,7 +242,8 @@ func TestParseHTTPQValues_decode(t *testing.T) {
 func TestParseHTTPQValues_literalPercent(t *testing.T) {
 	got, err := ParseHTTPQValues([]string{"state=done", "description=discount 20%"})
 	if err != nil {
-		// Even if url.QueryUnescape fails on plain %, it shouldn't fail for CleanHTTPQValues
+		// A literal % is not a valid escape: ParseHTTPQValues must keep the raw string
+		// instead of failing, so clients can still search for "20%".
 		t.Logf("ParseHTTPQValues error: %v", err)
 	} else if len(got) != 2 {
 		t.Fatalf("got %v", got)
