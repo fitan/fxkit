@@ -40,6 +40,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -63,56 +64,103 @@ type WorkflowBase = hatchet.WorkflowBase
 type Registrar func(client *Client) ([]WorkflowBase, error)
 
 // Module provides [Client] and, when enabled, starts a worker for all [Registrar]s.
+//
+// Registrar 的读取必须垂到 OnStart：group 是容器内的可变状态，装配期（Option
+// 闭包内）读到的只是「当前已装配部分」，业务模块稍后注册的 workflow 会全部丢失。
 var Module = di.Module("fxkit/hatchetx",
 	config.Provide[Config]("hatchet"),
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (*Client, error) {
-			cfg, _ := di.Invoke[*Config](i)
+			cfg, err := di.Invoke[*Config](i)
+			if err != nil {
+				return nil, err
+			}
 			return NewClient(cfg)
 		})
 		provideOutboxPublisherOption()(i)
 
 		lc, _ := di.Invoke[*di.Lifecycle](i)
-		cfg, _ := di.Invoke[*Config](i)
-		client, _ := di.Invoke[*Client](i)
-		regs := di.GetGroup[Registrar](i)
 		registerLifecycle(lifecycleParams{
-			LC:         lc,
-			Cfg:        cfg,
-			Client:     client,
-			Registrars: regs,
+			LC:       lc,
+			Injector: i,
 		})
 	},
 )
 
-func defaultRegistrars() []Registrar { return nil }
-
-// ProvideRegistrar publishes a [Registrar] into the hatchet_registrars fx group.
-// Supports Registrar functions returning []WorkflowBase or a single WorkflowBase.
+// ProvideRegistrar publishes a [Registrar] into the hatchet_registrars group.
+//
+// 支持：Registrar / func(*Client) ([]WorkflowBase, error) /
+// func(*Client) (WorkflowBase, error) / func() Registrar / func(di.Injector) Registrar，
+// 以及任意 func(dep...) Registrar、func(dep...) (Registrar, error)。
+// 后者延迟到 PreStart 解析依赖后调用；无法识别的签名直接 panic——
+// 静默丢弃会导致「workflow 写了但 worker 从不执行」。
 func ProvideRegistrar(fn any) di.Option {
 	return func(i di.Injector) {
+		if fn == nil {
+			return
+		}
+		if reg, ok := asRegistrar(fn); ok {
+			di.ProvideGroupItem[Registrar](i, reg)
+			return
+		}
 		switch f := fn.(type) {
-		case Registrar:
-			di.ProvideGroupItem[Registrar](i, f)
-		case func(*Client) ([]WorkflowBase, error):
-			di.ProvideGroupItem[Registrar](i, Registrar(f))
-		case func(*Client) (WorkflowBase, error):
-			di.ProvideGroupItem[Registrar](i, func(c *Client) ([]WorkflowBase, error) {
-				w, err := f(c)
-				if err != nil {
-					return nil, err
-				}
-				if w == nil {
-					return nil, nil
-				}
-				return []WorkflowBase{w}, nil
-			})
 		case func() Registrar:
 			di.ProvideGroupItem[Registrar](i, f())
+			return
 		case func(di.Injector) Registrar:
 			di.ProvideGroupItem[Registrar](i, f(i))
+			return
 		}
+
+		val := reflect.ValueOf(fn)
+		if val.Kind() != reflect.Func {
+			panic("hatchetx.ProvideRegistrar: unsupported argument " + reflect.TypeOf(fn).String() +
+				"; want a Registrar, a WorkflowBase constructor, or a constructor returning Registrar")
+		}
+		if err := di.ValidateConstructor(val.Type()); err != nil {
+			panic("hatchetx.ProvideRegistrar: " + err.Error())
+		}
+		lc, err := di.Invoke[*di.Lifecycle](i)
+		if err != nil || lc == nil {
+			panic("hatchetx.ProvideRegistrar: constructor form requires *di.Lifecycle in the graph")
+		}
+		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
+			OnStart: func(context.Context) error {
+				out, callErr := di.CallConstructor(i, fn)
+				if callErr != nil {
+					return fmt.Errorf("hatchetx.ProvideRegistrar: %w", callErr)
+				}
+				reg, ok := asRegistrar(out)
+				if !ok {
+					return fmt.Errorf("hatchetx.ProvideRegistrar: constructor returned %T, want hatchetx.Registrar", out)
+				}
+				di.ProvideGroupItem[Registrar](i, reg)
+				return nil
+			},
+		})
 	}
+}
+
+// asRegistrar 把受支持的 Registrar 形态归一为 [Registrar]。
+func asRegistrar(v any) (Registrar, bool) {
+	switch f := v.(type) {
+	case Registrar:
+		return f, true
+	case func(*Client) ([]WorkflowBase, error):
+		return Registrar(f), true
+	case func(*Client) (WorkflowBase, error):
+		return func(c *Client) ([]WorkflowBase, error) {
+			w, err := f(c)
+			if err != nil {
+				return nil, err
+			}
+			if w == nil {
+				return nil, nil
+			}
+			return []WorkflowBase{w}, nil
+		}, true
+	}
+	return nil, false
 }
 
 // ProvideWorkflow registers a single native Hatchet workflow directly into the worker.
@@ -418,77 +466,100 @@ func (c *Client) Webhooks() *features.WebhooksClient {
 }
 
 type lifecycleParams struct {
-	LC         *di.Lifecycle
-	Cfg        *Config
-	Client     *Client
-	Registrars []Registrar
+	LC       *di.Lifecycle
+	Injector di.Injector
 }
 
 func registerLifecycle(p lifecycleParams) {
-	if p.Cfg == nil || !p.Cfg.Enabled || !p.Client.Enabled() {
+	if p.LC == nil || p.Injector == nil {
 		return
 	}
-	workerName := strings.TrimSpace(p.Cfg.WorkerName)
-	if workerName == "" {
-		workerName = "fxkit-worker"
-	}
 
-	var cleanup func() error
-	if p.LC != nil {
-		p.LC.Append(di.Hook{
-			OnStart: func(ctx context.Context) error {
-				var workflows []WorkflowBase
-				for _, reg := range p.Registrars {
-					if reg == nil {
-						continue
-					}
-					ws, err := reg(p.Client)
-					if err != nil {
-						return err
-					}
-					workflows = append(workflows, ws...)
-				}
-				if len(workflows) == 0 {
-					slog.Info("hatchetx: enabled but no workflows registered; worker not started")
-					return nil
-				}
+	var (
+		cleanup func() error
+		started bool
+	)
+	workerName := "fxkit-worker"
 
-				workerOpts := []hatchet.WorkerOption{
-					hatchet.WithWorkflows(workflows...),
-				}
-				if p.Cfg.WorkerSlots > 0 {
-					workerOpts = append(workerOpts, hatchet.WithSlots(p.Cfg.WorkerSlots))
-				}
-				if len(p.Cfg.WorkerLabels) > 0 {
-					labels := make(map[string]any, len(p.Cfg.WorkerLabels))
-					for k, v := range p.Cfg.WorkerLabels {
-						labels[k] = v
-					}
-					workerOpts = append(workerOpts, hatchet.WithLabels(labels))
-				}
-
-				w, err := p.Client.SDK.NewWorker(workerName, workerOpts...)
-				if err != nil {
-					return fmt.Errorf("hatchetx: new worker: %w", err)
-				}
-				attachWorkerTracing(w, p.Cfg.OTel)
-				cleanup, err = w.Start()
-				if err != nil {
-					return fmt.Errorf("hatchetx: start worker: %w", err)
-				}
-				slog.Info("hatchetx: worker started", "name", workerName, "workflows", len(workflows))
+	p.LC.Append(di.Hook{
+		OnStart: func(ctx context.Context) error {
+			cfg, err := di.Invoke[*Config](p.Injector)
+			if err != nil {
+				return fmt.Errorf("hatchetx: resolve config: %w", err)
+			}
+			if cfg == nil || !cfg.Enabled {
+				slog.Info("hatchetx: disabled")
 				return nil
-			},
-			OnStop: func(ctx context.Context) error {
-				if cleanup != nil {
-					if err := cleanup(); err != nil {
-						slog.Warn("hatchetx: worker cleanup", "error", err)
-						return err
-					}
+			}
+
+			client, err := di.Invoke[*Client](p.Injector)
+			if err != nil {
+				return fmt.Errorf("hatchetx: resolve client: %w", err)
+			}
+			if client == nil || !client.Enabled() {
+				return fmt.Errorf("hatchetx: hatchet.enabled=true but client is not initialized (check token/host_port)")
+			}
+
+			if n := strings.TrimSpace(cfg.WorkerName); n != "" {
+				workerName = n
+			}
+
+			// group 在 OnStart 读取：此时所有模块（含宿主业务模块）都已装配完毕。
+			registrars := di.GetGroup[Registrar](p.Injector)
+			var workflows []WorkflowBase
+			for _, reg := range registrars {
+				if reg == nil {
+					continue
 				}
-				slog.Info("hatchetx: worker stopped")
+				ws, err := reg(client)
+				if err != nil {
+					return err
+				}
+				workflows = append(workflows, ws...)
+			}
+			if len(workflows) == 0 {
+				slog.Info("hatchetx: enabled but no workflows registered; worker not started",
+					"registrars", len(registrars))
 				return nil
-			},
-		})
-	}
+			}
+
+			workerOpts := []hatchet.WorkerOption{
+				hatchet.WithWorkflows(workflows...),
+			}
+			if cfg.WorkerSlots > 0 {
+				workerOpts = append(workerOpts, hatchet.WithSlots(cfg.WorkerSlots))
+			}
+			if len(cfg.WorkerLabels) > 0 {
+				labels := make(map[string]any, len(cfg.WorkerLabels))
+				for k, v := range cfg.WorkerLabels {
+					labels[k] = v
+				}
+				workerOpts = append(workerOpts, hatchet.WithLabels(labels))
+			}
+
+			w, err := client.SDK.NewWorker(workerName, workerOpts...)
+			if err != nil {
+				return fmt.Errorf("hatchetx: new worker: %w", err)
+			}
+			attachWorkerTracing(w, cfg.OTel)
+			cleanup, err = w.Start()
+			if err != nil {
+				return fmt.Errorf("hatchetx: start worker: %w", err)
+			}
+			started = true
+			slog.Info("hatchetx: worker started", "name", workerName, "workflows", len(workflows))
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			if !started || cleanup == nil {
+				return nil
+			}
+			if err := cleanup(); err != nil {
+				slog.Warn("hatchetx: worker cleanup", "error", err)
+				return err
+			}
+			slog.Info("hatchetx: worker stopped")
+			return nil
+		},
+	})
 }

@@ -2,11 +2,13 @@ package crudx_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/fitan/fxkit/crudx"
+	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -35,8 +37,8 @@ func newDemoRepo(t *testing.T) *crudx.Repo[demoUser] {
 		UpdateColumns: []string{"name", "email"},
 		Spec: crudx.ListSpec{
 			Fields: map[string]crudx.FieldSpec{
-				"name":  {Column: "demo_users.name", Kind: crudx.FieldString, Indexed: true},
-				"email": {Column: "demo_users.email", Kind: crudx.FieldString, Indexed: true},
+				"name":  {Column: "demo_users.name", Kind: crudx.FieldString, Indexed: true, Likeable: true},
+				"email": {Column: "demo_users.email", Kind: crudx.FieldString, Indexed: true, Likeable: true},
 			},
 			SortFields:  map[string]string{"id": "demo_users.id"},
 			DefaultSort: "id asc",
@@ -175,5 +177,68 @@ func TestRepo_GenericMethods_ListTo_GetByIDTo(t *testing.T) {
 	})
 	if len(names.Items) != 1 || names.Items[0] != "bob" {
 		t.Fatalf("ListResult.Map failed: %+v", names)
+	}
+}
+
+type uuidUser struct {
+	ID   string `gorm:"primaryKey;size:36"`
+	Name string `gorm:"size:64"`
+}
+
+func newUUIDRepo(t *testing.T) *crudx.Repo[uuidUser] {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:crudx_repo_uuid?mode=memory&cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := crudx.NewRepo[uuidUser](crudx.RepoConfig{
+		Client: gormx.NewTestClient(db),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+func TestRepoCreate_preservesClientGeneratedPK(t *testing.T) {
+	repo := newUUIDRepo(t)
+	ctx := context.Background()
+	const id = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+	if err := repo.Create(ctx, &uuidUser{ID: id, Name: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetByID(ctx, id)
+	if err != nil || got.ID != id || got.Name != "alice" {
+		t.Fatalf("uuid pk should be preserved: %+v err=%v", got, err)
+	}
+}
+
+func TestRepoCreate_duplicateConflictDoesNotLeakRawText(t *testing.T) {
+	repo := newUUIDRepo(t)
+	ctx := context.Background()
+	const id = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
+	if err := repo.Create(ctx, &uuidUser{ID: id, Name: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	err := repo.Create(ctx, &uuidUser{ID: id, Name: "bob"})
+	if !fxerrors.Is(err, fxerrors.KindConflict) {
+		t.Fatalf("want conflict, got %v", err)
+	}
+	var fe *fxerrors.Error
+	if !errors.As(err, &fe) {
+		t.Fatalf("want fxerrors.Error, got %T", err)
+	}
+	if fe.Message != "duplicate key" {
+		t.Fatalf("message=%q", fe.Message)
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatal("duplicate error must not be not-found")
 	}
 }

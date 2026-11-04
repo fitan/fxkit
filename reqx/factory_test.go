@@ -12,7 +12,6 @@ import (
 
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
-	
 )
 
 func TestParseEndpoint(t *testing.T) {

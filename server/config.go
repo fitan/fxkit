@@ -46,6 +46,20 @@ type Config struct {
 	WriteTimeout time.Duration `yaml:"write_timeout"`
 	// IdleTimeout keep-alive 空闲超时，默认 120s。
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	// RateLimit 按客户端 IP 的令牌桶限流。默认关闭。
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
+	// AccessLog 为 true 时输出结构化访问日志（method/route/status/duration/bytes）。
+	// route 用 chi 路由模板（避免高基数），默认关闭。
+	AccessLog bool `yaml:"access_log"`
+}
+
+// RateLimitConfig 按客户端 IP 限流（令牌桶）。
+type RateLimitConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// RPS 每秒补充的令牌数，默认 20。
+	RPS float64 `yaml:"rps"`
+	// Burst 桶容量（允许的瞬时突发），默认 40。
+	Burst int `yaml:"burst"`
 }
 
 // SetDefaults 填入编译期默认值。
@@ -60,6 +74,9 @@ func (c *Config) SetDefaults() {
 	c.ReadTimeout = defaultReadTimeout
 	c.WriteTimeout = defaultWriteTimeout
 	c.IdleTimeout = defaultIdleTimeout
+	c.RateLimit.RPS = 20
+	c.RateLimit.Burst = 40
+	c.AccessLog = false
 }
 
 // Validate 检查端口与超时。非法值启动失败。
@@ -86,6 +103,14 @@ func (c Config) Validate() error {
 	}
 	if c.CORSMaxAge < 0 {
 		return fmt.Errorf("server.cors_max_age must be >= 0")
+	}
+	if c.RateLimit.Enabled {
+		if c.RateLimit.RPS <= 0 {
+			return fmt.Errorf("server.rate_limit.rps must be > 0 when enabled")
+		}
+		if c.RateLimit.Burst <= 0 {
+			return fmt.Errorf("server.rate_limit.burst must be > 0 when enabled")
+		}
 	}
 	return nil
 }

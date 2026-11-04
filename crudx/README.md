@@ -12,7 +12,7 @@
 2. **统一查询协议（ZStack 风格）**：所有微服务共用统一的 `q=` 语法（如 `q=status=active`, `q=or(a=1,b=2)`）。
 3. **消除深度分页黑洞（Keyset Cursor）**：内置双向键集游标分页，`O(1)` 时间复杂度获取下一页数据，彻底解决传统 `OFFSET 1000000` 造成的数据库抖动。
 4. **安全与鲁棒**：
-   - 自动转义模糊查询中的 SQL 通配符（`%`、`_` 与 `\`）；
+   - 自动转义模糊查询中的 SQL 通配符（`%`、`_` 与 `!`，使用 `ESCAPE '!'`）；
    - 自动防范空集 `IN []`（自动转为 `1 = 0`）；
    - 自动递归解析嵌入结构体（如 `gorm.Model`）的主键与排序字段；
    - 自动识别并还原游标中的 RFC3339 时间戳对象，适配各类数据库驱动。
@@ -27,8 +27,8 @@
 | :--- | :--- | :--- | :--- |
 | `field=value` | 等于 | `q=status=active` | 字符串可带引号保护：`q=name="Doe, John"` |
 | `field!=value` | 不等于 | `q=status!=disabled` | 支持 `q=deleted_at!=null` |
-| `field~value` | 模糊匹配 (LIKE %v%) | `q=name~alice` | 自动转义通配符，字段必须标明 `Indexed: true` |
-| `field!~value` | 模糊不匹配 (NOT LIKE) | `q=email!~spam` | 字段必须标明 `Indexed: true` |
+| `field~value` | 模糊匹配 (LIKE %v%) | `q=name~alice` | 自动转义通配符（`%`/`_`/`!`，`ESCAPE '!'`），字段必须标明 `Likeable: true` |
+| `field!~value` | 模糊不匹配 (NOT LIKE) | `q=email!~spam` | 字段必须标明 `Likeable: true` |
 | `field>value` | 大于 | `q=cpuNum>4` | 支持数值与时间 |
 | `field>=value` | 大于等于 | `q=age>=18` | 操作符自动长词优先匹配 |
 | `field<value` | 小于 | `q=score<60` | 支持数值与时间 |
@@ -72,7 +72,7 @@ type UserRow struct {
 var UserListSpec = crudx.ListSpec{
     Fields: map[string]crudx.FieldSpec{
         "id":        {Column: "users.id", Kind: crudx.FieldNumber},
-        "name":      {Column: "users.name", Kind: crudx.FieldString, Indexed: true},
+        "name":      {Column: "users.name", Kind: crudx.FieldString, Indexed: true, Likeable: true},
         "status":    {Column: "users.status", Kind: crudx.FieldString},
         "role":      {Column: "users.role", Kind: crudx.FieldString},
         "createdAt": {Column: "users.created_at", Kind: crudx.FieldTime},
@@ -121,7 +121,7 @@ var OrderListSpec = crudx.ListSpec{
             Alias: "user",
             On:    "user.id = orders.user_id",
             Fields: map[string]crudx.FieldSpec{
-                "name": {Column: "user.name", Kind: crudx.FieldString, Indexed: true},
+                "name": {Column: "user.name", Kind: crudx.FieldString, Indexed: true, Likeable: true},
             },
         },
     },
@@ -161,3 +161,82 @@ var OrderListSpec = crudx.ListSpec{
       return crudx.MapDBError(err) // 唯一索引冲突自动转为 Conflict 错误等
   }
   ```
+
+---
+
+## 字段与关联的声明
+
+### `FieldSpec` 的三个开关各自独立
+
+```go
+type FieldSpec struct {
+    Column   string    // SQL 列（可带表前缀，如 t.title）
+    Kind     FieldKind // String | Number | Bool | Time
+    Indexed  bool      // 数据库有索引（性能提示）
+    Likeable bool      // 允许 ~ / !~ 模糊查询
+}
+```
+
+| 开关 | 影响 |
+|---|---|
+| （出现在 `Fields` 即允许） | 进入过滤白名单：`=` `!=` `.in:` `.notin:` `.isnull` |
+| `Likeable: true` | 允许 `~` / `!~`；未开启时模糊查询返回 400 `FIELD_NOT_INDEXED` |
+| `Indexed: true` | 仅文档/性能提示，不改变行为 |
+| `Kind` | 决定值类型校验：`Number` 走数值、`Time` 校验时间格式、`String` 保留原文（`007` 不会变 `7`） |
+
+### `RelationSpec` 与 JOIN 去重
+
+```go
+Relations: map[string]*crudx.RelationSpec{
+    "cluster": {
+        Table: "clusters", Alias: "cluster",
+        On: "cluster.id = users.cluster_id",
+        Fields: map[string]crudx.FieldSpec{
+            "name": {Column: "cluster.name", Kind: crudx.FieldString},
+        },
+        Cardinality: crudx.RelationToOne, // 关键：多对一/一对一
+    },
+}
+```
+
+- `Cardinality` 未声明（`RelationUnknown`）时，有 JOIN 的查询会加 `SELECT DISTINCT`（与旧行为一致）。
+- 声明 `RelationToOne`（多对一/一对一）后**跳过 DISTINCT**：省一次去重，也避开 PostgreSQL
+  对 `DISTINCT + ORDER BY` 的限制。
+- 声明 `RelationToMany` 或保持未声明，仍会 DISTINCT。
+- **限制**：需要 DISTINCT（未知基数或一对多）时，按**关联列**排序会返回 400
+  `DISTINCT_RELATION_SORT_UNSUPPORTED`（各数据库语义不一致，宁可直接拒绝）。
+
+---
+
+## 游标分页的边界语义
+
+| 场景 | 行为 |
+|---|---|
+| 翻页只传 `cursor` | 排序字段与方向**以游标内为准**（不会被请求里的默认 `asc` 覆盖） |
+| 显式传 `sortBy` 与游标不一致 | 400 `INVALID_SORT_FIELD` |
+| 排序字段可空 | NULL 统一排最后（`ORDER BY (col IS NULL)`）；但需要 DISTINCT 时会省略该表达式 |
+| `Select` 未包含主键 | 自动补主键（否则 `nextCursor` 会取到零值） |
+| 按关联列排序 + 游标 | 400 `CURSOR_RELATION_SORT_UNSUPPORTED` |
+| `limit` 超上限 | 钳制到 `Limits.LimitMax`（默认 1000） |
+| `start` 超上限 | 钳制到 `Limits.StartMax`（默认 `LimitMax*100`） |
+| 非法 `sortBy` | 400 `INVALID_SORT_FIELD`（不再静默忽略） |
+
+---
+
+## 错误原因码（`details.reason`）
+
+| reason | 含义 |
+|---|---|
+| `NO_OPERATOR` | 条件里没有可识别的操作符 |
+| `FIELD_NOT_EXIST` | 字段不在 `ListSpec` 白名单 |
+| `FIELD_NOT_INDEXED` | 字段未开 `Likeable`，却用了 `~` / `!~` |
+| `INVALID_VALUE_TYPE` | 值与 `FieldSpec.Kind` 不匹配 |
+| `INVALID_SORT_FIELD` | 排序字段/方向非法，或与游标冲突 |
+| `DISTINCT_RELATION_SORT_UNSUPPORTED` | 需要 DISTINCT 时按关联列排序 |
+| `CURSOR_NEEDS_PRIMARY_KEY` | 游标分页缺少主键元数据 |
+| `CURSOR_RELATION_SORT_UNSUPPORTED` | 游标分页不能按关联列排序 |
+| `TOO_MANY_CONDITIONS` / `TOO_MANY_IN_VALUES` / `TOO_MANY_JOINS` / `TOO_MANY_LIKE_CONDITIONS` | 超过 `Limits` 防护阈值 |
+| `RELATION_DEPTH_OVER_LIMIT` | 字段路径层级过深 |
+| `ILLEGAL_OR_SYNTAX` | `or(...)` 语法错误 |
+| `EMPTY_LIKE_VALUE` | `~` 的值为空 |
+| `URL_DECODE_FAILED` | 已废弃：字面量 `%` 现在按原文匹配 |

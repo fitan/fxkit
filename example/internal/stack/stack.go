@@ -3,6 +3,7 @@
 package stack
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,9 +16,10 @@ import (
 	"github.com/fitan/fxkit/docs"
 	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/hatchetx"
+	"github.com/fitan/fxkit/huma"
+	"github.com/fitan/fxkit/mcpx"
 	"github.com/fitan/fxkit/otelx"
 	"github.com/fitan/fxkit/outbox"
-	"github.com/fitan/fxkit/mcpx"
 	"github.com/fitan/fxkit/reqx"
 	"github.com/fitan/fxkit/server"
 	"github.com/fitan/fxkit/di"
@@ -45,6 +47,11 @@ func init() {
 // WithMergedDocs matches [github.com/fitan/fxkit.Default] except /docs and
 // /openapi.{yaml,json} merge baseYAML with the live Huma spec.
 // Pass nil/empty baseYAML for Huma-only.
+//
+// 相比 Default()，这里额外注册了一个**启动自检**：在 PreStart 的最后阶段
+// 校验关键 group 非空。如果某个业务模块忘记加进 Run(...)、或贡献点签名
+// 不受支持，装配会「成功」但路由/huma operation 全丢 —— 自检把这种情况
+// 变成启动期硬失败，而不是上线后才发现部分接口 404。
 func WithMergedDocs(baseYAML []byte) di.Option {
 	return di.Options(
 		config.Module,
@@ -61,5 +68,30 @@ func WithMergedDocs(baseYAML []byte) di.Option {
 		reqx.Module,
 		mcpx.Module,
 		cli.Module,
+		assertWiring(),
 	)
+}
+
+// assertWiring 在 PreStart 结束前校验关键贡献点非空。
+//
+// 用 PhaseMountHTTP+1：此时 huma registrar 已安装、路由已挂载，
+// 所有延迟构造函数都已求值，group 内容是最完整的。
+//
+// 只断言**必然存在**的 group。HealthChecker 不在此列 ——
+// 未配置数据库/缓存时没有任何检查项是合法状态。
+func assertWiring() di.Option {
+	return func(i di.Injector) {
+		lc, err := di.Invoke[*di.Lifecycle](i)
+		if err != nil || lc == nil {
+			return
+		}
+		lc.AppendPreStartPhase(di.PhaseMountHTTP+1, di.Hook{
+			OnStart: func(context.Context) error {
+				return di.AssertGroupsNonEmpty(i,
+					di.GroupOf[huma.Registrar](),
+					di.GroupOf[server.Route](),
+				)
+			},
+		})
+	}
 }

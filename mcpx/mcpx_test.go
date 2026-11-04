@@ -246,3 +246,136 @@ func TestMCPServer_mark3labs_Integration(t *testing.T) {
 		t.Fatalf("unexpected text content: %+v", getRes.Content[0])
 	}
 }
+
+// TestDispatcher_escapesPathParamsAndForwardsHeaders 覆盖：path 参数转义、header 参数转发。
+func TestDispatcher_escapesPathParamsAndForwardsHeaders(t *testing.T) {
+	var got *http.Request
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r
+		_, _ = w.Write([]byte("ok"))
+	})
+	d := mcpx.NewInProcessDispatcher(h, map[string]string{"Authorization": "Bearer static"})
+	tool := mcpx.Tool{
+		Name:           "getItem",
+		Method:         http.MethodGet,
+		Path:           "/items/{id}",
+		ParamLocations: map[string]string{"id": "path", "X-Tenant": "header"},
+	}
+	if _, err := d.Dispatch(context.Background(), tool, map[string]any{
+		"id":       "a/b?c=1",
+		"X-Tenant": "acme",
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if got == nil {
+		t.Fatal("handler was not called")
+	}
+	esc := got.URL.EscapedPath()
+	if !strings.Contains(esc, "%2F") || !strings.Contains(esc, "%3F") {
+		t.Fatalf("path parameter was not escaped: %s", esc)
+	}
+	if got.URL.RawQuery != "" {
+		t.Fatalf("path parameter leaked into query: %s", got.URL.RawQuery)
+	}
+	if v := got.Header.Get("X-Tenant"); v != "acme" {
+		t.Fatalf("header param not forwarded: %q", v)
+	}
+	if v := got.Header.Get("Authorization"); v != "Bearer static" {
+		t.Fatalf("static header not forwarded: %q", v)
+	}
+}
+
+// TestDispatcher_missingPathParamFails 不应带着未替换的占位符发请求。
+func TestDispatcher_missingPathParamFails(t *testing.T) {
+	d := mcpx.NewInProcessDispatcher(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil)
+	tool := mcpx.Tool{Name: "x", Method: http.MethodGet, Path: "/items/{id}"}
+	if _, err := d.Dispatch(context.Background(), tool, map[string]any{}); err == nil {
+		t.Fatal("want error for missing path parameter")
+	}
+}
+
+// TestParseOpenAPI_inlinesNestedRefsAndHeaderParams 覆盖：嵌套 $ref 递归内联、header 参数保留。
+func TestParseOpenAPI_inlinesNestedRefsAndHeaderParams(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /things:
+    post:
+      operationId: createThing
+      parameters:
+        - name: X-Tenant
+          in: header
+          required: true
+          schema: {type: string}
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Thing'}
+      responses: {"200": {description: ok}}
+components:
+  schemas:
+    Thing:
+      type: object
+      properties:
+        child: {$ref: '#/components/schemas/Child'}
+    Child:
+      type: object
+      properties:
+        name: {type: string}
+`
+	tools, err := mcpx.ParseOpenAPI([]byte(spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tool *mcpx.Tool
+	for i := range tools {
+		if tools[i].Name == "createThing" {
+			tool = &tools[i]
+		}
+	}
+	if tool == nil {
+		t.Fatalf("createThing not found: %+v", tools)
+	}
+	if tool.ParamLocations["X-Tenant"] != "header" {
+		t.Fatalf("header param location = %q", tool.ParamLocations["X-Tenant"])
+	}
+	props, _ := tool.InputSchema["properties"].(map[string]any)
+	if _, ok := props["X-Tenant"]; !ok {
+		t.Fatal("header param missing from input schema")
+	}
+	child, ok := props["child"].(map[string]any)
+	if !ok {
+		t.Fatalf("child schema missing: %+v", props)
+	}
+	if _, hasRef := child["$ref"]; hasRef {
+		t.Fatal("nested $ref was not inlined")
+	}
+	if child["type"] != "object" {
+		t.Fatalf("child type = %v", child["type"])
+	}
+}
+
+// TestParseOpenAPI_duplicateToolNamesGetSuffix 名称冲突不能静默覆盖。
+func TestParseOpenAPI_duplicateToolNamesGetSuffix(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+paths:
+  /a-b:
+    get:
+      responses: {"200": {description: ok}}
+  /a_b:
+    get:
+      responses: {"200": {description: ok}}
+`
+	tools, err := mcpx.ParseOpenAPI([]byte(spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("got %d tools", len(tools))
+	}
+	if tools[0].Name == tools[1].Name {
+		t.Fatalf("duplicate tool names: %q", tools[0].Name)
+	}
+}

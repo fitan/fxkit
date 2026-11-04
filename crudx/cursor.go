@@ -82,13 +82,23 @@ func normalizeCursorValue(v any) any {
 	}
 }
 
-func cursorWhereSQL(sortCol, pkCol, dir string) (string, error) {
+// cursorWhereSQL builds the keyset predicate for the next page.
+//
+// 排序统一把 NULL 放在最后（见 applyList 的 "(col IS NULL)" 首列），因此：
+//   - sortVal 为 nil 时表示已经翻到 NULL 分组，只需按主键继续翻；
+//   - sortVal 非 nil 时还要把 NULL 分组一并纳入（它们排在所有非 NULL 值之后）。
+func cursorWhereSQL(sortCol, pkCol, dir string, sortVal, pk any) (string, []any, error) {
 	dir = normalizeSortDir(dir)
 	if dir == "" {
-		return "", fmt.Errorf("crudx: invalid sort direction")
+		return "", nil, fmt.Errorf("crudx: invalid sort direction")
 	}
-	if dir == "asc" {
-		return fmt.Sprintf("(%s > ? OR (%s = ? AND %s > ?))", sortCol, sortCol, pkCol), nil
+	cmp := ">"
+	if dir == "desc" {
+		cmp = "<"
 	}
-	return fmt.Sprintf("(%s < ? OR (%s = ? AND %s < ?))", sortCol, sortCol, pkCol), nil
+	if sortVal == nil {
+		return fmt.Sprintf("(%s IS NULL AND %s %s ?)", sortCol, pkCol, cmp), []any{pk}, nil
+	}
+	return fmt.Sprintf("(%s %s ? OR (%s = ? AND %s %s ?) OR %s IS NULL)",
+		sortCol, cmp, sortCol, pkCol, cmp, sortCol), []any{sortVal, sortVal, pk}, nil
 }

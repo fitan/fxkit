@@ -2,7 +2,7 @@ module {{.Module}}
 
 go 1.27.0
 
-require github.com/fitan/fxkit {{if .FxkitPath}}v0.0.0{{else}}v0.1.0{{end}}
+require github.com/fitan/fxkit {{if .FxkitPath}}v0.0.0{{else}}{{.FxkitVersion}}{{end}}
 {{if .FxkitPath}}
 replace github.com/fitan/fxkit => {{.FxkitPath}}
 {{end}}

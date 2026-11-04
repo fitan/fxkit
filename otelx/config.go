@@ -23,10 +23,10 @@ type Config struct {
 	// Insecure 明文 gRPC/HTTP。本地默认 true。
 	Insecure bool `yaml:"insecure"`
 	// Sampling：always_on | always_off | trace_id_ratio:0.5 | parent_based_always_on | parent_based_trace_id_ratio:0.5
-	Sampling string       `yaml:"sampling"`
-	Traces   TracesConfig `yaml:"traces"`
+	Sampling string        `yaml:"sampling"`
+	Traces   TracesConfig  `yaml:"traces"`
 	Metrics  MetricsConfig `yaml:"metrics"`
-	Logs     LogsConfig   `yaml:"logs"`
+	Logs     LogsConfig    `yaml:"logs"`
 }
 
 // TracesConfig 控制 trace 管道。

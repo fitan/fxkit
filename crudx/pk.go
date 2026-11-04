@@ -16,9 +16,25 @@ import (
 
 // PKInfo 描述从 GORM model 解析出的主键。
 type PKInfo struct {
-	FieldName string // Go 字段名，例如 "ID"
-	Column    string // 数据库列名，例如 "id"
-	Kind      reflect.Kind
+	FieldName     string // Go 字段名，例如 "ID"
+	Column        string // 数据库列名，例如 "id"
+	Kind          reflect.Kind
+	AutoIncrement bool // GORM schema 标记的主键自增（autoIncrement / 数值主键默认）
+}
+
+// autoIncrementNumeric 只有自增数值主键才应该在 create 前清零；
+// 客户端生成的 UUID / 业务主键必须保留。
+func (p PKInfo) autoIncrementNumeric() bool {
+	return p.AutoIncrement && isNumericKind(p.Kind)
+}
+
+func isNumericKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	}
+	return false
 }
 
 // ModelMeta 是 T 的 GORM schema 元数据（主键、资源名、表名），由 [ResolveModel] 解析并缓存。
@@ -63,9 +79,10 @@ func resolveModelUncached[T any](db *gorm.DB) (*ModelMeta, error) {
 	pf := s.PrimaryFields[0]
 	return &ModelMeta{
 		PKInfo: PKInfo{
-			FieldName: pf.Name,
-			Column:    pf.DBName,
-			Kind:      pf.FieldType.Kind(),
+			FieldName:     pf.Name,
+			Column:        pf.DBName,
+			Kind:          pf.FieldType.Kind(),
+			AutoIncrement: pf.AutoIncrement,
 		},
 		Resource: s.Name,
 		Table:    s.Table,
@@ -153,7 +170,8 @@ func FirstByID[T any](ctx context.Context, db *gorm.DB, idStr string, scopes ...
 	return &entity, nil
 }
 
-// ZeroPrimaryKey 在 create 前将 PK Go 字段置零。需已调用 [ResolveModel]。
+// ZeroPrimaryKey 在 create 前将自增数值主键置零。需已调用 [ResolveModel]。
+// 字符串 / UUID 等客户端生成的主键，以及非自增的数值主键会被保留。
 func ZeroPrimaryKey[T any](t *T) {
 	meta, ok := modelMetaCached[T]()
 	if !ok {
@@ -163,7 +181,17 @@ func ZeroPrimaryKey[T any](t *T) {
 }
 
 func zeroPrimaryKey(meta *ModelMeta, t any) {
-	v := reflect.ValueOf(t).Elem()
+	if meta == nil || !meta.autoIncrementNumeric() {
+		return
+	}
+	v := reflect.ValueOf(t)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return
+	}
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return
+	}
 	f := v.FieldByName(meta.FieldName)
 	if !f.IsValid() || !f.CanSet() {
 		return

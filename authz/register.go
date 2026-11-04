@@ -15,8 +15,8 @@ type autoRegisterParams struct {
 	LC       *di.Lifecycle
 	Config   *Config
 	Enforcer *Enforcer
-	Routes   []HTTPRoute 
-	API      huma.API    
+	Routes   []HTTPRoute
+	API      huma.API
 }
 
 // registerRoutesOnStart syncs ProvideHTTPRoutes plus live Huma OpenAPI operations
@@ -24,57 +24,57 @@ type autoRegisterParams struct {
 func registerRoutesOnStart(p autoRegisterParams) {
 	if p.LC != nil {
 		p.LC.Append(di.Hook{
-		OnStart: func(ctx context.Context) error {
-			if p.Enforcer == nil || !p.Enforcer.Enabled() || p.Config == nil {
-				return nil
-			}
-			ac := p.Config.Casbin
-			if !ac.AutoRegisterRoutes {
-				return nil
-			}
-			role := strings.TrimSpace(ac.BootstrapRole)
-			c, cancel := context.WithTimeout(ctx, 8*time.Second)
-			defer cancel()
+			OnStart: func(ctx context.Context) error {
+				if p.Enforcer == nil || !p.Enforcer.Enabled() || p.Config == nil {
+					return nil
+				}
+				ac := p.Config.Casbin
+				if !ac.AutoRegisterRoutes {
+					return nil
+				}
+				role := strings.TrimSpace(ac.BootstrapRole)
+				c, cancel := context.WithTimeout(ctx, 8*time.Second)
+				defer cancel()
 
-			routes := mergeHTTPRoutes(p.Routes, HTTPRoutesFromOpenAPI(p.API))
-			policies := PoliciesFromRoutes(role, routes)
-			if len(policies) > 0 {
-				if err := p.Enforcer.AddPolicies(policies); err != nil {
-					return fmt.Errorf("authz auto-register policies: %w", err)
+				routes := mergeHTTPRoutes(p.Routes, HTTPRoutesFromOpenAPI(p.API))
+				policies := PoliciesFromRoutes(role, routes)
+				if len(policies) > 0 {
+					if err := p.Enforcer.AddPolicies(policies); err != nil {
+						return fmt.Errorf("authz auto-register policies: %w", err)
+					}
 				}
-			}
-			if _, err := p.Enforcer.EnsureRole(c, CreateRoleInput{
-				Name:        role,
-				DisplayName: role,
-				Description: "bootstrap role (auto-register)",
-			}); err != nil {
-				return fmt.Errorf("authz ensure bootstrap role: %w", err)
-			}
-			if err := p.Enforcer.SyncRouteCatalog(routes); err != nil {
-				return fmt.Errorf("authz sync route catalog: %w", err)
-			}
-			var bindings []RoleBinding
-			for _, u := range ac.BootstrapUsers {
-				u = strings.TrimSpace(u)
-				if u == "" {
-					continue
+				if _, err := p.Enforcer.EnsureRole(c, CreateRoleInput{
+					Name:        role,
+					DisplayName: role,
+					Description: "bootstrap role (auto-register)",
+				}); err != nil {
+					return fmt.Errorf("authz ensure bootstrap role: %w", err)
 				}
-				bindings = append(bindings, RoleBinding{User: u, Role: role})
-			}
-			if len(bindings) > 0 {
-				if err := p.Enforcer.AddRoleBindings(bindings); err != nil {
-					return fmt.Errorf("authz auto-register bindings: %w", err)
+				if err := p.Enforcer.SyncRouteCatalog(routes); err != nil {
+					return fmt.Errorf("authz sync route catalog: %w", err)
 				}
-			}
-			slog.InfoContext(c, "authz auto-registered routes",
-				"role", role,
-				"policies", len(policies),
-				"catalog", len(routes),
-				"users", len(bindings),
-			)
-			return nil
-		},
-	})
+				var bindings []RoleBinding
+				for _, u := range ac.BootstrapUsers {
+					u = strings.TrimSpace(u)
+					if u == "" {
+						continue
+					}
+					bindings = append(bindings, RoleBinding{User: u, Role: role})
+				}
+				if len(bindings) > 0 {
+					if err := p.Enforcer.AddRoleBindings(bindings); err != nil {
+						return fmt.Errorf("authz auto-register bindings: %w", err)
+					}
+				}
+				slog.InfoContext(c, "authz auto-registered routes",
+					"role", role,
+					"policies", len(policies),
+					"catalog", len(routes),
+					"users", len(bindings),
+				)
+				return nil
+			},
+		})
 	}
 }
 

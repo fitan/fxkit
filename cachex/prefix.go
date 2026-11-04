@@ -71,3 +71,11 @@ func (p *prefixedCache) MSet(ctx context.Context, pairs map[string][]byte, ttl t
 	}
 	return p.cache.MSet(ctx, prefixedPairs, ttl)
 }
+
+// Close 转发底层缓存的 Close（若支持），使模块关闭时能释放 Redis 连接。
+func (p *prefixedCache) Close() error {
+	if c, ok := p.cache.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}

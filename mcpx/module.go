@@ -2,35 +2,52 @@ package mcpx
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/server"
 	"github.com/go-chi/chi/v5"
-	"github.com/fitan/fxkit/di"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // Config 定义在 application config 中的 mcp 配置段。
 type Config struct {
-	Enabled bool              `koanf:"enabled"`
-	Name    string            `koanf:"name"`
-	Path    string            `koanf:"path"` // 默认 "/mcp"
-	Headers map[string]string `koanf:"headers"`
+	Enabled bool              `yaml:"enabled"`
+	Name    string            `yaml:"name"`
+	Path    string            `yaml:"path"` // 默认 "/mcp"
+	Headers map[string]string `yaml:"headers"`
+	// MaxResponseBytes 单次 tool 调用返回的最大字符数；默认 1 MiB，负数不限制。
+	MaxResponseBytes int `yaml:"max_response_bytes"`
 }
 
-func provideConfig(cfg *config.Config) Config {
-	var c Config
-	c.Path = "/mcp"
+func provideConfig(cfg *config.Config) (Config, error) {
+	c := Config{Path: "/mcp"}
 	if cfg != nil {
-		_ = cfg.UnmarshalKey("mcp", &c)
+		if err := cfg.UnmarshalKey("mcp", &c); err != nil {
+			return Config{}, fmt.Errorf("mcpx: decode mcp config: %w", err)
+		}
 	}
-	return c
+	c.Path = strings.TrimSpace(c.Path)
+	if c.Path == "" {
+		c.Path = "/mcp"
+	}
+	if !strings.HasPrefix(c.Path, "/") {
+		c.Path = "/" + c.Path
+	}
+	if c.MaxResponseBytes == 0 {
+		c.MaxResponseBytes = 1 << 20
+	}
+	return c, nil
 }
 
 type serverParams struct {
 	Config Config
-	Mux    *chi.Mux 
+	Mux    *chi.Mux
 }
 
 func provideServer(p serverParams) (*Server, error) {
@@ -45,9 +62,10 @@ func provideServer(p serverParams) (*Server, error) {
 	}
 
 	srv := NewServer(ServerConfig{
-		Name:    name,
-		Handler: handler,
-		Headers: p.Config.Headers,
+		Name:             name,
+		Handler:          handler,
+		Headers:          p.Config.Headers,
+		MaxResponseBytes: p.Config.MaxResponseBytes,
 	}, nil)
 
 	return srv, nil
@@ -56,38 +74,21 @@ func provideServer(p serverParams) (*Server, error) {
 type syncParams struct {
 	Lc     *di.Lifecycle
 	Server *Server
-	API    huma.API 
-}
-
-func syncHumaTools(p syncParams) {
-	if p.Server == nil || p.API == nil {
-		return
-	}
-	// 在 OnStart hook 中同步工具，确保此时所有业务模块的 huma registrars 均已执行完成
-	if p.Lc != nil {
-		p.Lc.Append(di.Hook{
-		OnStart: func(ctx context.Context) error {
-			tools, err := ParseHuma(p.API)
-			if err == nil {
-				for _, t := range tools {
-					p.Server.RegisterTool(t)
-				}
-			}
-			return nil
-		},
-	})
-	}
+	API    huma.API
 }
 
 func provideRoutes(srv *Server, cfg Config) []server.Route {
-	if !cfg.Enabled && cfg.Path == "" {
+	// mcp.enabled 未开启时不对外暴露 HTTP 端点（stdio 仍可用 `fxkit-app mcp`）。
+	if !cfg.Enabled {
 		return nil
 	}
 	path := cfg.Path
 	if path == "" {
 		path = "/mcp"
 	}
-	sse := srv.SSEServer()
+	// 必须把 base path 告诉 mcp-go：SSE server 按精确路径（basePath+/sse、
+	// basePath+/message）匹配，仅注册 "/mcp/*" 而不设 basePath 会导致 404。
+	sse := srv.SSEServer(mcpserver.WithStaticBasePath(path))
 	return []server.Route{
 		server.PrefixRoute(path, sse),
 	}
@@ -99,8 +100,11 @@ func provideRoutes(srv *Server, cfg Config) []server.Route {
 var Module = di.Module("mcpx",
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (Config, error) {
-			cfg, _ := di.Invoke[*config.Config](i)
-			return provideConfig(cfg), nil
+			cfg, err := di.Invoke[*config.Config](i)
+			if err != nil {
+				return Config{}, err
+			}
+			return provideConfig(cfg)
 		})
 		di.Provide(i, func(i di.Injector) (*Server, error) {
 			c, _ := di.Invoke[Config](i)
@@ -108,14 +112,33 @@ var Module = di.Module("mcpx",
 			return provideServer(serverParams{Config: c, Mux: mux})
 		})
 
+		// 工具同步与 SSE 路由挂载都依赖「装配完成后的完整 group」，
+		// 因此统一放到 Lifecycle.PreStart。
 		lc, _ := di.Invoke[*di.Lifecycle](i)
-		srv, _ := di.Invoke[*Server](i)
-		api, _ := di.Invoke[huma.API](i)
-		syncHumaTools(syncParams{Lc: lc, Server: srv, API: api})
-
-		c, _ := di.Invoke[Config](i)
-		if srv != nil {
-			server.ProvideRoutes(provideRoutes(srv, c))(i)
+		if lc != nil {
+			lc.AppendPreStartPhase(di.PhasePostWire, di.Hook{
+				OnStart: func(context.Context) error {
+					srv, _ := di.Invoke[*Server](i)
+					api, _ := di.Invoke[huma.API](i)
+					if srv != nil && api != nil {
+						tools, err := ParseHuma(api)
+						if err != nil {
+							slog.Error("mcpx: parse huma operations failed", "error", err)
+						}
+						for _, t := range tools {
+							srv.RegisterTool(t)
+						}
+					}
+					c, err := di.Invoke[Config](i)
+					if err != nil {
+						return fmt.Errorf("mcpx: resolve config: %w", err)
+					}
+					if srv != nil {
+						server.ProvideRoutes(provideRoutes(srv, c))(i)
+					}
+					return nil
+				},
+			})
 		}
 	},
 )

@@ -10,8 +10,9 @@ import (
 func testSpec() ListSpec {
 	return ListSpec{
 		Fields: map[string]FieldSpec{
-			"name":        {Column: "users.name", Kind: FieldString, Indexed: true},
+			"name":        {Column: "users.name", Kind: FieldString, Indexed: true, Likeable: true},
 			"state":       {Column: "users.state", Kind: FieldString},
+			"code":        {Column: "users.code", Kind: FieldString},
 			"cpuNum":      {Column: "users.cpu_num", Kind: FieldNumber},
 			"memory":      {Column: "users.memory", Kind: FieldNumber},
 			"enable":      {Column: "users.enable", Kind: FieldBool},
@@ -22,7 +23,7 @@ func testSpec() ListSpec {
 			"cluster": {
 				Table: "clusters", Alias: "cluster", On: "cluster.id = users.cluster_id",
 				Fields: map[string]FieldSpec{
-					"name": {Column: "cluster.name", Kind: FieldString, Indexed: true},
+					"name": {Column: "cluster.name", Kind: FieldString, Indexed: true, Likeable: true},
 				},
 			},
 		},
@@ -110,22 +111,25 @@ func TestParseQConditions_tooMany(t *testing.T) {
 }
 
 func TestParseLiteral_types(t *testing.T) {
+	// parseLiteral 保留原始文本，具体类型由字段 Kind 决定，
+	// 以免把字符串列的值数值化。
 	cases := []struct {
 		in   string
 		want any
 	}{
 		{"null", nil},
 		{"NULL", nil},
-		{"true", true},
-		{"false", false},
-		{"123", int64(123)},
-		{"-456", int64(-456)},
-		{"12.34", float64(12.34)},
+		{"true", "true"},
+		{"false", "false"},
+		{"123", "123"},
+		{"007", "007"},
+		{"-456", "-456"},
+		{"12.34", "12.34"},
 		{".", "."},
-		{"-.", "-."},
 		{"hello", "hello"},
 		{`"hello, world"`, "hello, world"},
 		{`'single quoted'`, "single quoted"},
+		{`"007"`, "007"},
 	}
 	for _, tc := range cases {
 		got, err := parseLiteral(tc.in)
@@ -135,6 +139,85 @@ func TestParseLiteral_types(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("%q: got %v (%T) want %v (%T)", tc.in, got, got, tc.want, tc.want)
 		}
+	}
+}
+
+func TestParseQConditions_stringValuesNotNumericized(t *testing.T) {
+	spec := testSpec()
+	cases := []struct{ raw, want string }{
+		{"code=007", "007"},
+		{"code=00123", "00123"},
+		// 超长数字：字符串列按原文匹配，不能 400
+		{"code=99999999999999999999999999", "99999999999999999999999999"},
+		{"name=100", "100"},
+		{"state=true", "true"},
+	}
+	for _, tc := range cases {
+		conds, err := ParseQConditions(spec, []string{tc.raw})
+		if err != nil {
+			t.Fatalf("%q: %v", tc.raw, err)
+		}
+		got, ok := conds[0].Values[0].(string)
+		if !ok || got != tc.want {
+			t.Fatalf("%q: got %v (%T) want %q", tc.raw, conds[0].Values[0], conds[0].Values[0], tc.want)
+		}
+	}
+}
+
+func TestParseQConditions_numberValuesCoerced(t *testing.T) {
+	spec := testSpec()
+	cases := []struct {
+		raw  string
+		want any
+	}{
+		{"cpuNum=007", int64(7)},
+		{"cpuNum=-12", int64(-12)},
+		{"memory>2.5", float64(2.5)},
+		{"cpuNum.in:1,2.5", int64(1)},
+	}
+	for _, tc := range cases {
+		conds, err := ParseQConditions(spec, []string{tc.raw})
+		if err != nil {
+			t.Fatalf("%q: %v", tc.raw, err)
+		}
+		if conds[0].Values[0] != tc.want {
+			t.Fatalf("%q: got %v (%T) want %v (%T)", tc.raw, conds[0].Values[0], conds[0].Values[0], tc.want, tc.want)
+		}
+	}
+	// 超出 int64 的数字字段仍然 400
+	_, err := ParseQConditions(spec, []string{"cpuNum=99999999999999999999999999"})
+	assertInvalid(t, err, ReasonInvalidValueType)
+}
+
+func TestParseQConditions_stringRangeKeepsText(t *testing.T) {
+	spec := testSpec()
+	conds, err := ParseQConditions(spec, []string{"code>007", "name>=b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := conds[0].Values[0].(string); !ok || got != "007" {
+		t.Fatalf("code>007: got %v (%T)", conds[0].Values[0], conds[0].Values[0])
+	}
+	if got, ok := conds[1].Values[0].(string); !ok || got != "b" {
+		t.Fatalf("name>=b: got %v (%T)", conds[1].Values[0], conds[1].Values[0])
+	}
+}
+
+func TestParseQConditions_timeValidation(t *testing.T) {
+	spec := testSpec()
+	for _, raw := range []string{
+		"createdAt>2024-06-01T12:00:00Z",
+		"createdAt>=2024-06-01",
+		"createdAt<1690000000",
+		"createdAt<=2024-06-01 12:00:00",
+	} {
+		if _, err := ParseQConditions(spec, []string{raw}); err != nil {
+			t.Fatalf("%q: unexpected error %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"createdAt>not-a-time", "createdAt.in:2024-13-45"} {
+		_, err := ParseQConditions(spec, []string{raw})
+		assertInvalid(t, err, ReasonInvalidValueType)
 	}
 }
 
@@ -167,8 +250,15 @@ func TestParseHTTPQValues_literalPercent(t *testing.T) {
 }
 
 func TestParseHTTPQValues_decodeFailed(t *testing.T) {
-	_, err := ParseHTTPQValues([]string{"%ZZ"})
-	assertInvalid(t, err, ReasonURLDecodeFailed)
+	// 非法百分号转义（如 "%ZZ"）现在是字面量：搜索词就该按原文匹配，
+	// 不应把整个查询打成 400。
+	got, err := ParseHTTPQValues([]string{"%ZZ"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "%ZZ" {
+		t.Fatalf("got %v, want literal %%ZZ", got)
+	}
 }
 
 func TestParseQConditions_numericStringField(t *testing.T) {
@@ -320,5 +410,22 @@ func TestParseQConditions_conflictingAndAllowed(t *testing.T) {
 	}
 	if len(conds) != 2 {
 		t.Fatalf("got %d conditions", len(conds))
+	}
+}
+
+// TestParseHTTPQValues_literalPercentKept 字面量 % 不应让整个查询 400。
+func TestParseHTTPQValues_literalPercentKept(t *testing.T) {
+	got, err := ParseHTTPQValues([]string{"name~50%", "100%off", "a%20b"})
+	if err != nil {
+		t.Fatalf("literal %% must not fail: %v", err)
+	}
+	want := []string{"name~50%", "100%off", "a b"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v want %v", got, want)
+		}
 	}
 }

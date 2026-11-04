@@ -5,8 +5,8 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/fitan/fxkit/outbox"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/outbox"
 )
 
 // outboxPublisher pushes outbox rows as Hatchet events (event key = topic name).

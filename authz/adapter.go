@@ -30,7 +30,8 @@ type gormAdapter struct {
 	tableName string
 }
 
-func newGormAdapter(db *gorm.DB, tableName string) (*gormAdapter, error) {
+// newGormAdapter 创建 Casbin 适配器。autoMigrate=false 时不建表（生产由 SQL 平台负责）。
+func newGormAdapter(db *gorm.DB, tableName string, autoMigrate bool) (*gormAdapter, error) {
 	if db == nil {
 		return nil, fmt.Errorf("auth casbin: nil db")
 	}
@@ -38,8 +39,10 @@ func newGormAdapter(db *gorm.DB, tableName string) (*gormAdapter, error) {
 		return nil, fmt.Errorf("auth casbin: table name is required")
 	}
 	a := &gormAdapter{db: db, tableName: tableName}
-	if err := a.table().AutoMigrate(&casbinRule{}); err != nil {
-		return nil, fmt.Errorf("auth casbin migrate: %w", err)
+	if autoMigrate {
+		if err := a.table().AutoMigrate(&casbinRule{}); err != nil {
+			return nil, fmt.Errorf("auth casbin migrate: %w", err)
+		}
 	}
 	return a, nil
 }

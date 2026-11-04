@@ -12,6 +12,13 @@ type ListParams struct {
 	Q              []string
 	Cursor         string // opaque keyset cursor; when set, Start is ignored
 	UseCursor      bool   // request nextCursor even on the first page (no Cursor yet)
+
+	// sortByExplicit / sortDirExplicit 记录调用方在 Normalize 补齐默认值之前
+	// 是否显式传入了排序字段/方向。游标翻页时以游标内的排序为准，只有显式
+	// 冲突才报错，避免把空 direction 归一成的 asc 或 DefaultSort 误判为冲突。
+	sortByExplicit  bool
+	sortDirExplicit bool
+	normalized      bool
 }
 
 // Limits configures guardrails for list queries.
@@ -22,6 +29,7 @@ type Limits struct {
 	MaxLikeConds  int
 	LimitDefault  int
 	LimitMax      int
+	StartMax      int // offset 上限，默认 LimitMax*100；防止巨大的 OFFSET 拖垮数据库
 }
 
 func (l Limits) normalized() Limits {
@@ -44,11 +52,17 @@ func (l Limits) normalized() Limits {
 	if out.LimitMax <= 0 {
 		out.LimitMax = 1000
 	}
+	if out.StartMax <= 0 {
+		out.StartMax = out.LimitMax * 100
+	}
 	return out
 }
 
 // Normalize applies defaults and caps from spec to params (mutates p).
 func (spec *ListSpec) Normalize(p *ListParams) {
+	if p == nil {
+		return
+	}
 	lim := spec.Limits.normalized()
 	if p.Limit <= 0 {
 		p.Limit = lim.LimitDefault
@@ -59,10 +73,21 @@ func (spec *ListSpec) Normalize(p *ListParams) {
 	if p.Start < 0 {
 		p.Start = 0
 	}
+	if p.Start > lim.StartMax {
+		p.Start = lim.StartMax
+	}
+	// 只在第一次 Normalize 时记录显式性（重复调用不能把补齐的默认值当成显式输入）。
+	if !p.normalized {
+		p.sortByExplicit = strings.TrimSpace(p.SortBy) != ""
+		p.sortDirExplicit = strings.TrimSpace(p.SortDirection) != ""
+		p.normalized = true
+	}
 	p.SortBy = strings.TrimSpace(p.SortBy)
 	p.SortDirection = normalizeSortDir(p.SortDirection)
 	if p.SortBy == "" && spec.DefaultSort != "" {
-		p.SortBy, p.SortDirection = ParseSort(spec.DefaultSort)
+		if by, dir := ParseSort(spec.DefaultSort); by != "" {
+			p.SortBy, p.SortDirection = by, dir
+		}
 	}
 	p.Cursor = strings.TrimSpace(p.Cursor)
 	if p.Cursor != "" {

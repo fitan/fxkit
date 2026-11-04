@@ -26,11 +26,20 @@ GO_VERSION="${GO_VERSION:-$(go version 2>/dev/null | awk '{print $3}' || echo un
 BUILD_TIME="${BUILD_TIME:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
 BUILT_BY="${BUILT_BY:-$(whoami 2>/dev/null || echo unknown)}"
 
-printf 'VERSION=%s\n' "$VERSION"
-printf 'GIT_REMOTE=%s\n' "$GIT_REMOTE"
-printf 'GIT_BRANCH=%s\n' "$GIT_BRANCH"
-printf 'COMMIT=%s\n' "$COMMIT"
-printf 'GIT_DIRTY=%s\n' "$GIT_DIRTY"
-printf 'GO_VERSION=%s\n' "$GO_VERSION"
-printf 'BUILD_TIME=%s\n' "$BUILD_TIME"
-printf 'BUILT_BY=%s\n' "$BUILT_BY"
+# 输出经过 shell 引号转义的赋值，使 `eval "$(./build-meta.sh)"` 在值包含空格、
+# 引号、$ 或反引号（例如 git remote URL）时也不会被二次解析/注入。
+quote() {
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+}
+emit() {
+  printf "%s='%s'\n" "$1" "$(quote "$2")"
+}
+
+emit VERSION "$VERSION"
+emit GIT_REMOTE "$GIT_REMOTE"
+emit GIT_BRANCH "$GIT_BRANCH"
+emit COMMIT "$COMMIT"
+emit GIT_DIRTY "$GIT_DIRTY"
+emit GO_VERSION "$GO_VERSION"
+emit BUILD_TIME "$BUILD_TIME"
+emit BUILT_BY "$BUILT_BY"

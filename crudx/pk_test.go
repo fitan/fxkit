@@ -80,6 +80,80 @@ type pkEmbeddedGormModel struct {
 	Title string
 }
 
+type pkStringModel struct {
+	ID   string `gorm:"primaryKey;size:36"`
+	Name string
+}
+
+type pkManualIntModel struct {
+	ID   int64 `gorm:"primaryKey;autoIncrement:false"`
+	Name string
+}
+
+func TestZeroPrimaryKey_onlyAutoIncrementNumeric(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&pkTestModel{}, &pkStringModel{}, &pkManualIntModel{}); err != nil {
+		t.Fatal(err)
+	}
+
+	intMeta, err := ResolveModel[pkTestModel](db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !intMeta.AutoIncrement {
+		t.Fatalf("int primary key should be auto increment: %+v", intMeta.PKInfo)
+	}
+
+	strMeta, err := ResolveModel[pkStringModel](db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strMeta.AutoIncrement {
+		t.Fatalf("string primary key must not be auto increment: %+v", strMeta.PKInfo)
+	}
+
+	manualMeta, err := ResolveModel[pkManualIntModel](db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manualMeta.AutoIncrement {
+		t.Fatalf("autoIncrement:false must be respected: %+v", manualMeta.PKInfo)
+	}
+
+	// 自增数值主键：清零
+	auto := pkTestModel{ID: 42, Name: "a"}
+	ZeroPrimaryKey(&auto)
+	if auto.ID != 0 {
+		t.Fatalf("auto increment pk should be zeroed, got %d", auto.ID)
+	}
+
+	// 客户端生成的 UUID / 业务主键：保留
+	uuidItem := pkStringModel{ID: "0f8fad5b-d9cb-469f-a165-70867728950e", Name: "b"}
+	ZeroPrimaryKey(&uuidItem)
+	if uuidItem.ID != "0f8fad5b-d9cb-469f-a165-70867728950e" {
+		t.Fatalf("string pk must be preserved, got %q", uuidItem.ID)
+	}
+
+	// 非自增数值主键：保留
+	manual := pkManualIntModel{ID: 7, Name: "c"}
+	ZeroPrimaryKey(&manual)
+	if manual.ID != 7 {
+		t.Fatalf("manual numeric pk must be preserved, got %d", manual.ID)
+	}
+}
+
+func TestZeroPrimaryKey_nilSafe(t *testing.T) {
+	newListTestDB(t) // 确保 listTestModel 已缓存元数据
+	var nilItem *listTestModel
+	ZeroPrimaryKey(nilItem)
+	var nilString *pkStringModel
+	// 未 ResolveModel 的类型直接返回；已缓存的类型应安全跳过 nil 指针。
+	ZeroPrimaryKey(nilString)
+}
+
 func TestEmbeddedPrimaryKeyModel(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

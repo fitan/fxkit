@@ -41,6 +41,7 @@ cd example
 make tidy && make build
 make edge                 # Traefik 3.7.12
 make verify               # 起 2×catalog + storefront，打 Traefik；结束后服务继续跑
+make verify-local         # SQLite 单机端到端冒烟（不需要 Docker/Postgres/Consul）
 make down
 ```
 

@@ -120,3 +120,29 @@ func TestSlogAdapterLogsSlowQuery(t *testing.T) {
 		t.Fatalf("slow query not logged: %s", buf.String())
 	}
 }
+
+// TestNew_appliesPoolDefaults 直接构造的 Config 也必须得到安全的连接池默认值。
+func TestNew_appliesPoolDefaults(t *testing.T) {
+	c, err := New(&Config{Driver: "SQLITE", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if c == nil {
+		t.Fatal("nil client")
+	}
+	sqlDB, err := c.Pool().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	if got := sqlDB.Stats().MaxOpenConnections; got != 100 {
+		t.Fatalf("MaxOpenConnections = %d, want 100", got)
+	}
+}
+
+// TestNew_rejectsPartialConfig driver/dsn 必须成对出现。
+func TestNew_rejectsPartialConfig(t *testing.T) {
+	if _, err := New(&Config{Driver: "sqlite"}); err == nil {
+		t.Fatal("want error when dsn is empty")
+	}
+}

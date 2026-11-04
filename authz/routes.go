@@ -1,7 +1,10 @@
 package authz
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/fitan/fxkit/di"
@@ -80,79 +83,164 @@ func findRoute(routes []HTTPRoute, method, path string) (HTTPRoute, bool) {
 }
 
 // skipAuthzPath is true for built-in Huma spec/docs/schema routes (always public).
+//
+// 必须按「路径段」匹配：早期的 strings.HasPrefix(p, "/docs") 会把 /docs-evil、
+// /openapix 这类完全无关的路径也当成公开路径放行。
 func skipAuthzPath(path string) bool {
 	p := normalizeRequestPath(path)
-	switch {
-	case strings.HasPrefix(p, "/huma/openapi"),
-		strings.HasPrefix(p, "/openapi.json"),
-		strings.HasPrefix(p, "/openapi.yaml"),
-		strings.HasPrefix(p, "/openapi-3.0"),
-		p == "/openapi":
-		return true
-	case p == "/docs", strings.HasPrefix(p, "/docs/"):
-		return true
-	case p == "/schemas", strings.HasPrefix(p, "/schemas/"):
-		return true
-	default:
-		return false
+	for _, prefix := range []string{
+		"/openapi",      // /openapi, /openapi.json, /openapi.yaml, /openapi-3.0.json
+		"/huma/openapi", // /huma/openapi.json / .yaml / -3.0.json
+		"/docs",         // Scalar UI
+		"/schemas",      // Huma JSON-schema
+	} {
+		if p == prefix || strings.HasPrefix(p, prefix+"/") || strings.HasPrefix(p, prefix+".") || strings.HasPrefix(p, prefix+"-") {
+			return true
+		}
 	}
+	return false
 }
 
 type routeIndex struct {
-	byMethod map[string][]HTTPRoute
-	any      []HTTPRoute
+	byMethod map[string]*methodRoutes
+	any      *methodRoutes
+}
+
+// methodRoutes 按「首段」索引，避免每条候选路由都从头扫路径。
+type methodRoutes struct {
+	byFirst    map[string][]compiledRoute
+	paramFirst []compiledRoute
+}
+
+func newMethodRoutes() *methodRoutes {
+	return &methodRoutes{byFirst: map[string][]compiledRoute{}}
+}
+
+func (m *methodRoutes) add(c compiledRoute) {
+	if len(c.segs) > 0 && !c.param[0] {
+		m.byFirst[c.segs[0]] = append(m.byFirst[c.segs[0]], c)
+		return
+	}
+	m.paramFirst = append(m.paramFirst, c)
+}
+
+func (m *methodRoutes) consider(path string, reqSegs int, fn func(compiledRoute)) {
+	first := path
+	if j := strings.IndexByte(path, '/'); j >= 0 {
+		first = path[:j]
+	}
+	for _, c := range m.byFirst[first] {
+		if len(c.segs) == reqSegs {
+			fn(c)
+		}
+	}
+	for _, c := range m.paramFirst {
+		if len(c.segs) == reqSegs {
+			fn(c)
+		}
+	}
+}
+
+// compiledRoute 预计算路径分段与匹配权重，避免每个请求对每条候选路由重复 split。
+type compiledRoute struct {
+	route       HTTPRoute
+	method      string
+	segs        []string
+	param       []bool
+	specificity int
+}
+
+func compileRoute(r HTTPRoute) compiledRoute {
+	m := strings.ToUpper(strings.TrimSpace(r.Method))
+	segs := splitPath(normalizeRequestPath(r.Path))
+	param := make([]bool, len(segs))
+	weight := len(segs) * 10
+	if m != "" {
+		weight += 5
+	}
+	for i, s := range segs {
+		param[i] = strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")
+		if !param[i] {
+			weight++
+		}
+	}
+	return compiledRoute{route: r, method: m, segs: segs, param: param, specificity: weight}
+}
+
+// matchPath 逐段匹配已规范化的路径（已 Trim 首尾 "/"），不分配。
+func (c compiledRoute) matchPath(p string) bool {
+	idx := 0
+	for {
+		if idx >= len(c.segs) {
+			return false
+		}
+		seg := p
+		if j := strings.IndexByte(p, '/'); j >= 0 {
+			seg = p[:j]
+			p = p[j+1:]
+		} else {
+			p = ""
+		}
+		if !c.param[idx] && c.segs[idx] != seg {
+			return false
+		}
+		idx++
+		if p == "" {
+			return idx == len(c.segs)
+		}
+	}
 }
 
 func indexRoutes(routes []HTTPRoute) routeIndex {
-	idx := routeIndex{byMethod: map[string][]HTTPRoute{}}
+	idx := routeIndex{byMethod: map[string]*methodRoutes{}}
 	for _, r := range routes {
-		m := strings.ToUpper(strings.TrimSpace(r.Method))
-		if m == "" {
-			idx.any = append(idx.any, r)
+		c := compileRoute(r)
+		if c.method == "" {
+			if idx.any == nil {
+				idx.any = newMethodRoutes()
+			}
+			idx.any.add(c)
 			continue
 		}
-		idx.byMethod[m] = append(idx.byMethod[m], r)
+		mr := idx.byMethod[c.method]
+		if mr == nil {
+			mr = newMethodRoutes()
+			idx.byMethod[c.method] = mr
+		}
+		mr.add(c)
 	}
 	return idx
 }
 
 func (idx routeIndex) find(method, path string) (HTTPRoute, bool) {
 	method = strings.ToUpper(strings.TrimSpace(method))
+	// 规范化一次，后续所有候选路由共用；先按段数/首段过滤，再做逐段比较。
+	path = strings.Trim(normalizeRequestPath(path), "/")
+	reqSegs := 0
+	if path != "" {
+		reqSegs = strings.Count(path, "/") + 1
+	}
 	var best HTTPRoute
 	bestScore := -1
-	consider := func(r HTTPRoute) {
-		if !r.match(method, path) {
+	consider := func(c compiledRoute) {
+		if !c.matchPath(path) {
 			return
 		}
-		score := routeSpecificity(r)
-		if score > bestScore {
-			best = r
-			bestScore = score
+		if c.specificity > bestScore {
+			best = c.route
+			bestScore = c.specificity
 		}
 	}
-	for _, r := range idx.byMethod[method] {
-		consider(r)
+	if mr := idx.byMethod[method]; mr != nil {
+		mr.consider(path, reqSegs, consider)
 	}
-	for _, r := range idx.any {
-		consider(r)
+	if idx.any != nil {
+		idx.any.consider(path, reqSegs, consider)
 	}
 	if bestScore < 0 {
 		return HTTPRoute{}, false
 	}
 	return best, true
-}
-
-func routeSpecificity(r HTTPRoute) int {
-	score := len(splitPath(r.Path)) * 10
-	if r.Method != "" {
-		score += 5
-	}
-	for _, seg := range splitPath(r.Path) {
-		if !(strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) {
-			score++
-		}
-	}
-	return score
 }
 
 // ProvideHTTPRoutes 将路由→permission 表发布到 "authz_http_routes" fx group。
@@ -161,16 +249,50 @@ func routeSpecificity(r HTTPRoute) int {
 //	authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
 //	    return []authz.HTTPRoute{{Method: http.MethodGet, Path: "/users", Permission: "users:list"}}
 //	})
+//
+// 也支持 func(*Service) []HTTPRoute（延迟到 PreStart 装配）与 []HTTPRoute 直接发布。
+// 无法识别的签名会 panic。
 func ProvideHTTPRoutes(fn any) di.Option {
 	return func(i di.Injector) {
+		if fn == nil {
+			return
+		}
 		switch f := fn.(type) {
 		case []HTTPRoute:
 			di.ProvideGroupItems(i, f...)
+			return
 		case func() []HTTPRoute:
 			di.ProvideGroupItems(i, f()...)
+			return
 		case func(di.Injector) []HTTPRoute:
 			di.ProvideGroupItems(i, f(i)...)
+			return
 		}
+		val := reflect.ValueOf(fn)
+		if val.Kind() != reflect.Func {
+			panic("authz.ProvideHTTPRoutes: unsupported argument " + reflect.TypeOf(fn).String())
+		}
+		if err := di.ValidateConstructor(val.Type()); err != nil {
+			panic("authz.ProvideHTTPRoutes: " + err.Error())
+		}
+		lc, err := di.Invoke[*di.Lifecycle](i)
+		if err != nil || lc == nil {
+			panic("authz.ProvideHTTPRoutes: constructor form requires *di.Lifecycle in the graph")
+		}
+		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
+			OnStart: func(context.Context) error {
+				out, callErr := di.CallConstructor(i, fn)
+				if callErr != nil {
+					return fmt.Errorf("authz.ProvideHTTPRoutes: %w", callErr)
+				}
+				routes, ok := out.([]HTTPRoute)
+				if !ok {
+					return fmt.Errorf("authz.ProvideHTTPRoutes: constructor returned %T, want []authz.HTTPRoute", out)
+				}
+				di.ProvideGroupItems(i, routes...)
+				return nil
+			},
+		})
 	}
 }
 

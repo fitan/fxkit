@@ -2,14 +2,18 @@
 
 {{if .Minimal}}`fxkit.Minimal()` + Huma.{{else}}`fxkit.Default()` + Huma.{{end}}
 
+Located at `{{.ServiceDir}}` (import path `{{.ImportPath}}`).
+
 ## Run
 
 From the **repo root**:
 
 ```bash
+{{- if .DefaultLayout}}
 make run SVC={{.AppName}}
 # or
-go run ./services/{{.AppName}}/cmd serve --config services/{{.AppName}}/configs/config.yaml
+{{- end}}
+go run ./{{.ServiceDir}}/cmd serve --config {{.ServiceDir}}/configs/config.yaml
 ```
 
 - `GET /greet/{name}` — sample Huma handler
@@ -19,6 +23,8 @@ go run ./services/{{.AppName}}/cmd serve --config services/{{.AppName}}/configs/
 Dump OpenAPI (no HTTP listen) and generate a typed Go client:
 
 ```bash
+{{- if .DefaultLayout}}
 make openapi SVC={{.AppName}}
-fxkit gen client --spec services/{{.AppName}}/openapi.yaml --out ./internal/clients/{{.AppName}}
+{{- end}}
+fxkit gen client --spec {{.ServiceDir}}/openapi.yaml --out ./internal/clients/{{.AppName}}
 ```

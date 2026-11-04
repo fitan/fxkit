@@ -28,6 +28,15 @@ type Config struct {
 	// Huma 路由返回 403。默认 false：未登记路由仍需登录（不再匿名放行）。
 	// Casbin 启用时一律 Enforce，未匹配策略即 403。
 	DenyUnregistered bool `yaml:"deny_unregistered"`
+	// MuxMiddleware 在 chi/mux 层统一鉴权（覆盖 Huma + 裸 chi + docs + MCP）。
+	//
+	// 开启后不再安装 Huma 层中间件（避免重复判定），Subject 写入 request context，
+	// 因此裸 chi handler 也能用 authz.SubjectFromContext 取身份。
+	// 注意：Huma operation 的 authz.public 元数据仅在 Huma 层中间件生效；
+	// mux 模式下请把匿名路径写进 PublicPaths。
+	MuxMiddleware bool `yaml:"mux_middleware"`
+	// PublicPaths 在 MuxMiddleware 模式下完全放行的路径（精确匹配或前缀）。
+	PublicPaths []string `yaml:"public_paths"`
 	// Casbin path/method RBAC。
 	Casbin CasbinConfig `yaml:"casbin"`
 }

@@ -21,8 +21,8 @@ import (
 
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
-	"github.com/fitan/fxkit/server"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/server"
 )
 
 type agentService struct {
@@ -73,7 +73,9 @@ type registerServiceRequest struct {
 
 // registerStartupMeta 装配 Fx OnStart hook，为配置端口上匹配 app.name 的注册项补全 Consul agent 元数据。
 func registerStartupMeta(lc *di.Lifecycle, disc *Config, app *config.App, srv *server.Config) {
-	if lc == nil { return }
+	if lc == nil {
+		return
+	}
 	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
 			buildinfo.Normalize()
@@ -358,21 +360,42 @@ var Module = di.Module("fxkit/consulx",
 		disc, _ := di.Invoke[*Config](i)
 		app, _ := di.Invoke[*config.App](i)
 		srv, _ := di.Invoke[*server.Config](i)
-		httpSrv, _ := di.Invoke[*server.HTTPServer](i)
 
-		registerSelfLifecycle(registerSelfParams{
-			LC:     lc,
-			Disc:   disc,
-			App:    app,
-			Server: srv,
-			HTTP:   httpSrv,
-		})
-		registerStartupMeta(lc, disc, app, srv)
+		// 自注册必须发生在 listener 已绑定端口之后，而 listener 是在
+		// server.ListenerModule 的 PreStart（PhaseMountHTTP+1）里才被构造的。
+		//
+		// 不要在装配期 di.Invoke[*server.HTTPServer]：那会提前构建 *chi.Mux，
+		// 使宿主模块之后贡献的 middleware / route 被静默丢弃。
+		// 这里用更高的 PreStart 优先级：先解析 HTTPServer（把 bind hook 追加到
+		// lc.hooks），再追加 consul 的 OnStart hook，从而保证「先监听再注册」。
+		if lc != nil {
+			lc.AppendPreStartPhase(di.PhaseMountHTTP+10, di.Hook{
+				OnStart: func(context.Context) error {
+					if disc != nil && disc.Register {
+						if _, err := di.Invoke[*server.HTTPServer](i); err != nil {
+							return fmt.Errorf("consulx: resolve http server for registration: %w", err)
+						}
+					}
+					registerSelfLifecycle(registerSelfParams{
+						LC:     lc,
+						Disc:   disc,
+						App:    app,
+						Server: srv,
+					})
+					registerStartupMeta(lc, disc, app, srv)
+					return nil
+				},
+			})
+		} else {
+			registerSelfLifecycle(registerSelfParams{Disc: disc, App: app, Server: srv})
+			registerStartupMeta(lc, disc, app, srv)
+		}
 
-		// 提供分布式锁 Locker
+		// 提供分布式锁 Locker。
+		// 地址非法时直接让启动失败，而不是静默降级为 disabledLocker。
 		di.Provide(i, func(i di.Injector) (Locker, error) {
 			discConfig, _ := di.Invoke[*Config](i)
-			return ProvideLocker(discConfig), nil
+			return BuildLocker(discConfig)
 		})
 	},
 )

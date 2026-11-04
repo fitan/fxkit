@@ -5,44 +5,54 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/fitan/fxkit/di"
 	fxhuma "github.com/fitan/fxkit/huma"
-	
 )
 
-type humaMiddlewareParams struct {
-	Config    *Config
-	Validator TokenValidator 
-	Enforcer  *Enforcer      
-	Routes    []HTTPRoute    
-}
+// provideHumaMiddleware 返回一个延迟构建的中间件注册器。
+//
+// 关键：HTTPRoute 必须在 [di.PhaseWireGroup]（所有模块装配完成、所有构造函数形式的
+// 贡献点已求值）时读取，而不是在 PhaseResolveContributors 里预先把 routes 固化进
+// params 结构体——否则业务模块用 func(*Svc) []HTTPRoute 登记的路由会被漏掉，
+// Casbin 关闭时这些 operation 的 Permission 校验会被静默跳过。
+func provideHumaMiddleware(inj di.Injector) fxhuma.MiddlewareRegistrar {
+	return fxhuma.MiddlewareFunc(func(api huma.API) fxhuma.Middleware {
+		cfgPtr, err := di.Invoke[*Config](inj)
+		if err != nil {
+			slog.Error("authz: resolve config failed", "error", err)
+			return nil
+		}
+		validator, _ := di.Invoke[TokenValidator](inj)
+		enforcer, _ := di.Invoke[*Enforcer](inj)
 
-func provideHumaMiddleware(p humaMiddlewareParams) fxhuma.MiddlewareRegistrar {
-	cfg := Config{}
-	if p.Config != nil {
-		cfg = *p.Config
-	}
-	if cfg.Enabled && cfg.DevHeaderUser {
-		slog.Warn("auth.dev_header_user enabled: X-User bypasses JWT — disable in production")
-	}
-	if cfg.Enabled && !cfg.DenyUnregistered && (p.Enforcer == nil || !p.Enforcer.Enabled()) {
-		slog.Warn("auth.deny_unregistered=false: Huma ops still require login; unlisted ops are login-only (not anonymous)")
-	}
-	role := strings.TrimSpace(cfg.Casbin.BootstrapRole)
-	if cfg.Casbin.AutoBindBootstrap {
-		slog.Warn("auth.casbin.auto_bind_bootstrap enabled: unbound subjects get bootstrap role — disable in production")
-	}
-	return NewHumaMiddleware(HumaMiddlewareConfig{
-		Enabled:           cfg.Enabled,
-		DevHeaderUser:     cfg.DevHeaderUser,
-		DenyUnregistered:  cfg.DenyUnregistered,
-		AutoBindBootstrap: cfg.Casbin.AutoBindBootstrap,
-		BootstrapRole:     role,
-		Validator:         p.Validator,
-		Enforcer:          p.Enforcer,
-		Routes:            p.Routes,
-		SubjectFunc:       DefaultDevSubjectFunc,
+		cfg := Config{}
+		if cfgPtr != nil {
+			cfg = *cfgPtr
+		}
+		if cfg.Enabled && cfg.DevHeaderUser {
+			slog.Warn("auth.dev_header_user enabled: X-User bypasses JWT — disable in production")
+		}
+		if cfg.Enabled && !cfg.DenyUnregistered && (enforcer == nil || !enforcer.Enabled()) {
+			slog.Warn("auth.deny_unregistered=false: Huma ops still require login; unlisted ops are login-only (not anonymous)")
+		}
+		if cfg.Casbin.AutoBindBootstrap {
+			slog.Warn("auth.casbin.auto_bind_bootstrap enabled: unbound subjects get bootstrap role — disable in production")
+		}
+
+		return NewHumaMiddleware(HumaMiddlewareConfig{
+			Enabled:           cfg.Enabled,
+			DevHeaderUser:     cfg.DevHeaderUser,
+			DenyUnregistered:  cfg.DenyUnregistered,
+			AutoBindBootstrap: cfg.Casbin.AutoBindBootstrap,
+			BootstrapRole:     strings.TrimSpace(cfg.Casbin.BootstrapRole),
+			Validator:         validator,
+			Enforcer:          enforcer,
+			Routes:            di.GetGroup[HTTPRoute](inj),
+			SubjectFunc:       DefaultDevSubjectFunc,
+		}).Middleware(api)
 	})
 }
 
@@ -73,6 +83,32 @@ func NewHumaMiddleware(cfg HumaMiddlewareConfig) fxhuma.MiddlewareRegistrar {
 	idx := indexRoutes(cfg.Routes)
 	enf := cfg.Enforcer
 
+	// auto-bind 只需要每个 subject 检查一次；早期实现每个请求都查一次角色表，
+	// 在高 QPS 下形成额外的 DB 压力。
+	var (
+		bindMu   sync.Mutex
+		bindSeen = map[string]struct{}{}
+	)
+	const maxBindCache = 4096
+	ensureBootstrap := func(ctx context.Context, subject string) {
+		bindMu.Lock()
+		_, seen := bindSeen[subject]
+		if seen {
+			bindMu.Unlock()
+			return
+		}
+		if len(bindSeen) >= maxBindCache {
+			bindSeen = map[string]struct{}{}
+		}
+		bindMu.Unlock()
+
+		maybeAutoBindBootstrap(ctx, enf, subject, cfg.BootstrapRole)
+
+		bindMu.Lock()
+		bindSeen[subject] = struct{}{}
+		bindMu.Unlock()
+	}
+
 	return fxhuma.MiddlewareFunc(func(api huma.API) fxhuma.Middleware {
 		if !cfg.Enabled {
 			return nil
@@ -101,7 +137,7 @@ func NewHumaMiddleware(cfg HumaMiddlewareConfig) fxhuma.MiddlewareRegistrar {
 
 			if enf != nil && enf.Enabled() {
 				if cfg.AutoBindBootstrap {
-					maybeAutoBindBootstrap(ctx.Context(), enf, subj.ID, cfg.BootstrapRole)
+					ensureBootstrap(ctx.Context(), subj.ID)
 				}
 				allowed, enfErr := enf.Enforce(ctx.Context(), EnforceInput{
 					Sub: subj.ID,
@@ -157,13 +193,13 @@ func resolveSubject(ctx huma.Context, cfg HumaMiddlewareConfig, subjectFn Subjec
 		// No JWT validator (typical: casbin + dev_header_user): ignore leftover Bearer.
 	}
 	if cfg.DevHeaderUser {
-		h := http.Header{}
+		// 先读 header，避免无 X-User 的请求每次都分配一个 http.Header。
 		if u := strings.TrimSpace(ctx.Header("X-User")); u != "" {
+			h := http.Header{}
 			h.Set("X-User", u)
-		}
-		s := subjectFn(ctx.Context(), h)
-		if s.ID != "" {
-			return s, nil
+			if s := subjectFn(ctx.Context(), h); s.ID != "" {
+				return s, nil
+			}
 		}
 	}
 	return Subject{}, errUnauthorized

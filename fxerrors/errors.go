@@ -1,6 +1,7 @@
 package fxerrors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ const (
 	KindInternal         Kind = "internal"
 	KindUnavailable      Kind = "unavailable"
 	KindTimeout          Kind = "timeout"
+	KindCanceled         Kind = "canceled"
 )
 
 // Status 返回 kind 对应的 HTTP 状态码。未知 kind 回退为 500。
@@ -44,6 +46,9 @@ func (k Kind) Status() int {
 		return http.StatusServiceUnavailable
 	case KindTimeout:
 		return http.StatusGatewayTimeout
+	case KindCanceled:
+		// 499 不是标准状态码（nginx 惯例）；客户端已断开时通常不会读到响应。
+		return 499
 	default:
 		return http.StatusInternalServerError
 	}
@@ -61,8 +66,19 @@ type Error struct {
 	cause error
 }
 
-// Error 满足 error 接口。
-func (e *Error) Error() string { return e.Message }
+// Error 满足 error 接口。Message 为空时回退到 cause / kind。
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.cause != nil {
+		return e.cause.Error()
+	}
+	return string(e.Kind)
+}
 
 // GetStatus 返回此错误的 HTTP 状态码。
 func (e *Error) GetStatus() int { return e.Status }
@@ -76,6 +92,18 @@ func (e *Error) ContentType(ct string) string {
 		return "application/problem+json"
 	}
 	return ct
+}
+
+// WithCause 附加底层错误，保留 [errors.Is] / [errors.As] 链。
+//
+//	fxerrors.Conflict("email exists").WithCause(gorm.ErrDuplicatedKey)
+func (e *Error) WithCause(cause error) *Error {
+	if e == nil {
+		return nil
+	}
+	out := *e
+	out.cause = cause
+	return &out
 }
 
 // WithDetails 附加任意键值对。可链式调用：
@@ -180,6 +208,8 @@ func Timeout(format string, args ...any) *Error { return new_(KindTimeout, forma
 
 // Wrap 将任意 error 转为 fxkit Error。若已是 *Error 则原样返回，避免多层包装降低 kind/status。
 // 否则结果为 KindInternal，消息为原 error 字符串，并保留 cause。
+//
+// context 的取消/超时会被映射为对应的 kind，避免客户端断连被当成 500 污染 SLO。
 func Wrap(err error) *Error {
 	if err == nil {
 		return nil
@@ -188,12 +218,25 @@ func Wrap(err error) *Error {
 	if errors.As(err, &fxe) {
 		return fxe
 	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return &Error{Kind: KindCanceled, Status: KindCanceled.Status(), Message: "request canceled", cause: err}
+	case errors.Is(err, context.DeadlineExceeded):
+		return &Error{Kind: KindTimeout, Status: KindTimeout.Status(), Message: "deadline exceeded", cause: err}
+	}
 	return &Error{
 		Kind:    KindInternal,
 		Status:  KindInternal.Status(),
 		Message: err.Error(),
 		cause:   err,
 	}
+}
+
+// WrapKind 以指定 kind 包装底层错误，并保留 cause。
+func WrapKind(k Kind, cause error, format string, args ...any) *Error {
+	e := new_(k, format, args...)
+	e.cause = cause
+	return e
 }
 
 // Is 报告 err（或其包装 cause）是否为给定 kind 的 fxkit Error。便于一行模式匹配：

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxFieldDepth = 3
@@ -57,7 +58,9 @@ func ParseHTTPQValues(raw []string) ([]string, error) {
 		}
 		decoded, err := url.QueryUnescape(r)
 		if err != nil {
-			return nil, InvalidQueryCondition(r, ReasonURLDecodeFailed)
+			// 字面量 '%'（例如搜索词 "50%"）不应该让整个查询 400；按原文匹配。
+			out = append(out, r)
+			continue
 		}
 		out = append(out, decoded)
 	}
@@ -306,27 +309,9 @@ func parseLiteral(s string) (any, error) {
 	if strings.EqualFold(s, "null") {
 		return nil, nil
 	}
-	lower := strings.ToLower(s)
-	if lower == "true" {
-		return true, nil
-	}
-	if lower == "false" {
-		return false, nil
-	}
-	if isNumberLiteral(s) {
-		if strings.Contains(s, ".") {
-			f, err := strconv.ParseFloat(s, 64)
-			if err != nil {
-				return nil, err
-			}
-			return f, nil
-		}
-		i, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		return i, nil
-	}
+	// 这里刻意保留原始文本：是否转成数值/布尔/时间取决于字段的 FieldSpec.Kind，
+	// 在 validateValueTypes 中完成。否则字符串列 "007" 会被数值化成 7，
+	// 超长数字也会被误判为非法。
 	return s, nil
 }
 
@@ -367,7 +352,7 @@ func validateCondition(spec ListSpec, lim Limits, c *Condition) error {
 	if err := validateValueTypes(c, fs); err != nil {
 		return InvalidQueryCondition(c.RawQ, ReasonInvalidValueType)
 	}
-	if (c.Op == OpLike || c.Op == OpNotLike) && !fs.Indexed {
+	if (c.Op == OpLike || c.Op == OpNotLike) && !fs.allowLike() {
 		return InvalidQueryCondition(c.RawQ, ReasonFieldNotIndexed)
 	}
 	maxIn := lim.MaxInValues
@@ -392,6 +377,7 @@ func validateValueTypes(c *Condition, fs FieldSpec) error {
 	if c.Op == OpEqual && len(c.Values) > 1 {
 		effectiveOp = OpIn
 	}
+	// coerce 按字段 Kind 把 parseLiteral 保留的原始文本转成 SQL 参数。
 	checkAndCoerce := func(idx int, v any) error {
 		if v == nil {
 			switch effectiveOp {
@@ -403,62 +389,54 @@ func validateValueTypes(c *Condition, fs FieldSpec) error {
 		}
 		switch effectiveOp {
 		case OpLike, OpNotLike:
-			switch x := v.(type) {
-			case string:
-				return nil
-			case int64:
-				c.Values[idx] = strconv.FormatInt(x, 10)
-				return nil
-			case float64:
-				c.Values[idx] = strconv.FormatFloat(x, 'f', -1, 64)
-				return nil
-			case bool:
-				c.Values[idx] = strconv.FormatBool(x)
-				return nil
-			default:
+			s, ok := stringValue(v)
+			if !ok {
 				return errInvalid
 			}
+			c.Values[idx] = s
 		case OpGT, OpGTE, OpLT, OpLTE:
 			switch fs.Kind {
 			case FieldTime:
 				return coerceTimeValueOK(v)
+			case FieldNumber:
+				n, ok := coerceNumber(v)
+				if !ok {
+					return errInvalid
+				}
+				c.Values[idx] = n
+			case FieldString:
+				// 字符串列保留原文做文本比较（例如 name > 'b'）。
+				s, ok := stringValue(v)
+				if !ok {
+					return errInvalid
+				}
+				c.Values[idx] = s
 			default:
-				switch v.(type) {
-				case int64, float64:
-					return nil
-				default:
+				// 布尔的区间比较没有语义，沿用旧行为直接拒绝。
+				if _, ok := numericValue(v); !ok {
 					return errInvalid
 				}
 			}
 		default:
 			switch fs.Kind {
 			case FieldNumber:
-				switch v.(type) {
-				case int64, float64:
-					return nil
-				default:
+				n, ok := coerceNumber(v)
+				if !ok {
 					return errInvalid
 				}
+				c.Values[idx] = n
 			case FieldBool:
-				if _, ok := v.(bool); !ok {
+				b, ok := coerceBool(v)
+				if !ok {
 					return errInvalid
 				}
+				c.Values[idx] = b
 			case FieldString:
-				switch x := v.(type) {
-				case string:
-					return nil
-				case int64:
-					c.Values[idx] = strconv.FormatInt(x, 10)
-					return nil
-				case float64:
-					c.Values[idx] = strconv.FormatFloat(x, 'f', -1, 64)
-					return nil
-				case bool:
-					c.Values[idx] = strconv.FormatBool(x)
-					return nil
-				default:
+				s, ok := stringValue(v)
+				if !ok {
 					return errInvalid
 				}
+				c.Values[idx] = s
 			case FieldTime:
 				return coerceTimeValueOK(v)
 			}
@@ -473,19 +451,100 @@ func validateValueTypes(c *Condition, fs FieldSpec) error {
 	return nil
 }
 
+func stringValue(v any) (string, bool) {
+	switch x := v.(type) {
+	case string:
+		return x, true
+	case int64:
+		return strconv.FormatInt(x, 10), true
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64), true
+	case bool:
+		return strconv.FormatBool(x), true
+	default:
+		return "", false
+	}
+}
+
+func numericValue(v any) (any, bool) {
+	switch x := v.(type) {
+	case int64, float64:
+		return x, true
+	default:
+		return nil, false
+	}
+}
+
+func coerceNumber(v any) (any, bool) {
+	if n, ok := numericValue(v); ok {
+		return n, true
+	}
+	s, ok := v.(string)
+	if !ok || !isNumberLiteral(s) {
+		return nil, false
+	}
+	if strings.Contains(s, ".") {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, false
+		}
+		return f, true
+	}
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return nil, false
+	}
+	return i, true
+}
+
+func coerceBool(v any) (any, bool) {
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case string:
+		if strings.EqualFold(x, "true") {
+			return true, true
+		}
+		if strings.EqualFold(x, "false") {
+			return false, true
+		}
+	}
+	return nil, false
+}
+
 func coerceTimeValueOK(v any) error {
 	switch x := v.(type) {
 	case int64, float64:
 		return nil
 	case string:
-		if x == "" {
-			return errInvalid
-		}
-		// Accept RFC3339 or date-only; ApplyList keeps string/number as-is for SQL drivers.
-		return nil
+		return validateTimeLiteral(x)
 	default:
 		return errInvalid
 	}
+}
+
+// validateTimeLiteral accepts RFC3339 / common SQL layouts / date-only / unix
+// seconds. ApplyList keeps the original string for SQL drivers.
+func validateTimeLiteral(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return errInvalid
+	}
+	if isNumberLiteral(s) {
+		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return nil
+		}
+		if _, err := strconv.ParseFloat(s, 64); err == nil {
+			return nil
+		}
+		return errInvalid
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+		if _, err := time.Parse(layout, s); err == nil {
+			return nil
+		}
+	}
+	return errInvalid
 }
 
 var errInvalid = strconv.ErrSyntax
@@ -542,8 +601,9 @@ func resolveField(spec ListSpec, path string) (resolvedField, error) {
 		return resolvedField{}, errInvalid
 	}
 	join := joinPlan{
-		Alias: rel.Alias,
-		SQL:   "LEFT JOIN " + rel.Table + " AS " + rel.Alias + " ON " + rel.On,
+		Alias:       rel.Alias,
+		SQL:         "LEFT JOIN " + rel.Table + " AS " + rel.Alias + " ON " + rel.On,
+		Cardinality: rel.Cardinality,
 	}
 	if len(parts) == 2 {
 		f, ok := rel.Fields[parts[1]]
@@ -557,8 +617,9 @@ func resolveField(spec ListSpec, path string) (resolvedField, error) {
 		return resolvedField{}, errInvalid
 	}
 	join2 := joinPlan{
-		Alias: nested.Alias,
-		SQL:   "LEFT JOIN " + nested.Table + " AS " + nested.Alias + " ON " + nested.On,
+		Alias:       nested.Alias,
+		SQL:         "LEFT JOIN " + nested.Table + " AS " + nested.Alias + " ON " + nested.On,
+		Cardinality: nested.Cardinality,
 	}
 	if len(parts) == 3 {
 		f, ok := nested.Fields[parts[2]]

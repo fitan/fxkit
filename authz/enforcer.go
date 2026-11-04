@@ -10,9 +10,9 @@ import (
 
 	"github.com/casbin/casbin/v2"
 	"github.com/casbin/casbin/v2/model"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
-	"github.com/fitan/fxkit/di"
 	"gorm.io/gorm"
 )
 
@@ -72,7 +72,7 @@ type Enforcer struct {
 type enforcerParams struct {
 	Config *Config
 	DB     *gormx.Client `optional:"true"`
-	LC     *di.Lifecycle  `optional:"true"`
+	LC     *di.Lifecycle `optional:"true"`
 }
 
 // NewEnforcer builds a Postgres-backed Casbin enforcer when auth.casbin.enabled.
@@ -88,7 +88,8 @@ func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 		return nil, fxerrors.Internal("auth.casbin.enabled requires gormx database")
 	}
 	table := strings.TrimSpace(ac.Casbin.TableName)
-	adapter, err := newGormAdapter(p.DB.Pool(), table)
+	autoMigrate := p.DB.AutoMigrate()
+	adapter, err := newGormAdapter(p.DB.Pool(), table, autoMigrate)
 	if err != nil {
 		return nil, fmt.Errorf("auth casbin adapter: %w", err)
 	}
@@ -104,11 +105,15 @@ func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 	if err := e.LoadPolicy(); err != nil {
 		return nil, fmt.Errorf("auth casbin load: %w", err)
 	}
-	if err := ensurePermissionCatalog(p.DB.Pool()); err != nil {
-		return nil, fmt.Errorf("auth permission catalog: %w", err)
-	}
-	if err := ensureRoleTable(p.DB.Pool()); err != nil {
-		return nil, fmt.Errorf("auth role table: %w", err)
+	if autoMigrate {
+		if err := ensurePermissionCatalog(p.DB.Pool()); err != nil {
+			return nil, fmt.Errorf("auth permission catalog: %w", err)
+		}
+		if err := ensureRoleTable(p.DB.Pool()); err != nil {
+			return nil, fmt.Errorf("auth role table: %w", err)
+		}
+	} else {
+		slog.Debug("auth casbin: auto_migrate disabled; DDL is owned by your SQL platform")
 	}
 	out.e = e
 	out.db = p.DB.Pool()
@@ -206,8 +211,11 @@ func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 		return false, nil
 	}
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.e.Enforce(sub, obj, act)
+	start := time.Now()
+	allowed, err := e.e.Enforce(sub, obj, act)
+	e.mu.RUnlock()
+	recordEnforce(ctx, time.Since(start), allowed, err)
+	return allowed, err
 }
 
 // AddPolicies adds p rules (idempotent via Casbin).

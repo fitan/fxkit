@@ -62,7 +62,7 @@ func (w watchConfig) run(ctx context.Context, pool *endpointPool) {
 			}
 			continue
 		}
-		index = nextIndex
+		index = nextWatchIndex(index, nextIndex)
 		if len(eps) == 0 {
 			if pool.len() > 0 {
 				slog.Warn("reqx: consul returned no endpoints, clearing pool",
@@ -143,6 +143,18 @@ func (w watchConfig) fetch(ctx context.Context, index uint64) ([]string, uint64,
 		eps = append(eps, ep)
 	}
 	return normalizeEndpoints(eps), next, nil
+}
+
+// nextWatchIndex 计算下一次 Consul blocking query 的 index。
+//
+// Consul 在集群恢复/leader 切换后可能返回比本地更小的 index。若直接使用，
+// 后续查询会立即返回（index 已"旧"），形成空转热循环；此时重置为 0，
+// 让下一次请求重新建立基线。
+func nextWatchIndex(current, fetched uint64) uint64 {
+	if fetched < current {
+		return 0
+	}
+	return fetched
 }
 
 func formatConsulWait(d time.Duration) string {

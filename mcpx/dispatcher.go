@@ -7,10 +7,52 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 )
+
+// bufferRecorder 是可完全重置的 ResponseWriter（httptest.ResponseRecorder 的
+// wroteHeader 未导出，复用时会忽略第二次 WriteHeader）。
+type bufferRecorder struct {
+	header http.Header
+	code   int
+	buf    bytes.Buffer
+}
+
+func (r *bufferRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *bufferRecorder) WriteHeader(code int) {
+	if r.code == 0 {
+		r.code = code
+	}
+}
+
+func (r *bufferRecorder) Write(p []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	return r.buf.Write(p)
+}
+
+// Flush 满足 http.Flusher，避免 SSE/流式中间件报不支持。
+func (r *bufferRecorder) Flush() {}
+
+func (r *bufferRecorder) reset() {
+	r.code = 0
+	r.buf.Reset()
+	for k := range r.header {
+		delete(r.header, k)
+	}
+}
+
+// recorderPool 复用 ResponseWriter，避免每次 tool 调用分配（进程内直通是高频路径）。
+var recorderPool = sync.Pool{New: func() any { return &bufferRecorder{} }}
 
 // Dispatcher 定义将大模型 Tool 调用请求派发到当前服务执行的接口。
 type Dispatcher interface {
@@ -44,15 +86,23 @@ func (d *InProcessDispatcher) Dispatch(ctx context.Context, tool Tool, args map[
 	}
 
 	// 纯内存执行，0 网络开销
-	rec := httptest.NewRecorder()
+	rec := recorderPool.Get().(*bufferRecorder)
+	rec.reset()
 	d.handler.ServeHTTP(rec, req)
 
-	respBody := rec.Body.Bytes()
-	if rec.Code < 200 || rec.Code >= 300 {
-		return "", fmt.Errorf("HTTP %d error: %s", rec.Code, strings.TrimSpace(string(respBody)))
+	respBody := rec.buf.String()
+	status := rec.code
+	if status == 0 {
+		status = http.StatusOK
+	}
+	rec.reset()
+	recorderPool.Put(rec)
+
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("HTTP %d error: %s", status, strings.TrimSpace(respBody))
 	}
 
-	return string(respBody), nil
+	return respBody, nil
 }
 
 // buildHTTPRequest 根据 Tool 定义和参数组装内存 HTTP 请求 (精确识别 Path 变量占位符、Query 参数拼接和 JSON Body)。
@@ -60,6 +110,7 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 	targetPath := tool.Path
 	queryParams := make(map[string]any)
 	bodyParams := make(map[string]any)
+	headerParams := make(map[string]string)
 
 	isGetOrDelete := strings.EqualFold(tool.Method, http.MethodGet) || strings.EqualFold(tool.Method, http.MethodDelete)
 
@@ -70,13 +121,22 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 		}
 
 		placeholder := fmt.Sprintf("{%s}", k)
-		if loc == "path" || strings.Contains(targetPath, placeholder) {
-			targetPath = strings.ReplaceAll(targetPath, placeholder, fmt.Sprintf("%v", v))
-		} else if loc == "query" || (isGetOrDelete && loc != "body") {
+		switch {
+		case loc == "path" || strings.Contains(targetPath, placeholder):
+			// path 参数必须转义：否则 id="a/b" 会命中另一个路由，
+			// id="x?admin=1" 会注入 query，"..%2f.." 会穿越。
+			targetPath = strings.ReplaceAll(targetPath, placeholder, url.PathEscape(fmt.Sprintf("%v", v)))
+		case loc == "header":
+			headerParams[k] = fmt.Sprintf("%v", v)
+		case loc == "query" || (isGetOrDelete && loc != "body"):
 			queryParams[k] = v
-		} else {
+		default:
 			bodyParams[k] = v
 		}
+	}
+
+	if strings.Contains(targetPath, "{") {
+		return nil, fmt.Errorf("missing path parameter while building %s %s", tool.Method, tool.Path)
 	}
 
 	fullURL := targetPath
@@ -122,6 +182,10 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Internal-MCP", "true")
 
+	for k, v := range headerParams {
+		req.Header.Set(k, v)
+	}
+	// 静态配置的 header（如 Authorization）最后写入，避免被 tool 参数覆盖。
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

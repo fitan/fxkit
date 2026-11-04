@@ -24,7 +24,7 @@ func openSQLite(t *testing.T, dsn string) *gorm.DB {
 
 func testDBEnforcer(t *testing.T, db *gorm.DB) *Enforcer {
 	t.Helper()
-	adapter, err := newGormAdapter(db, "casbin_rule")
+	adapter, err := newGormAdapter(db, "casbin_rule", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func testDBEnforcer(t *testing.T, db *gorm.DB) *Enforcer {
 
 func TestGormAdapter_EmptyTable(t *testing.T) {
 	db := openSQLite(t, "file:casbin_empty_table?mode=memory&cache=shared")
-	_, err := newGormAdapter(db, "")
+	_, err := newGormAdapter(db, "", true)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -56,7 +56,7 @@ func TestGormAdapter_EmptyTable(t *testing.T) {
 
 func TestGormAdapter_Persist(t *testing.T) {
 	db := openSQLite(t, "file:casbin_persist?mode=memory&cache=shared")
-	adapter, err := newGormAdapter(db, "casbin_rule")
+	adapter, err := newGormAdapter(db, "casbin_rule", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestSetSubjectRoles_PersistsForReload(t *testing.T) {
 
 func TestGormAdapter_RemoveFilteredPolicy(t *testing.T) {
 	db := openSQLite(t, "file:casbin_remove_filtered?mode=memory&cache=shared")
-	adapter, err := newGormAdapter(db, "casbin_rule")
+	adapter, err := newGormAdapter(db, "casbin_rule", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,17 +1,19 @@
 package cachex
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/server"
 	"github.com/redis/go-redis/v9"
 )
 
 // Module 声明 cachex 的依赖注入定义。
-// 提供 *Config 与 Cache。
+// 提供 *Config、Cache 与 *Resolver（让 Config 的 TTL/抖动/单飞设置生效）。
 var Module = di.Module("fxkit/cachex",
 	config.Provide[Config]("cache"),
 	func(i di.Injector) {
@@ -20,10 +22,61 @@ var Module = di.Module("fxkit/cachex",
 			if err != nil {
 				return nil, err
 			}
-			return New(cfg)
+			c, err := New(cfg)
+			if err != nil {
+				return nil, err
+			}
+			// 仅当模块自己创建了 Redis 客户端时才由 Lifecycle 负责关闭；
+			// 外部注入的客户端仍由调用方管理。
+			if closer, ok := c.(interface{ Close() error }); ok {
+				if lc, lcErr := di.Invoke[*di.Lifecycle](i); lcErr == nil && lc != nil {
+					lc.Append(di.Hook{
+						OnStop: func(context.Context) error {
+							return closer.Close()
+						},
+					})
+				}
+			}
+			return c, nil
 		})
+		di.Provide(i, func(i di.Injector) (*Resolver, error) {
+			cfg, _ := di.Invoke[*Config](i)
+			c, err := di.Invoke[Cache](i)
+			if err != nil {
+				return nil, err
+			}
+			return NewResolver(c, cfg), nil
+		})
+
+		// 缓存健康检查：仅在使用 Redis 时注册（进程内缓存没有远端依赖）。
+		if cfg, err := di.Invoke[*Config](i); err == nil && cfg != nil &&
+			strings.EqualFold(strings.TrimSpace(cfg.Driver), "redis") {
+			if c, err := di.Invoke[Cache](i); err == nil && c != nil {
+				di.ProvideGroupItem[server.HealthChecker](i, cacheHealthChecker{cache: c})
+			}
+		}
 	},
 )
+
+// cacheHealthChecker 实现 [server.HealthChecker]，对 Redis 做 PING。
+type cacheHealthChecker struct {
+	cache Cache
+}
+
+// Name 返回检查项名称。
+func (cacheHealthChecker) Name() string { return "cache" }
+
+// Check 执行一次轻量写读，验证 Redis 可用。
+func (c cacheHealthChecker) Check(ctx context.Context) error {
+	rc, ok := c.cache.(*RedisCache)
+	if !ok {
+		return nil
+	}
+	if err := rc.Client().Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis ping: %w", err)
+	}
+	return nil
+}
 
 // New 根据 Config 实例化 Cache。
 func New(cfg *Config) (Cache, error) {

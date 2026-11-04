@@ -3,18 +3,26 @@ package reqx
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fitan/fxkit/config"
-	"github.com/imroc/req/v3"
 	"github.com/fitan/fxkit/di"
+	"github.com/imroc/req/v3"
 )
 
 const (
 	defaultTimeout = 30 * time.Second
+
+	// defaultMaxIdleConnsPerHost avoids the stdlib global default of 2, which
+	// causes connection churn for services that fan out to a few upstreams.
+	defaultMaxIdleConnsPerHost = 32
+	defaultMaxIdleConns        = 200
+	defaultIdleConnTimeout     = 90 * time.Second
 
 	// defaultWatchWait is Consul's blocking-query default. It is a max idle
 	// hold: an index change returns immediately, so a longer wait does not
@@ -34,6 +42,9 @@ type Factory struct {
 	pools  map[string]*managedPool
 	root   context.Context
 	cancel context.CancelFunc
+	// closed 标记已 Close。关闭后 root ctx 已取消，
+	// 继续建带 Consul watch 的 client 会得到一个永不更新的空端点池。
+	closed bool
 }
 
 type managedPool struct {
@@ -68,7 +79,32 @@ type ClientInput struct {
 	SpanName string
 
 	// BaseTransport is an optional underlying RoundTripper (before otel + resolve).
+	//
+	// When nil, the req.Client's own transport is used as the base, so
+	// SetTLSClientConfig / SetProxy / SetDial / SetDialTLS etc. on the returned
+	// client still affect real requests. When set, it replaces that transport
+	// entirely; req-level transport settings are then ignored.
 	BaseTransport http.RoundTripper
+
+	// ServerName is the TLS server name (SNI + certificate verification) used
+	// when Scheme is "https". Set it when discovery returns bare IPs but the
+	// certificate is issued for a DNS name.
+	//
+	// When set, the logical service name is preserved as URL.Host / Host, and
+	// each request dials the selected endpoint through a custom DialContext.
+	// Without ServerName, https + a named service preserves the logical host
+	// when discovery returns an IP endpoint, using it as the default SNI (so
+	// Consul IP endpoints still verify). DNS endpoints keep the historical
+	// behavior (endpoint used as SNI). Seeds-only clients also keep the
+	// historical behavior.
+	//
+	// Host-preserving mode dials the selected endpoint directly, so an HTTP(S)
+	// proxy configured on the client is bypassed for these requests.
+	ServerName string
+
+	// HostOverride overrides the HTTP Host header while still connecting to the
+	// discovered endpoint. Useful for virtual-host routing through gateways.
+	HostOverride string
 
 	// WatchWait is the Consul blocking query wait (default 5m, capped at 10m).
 	// Longer waits do not delay change detection; Consul returns as soon as
@@ -90,16 +126,20 @@ func NewFactory(lc *di.Lifecycle, cfg *config.Config) *Factory {
 	}
 	if lc != nil {
 		lc.Append(di.Hook{
-		OnStop: func(context.Context) error {
-			f.Close()
-			return nil
-		},
-	})
+			OnStop: func(context.Context) error {
+				f.Close()
+				return nil
+			},
+		})
 	}
 	return f
 }
 
 // Close stops all Consul watches. Called automatically on Fx shutdown.
+//
+// 关闭后 Factory 不可再用于创建带 Consul watch 的 client —— 内部 root context
+// 已被取消，新建的 watch 会立即退出（表现为「endpoints 永远不更新」）。
+// [Client] 会显式拒绝这种用法而不是静默降级。
 func (f *Factory) Close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -113,6 +153,17 @@ func (f *Factory) Close() {
 		}
 	}
 	f.pools = make(map[string]*managedPool)
+	f.closed = true
+}
+
+// IsClosed 报告 Factory 是否已关闭。
+func (f *Factory) IsClosed() bool {
+	if f == nil {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
 }
 
 // Client returns a ready-to-use [req.Client]. Use relative paths; Host is filled
@@ -124,6 +175,13 @@ func (f *Factory) Close() {
 // HTTPS:
 //
 //	cli, _ := factory.Client(reqx.ClientInput{Name: "orders", Scheme: "https"})
+//
+// Transport customization: when ClientInput.BaseTransport is nil, the returned
+// client's transport chain delegates to req's own transport, so
+// SetTLSClientConfig / SetProxy / SetDial / SetDialTLS remain effective. In
+// ServerName (host-preserving) mode the endpoint dialer wraps DialContext;
+// calling SetDial afterwards replaces that wrapper, so configure custom dialers
+// through BaseTransport instead.
 func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	if f == nil {
 		return nil, fmt.Errorf("reqx: nil factory")
@@ -167,25 +225,91 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 		logicalName = "static"
 	}
 
-	rt := buildTransport(buildTransportInput{
-		Pool:        pool,
-		Scheme:      scheme,
-		Name:        logicalName,
-		Base:        in.BaseTransport,
-		OTel:        otelOn,
-		SpanName:    strings.TrimSpace(in.SpanName),
-		MaxFailover: in.MaxFailover,
-	})
+	serverName := normalizeServerName(in.ServerName)
+	hostOverride := strings.TrimSpace(in.HostOverride)
+	explicitServerName := serverName != ""
+	// Preserve the logical host when an explicit TLS name is requested, or for
+	// https + Consul-discovered named services (endpoint may be a bare IP).
+	preserveHost := explicitServerName || (scheme == "https" && name != "")
+	// In the inferred case only IP endpoints need host preservation; DNS
+	// endpoints keep the historical behavior (endpoint used as SNI).
+	autoPreserve := preserveHost && !explicitServerName
 
 	cli := req.C().
 		SetTimeout(timeout).
 		SetBaseURL(scheme + "://" + logicalName)
+
+	base := in.BaseTransport
+	ownBase := false
+	if base == nil {
+		// Chain req's own transport: SetTLSClientConfig / SetProxy / SetDial
+		// mutate cli.Transport, which must be on the request path.
+		reqTransport := cli.GetTransport()
+		tuneReqTransport(reqTransport)
+		base = reqTransport
+		ownBase = true
+	}
+
+	rt, err := buildTransport(buildTransportInput{
+		Pool:         pool,
+		Scheme:       scheme,
+		Name:         logicalName,
+		LogicalHost:  logicalName,
+		Base:         base,
+		OwnBase:      ownBase,
+		OTel:         otelOn,
+		SpanName:     strings.TrimSpace(in.SpanName),
+		MaxFailover:  in.MaxFailover,
+		PreserveHost: preserveHost,
+		AutoPreserve: autoPreserve,
+		ServerName:   serverName,
+		HostOverride: hostOverride,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	httpClient := cli.GetClient()
 	httpClient.Transport = rt
 	httpClient.Timeout = timeout
 
 	return cli, nil
+}
+
+// tuneReqTransport adjusts req's per-client transport defaults.
+//
+// req.C() creates a fresh transport per client (never the global
+// http.DefaultTransport), so tuning it here avoids sharing connection-pool
+// state across clients while keeping sane keep-alive settings.
+func tuneReqTransport(t *req.Transport) {
+	if t == nil {
+		return
+	}
+	if t.MaxIdleConnsPerHost <= 0 {
+		t.MaxIdleConnsPerHost = defaultMaxIdleConnsPerHost
+	}
+	if t.MaxIdleConns <= 0 {
+		t.MaxIdleConns = defaultMaxIdleConns
+	}
+	if t.IdleConnTimeout <= 0 {
+		t.IdleConnTimeout = defaultIdleConnTimeout
+	}
+}
+
+// normalizeServerName strips an accidental scheme/port so tls.Config.ServerName
+// always receives a bare host name.
+func normalizeServerName(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if h, _, err := net.SplitHostPort(s); err == nil {
+		return h
+	}
+	return strings.TrimRight(s, "/")
 }
 
 // TransportClient returns the stdlib [http.Client] whose Transport resolves
@@ -230,6 +354,12 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// 关闭后 root ctx 已取消，新建 watch 会立刻退出 —— 静默返回一个永不更新的
+	// 端点池比直接报错更难排查（业务表现为「一直连不上服务」）。
+	if f.closed {
+		return nil, fmt.Errorf("reqx: factory is closed; create a new one (Close cancels all Consul watches)")
+	}
+
 	if m, ok := f.pools[key]; ok {
 		return m.pool, nil
 	}
@@ -250,8 +380,21 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 			wait:        in.WatchWait,
 			httpClient:  &http.Client{Timeout: 10 * time.Second},
 		}
-		if eps, _, err := w.fetch(watchCtx, 0); err == nil && len(eps) > 0 {
+		if eps, _, err := w.fetch(watchCtx, 0); err != nil {
+			// Discovery failing at startup used to be silent: the client was
+			// created with an empty pool and requests failed with a confusing
+			// "no healthy endpoints". Log it loudly; the watch below keeps
+			// retrying so a temporary Consul outage still recovers.
+			slog.Warn("reqx: initial service discovery failed",
+				"service", in.Name,
+				"error", err,
+			)
+		} else if len(eps) > 0 {
 			pool.replace(eps)
+		} else if len(in.Seeds) == 0 {
+			slog.Warn("reqx: initial service discovery returned no endpoints",
+				"service", in.Name,
+			)
 		}
 
 		go watchConfig{

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -33,8 +34,16 @@ func ParseOpenAPI(data []byte) ([]Tool, error) {
 	var tools []Tool
 	httpMethods := []string{"get", "post", "put", "delete", "patch"}
 
-	for pathStr, pathItemVal := range paths {
-		pathItem, ok := pathItemVal.(map[string]any)
+	// 排序保证生成的 tool 名称与顺序稳定（map 迭代顺序随机）。
+	pathKeys := make([]string, 0, len(paths))
+	for p := range paths {
+		pathKeys = append(pathKeys, p)
+	}
+	sort.Strings(pathKeys)
+
+	usedNames := make(map[string]int, len(pathKeys))
+	for _, pathStr := range pathKeys {
+		pathItem, ok := paths[pathStr].(map[string]any)
 		if !ok {
 			continue
 		}
@@ -58,6 +67,14 @@ func ParseOpenAPI(data []byte) ([]Tool, error) {
 			tool, err := extractOperation(root, strings.ToUpper(method), pathStr, op, pathLevelParams)
 			if err != nil {
 				return nil, err
+			}
+			// 名称冲突（不同 path 归一到同一标识符）时加后缀，
+			// 避免注册到 map 时后写静默覆盖前者。
+			if n, seen := usedNames[tool.Name]; seen {
+				usedNames[tool.Name] = n + 1
+				tool.Name = fmt.Sprintf("%s_%d", tool.Name, n+1)
+			} else {
+				usedNames[tool.Name] = 1
 			}
 			tools = append(tools, tool)
 		}
@@ -108,25 +125,45 @@ func extractOperation(root map[string]any, method, path string, op map[string]an
 	var requiredFields []string
 	paramLocations := make(map[string]string)
 
-	// 合并 parameters (path, query, header)
-	allParams := append([]any(nil), parentParams...)
+	// 合并 parameters（path, query, header）。
+	// 同一 name+in 的 operation 级参数覆盖 path 级（OpenAPI 语义）。
+	var (
+		ordered   []map[string]any
+		paramSeen = map[string]int{}
+	)
+	addParam := func(p map[string]any) {
+		pName, _ := p["name"].(string)
+		pIn, _ := p["in"].(string)
+		if pName == "" || pIn == "" {
+			return
+		}
+		if pIn != "path" && pIn != "query" && pIn != "header" {
+			return
+		}
+		key := pIn + "\x00" + pName
+		if idx, ok := paramSeen[key]; ok {
+			ordered[idx] = p
+			return
+		}
+		paramSeen[key] = len(ordered)
+		ordered = append(ordered, p)
+	}
+	for _, pVal := range parentParams {
+		if p, ok := pVal.(map[string]any); ok {
+			addParam(p)
+		}
+	}
 	if opParams, ok := op["parameters"].([]any); ok {
-		allParams = append(allParams, opParams...)
+		for _, pVal := range opParams {
+			if p, ok := pVal.(map[string]any); ok {
+				addParam(p)
+			}
+		}
 	}
 
-	for _, pVal := range allParams {
-		p, ok := pVal.(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, p := range ordered {
 		pName, _ := p["name"].(string)
-		if pName == "" {
-			continue
-		}
-		pIn, _ := p["in"].(string) // "path", "query", etc.
-		if pIn != "path" && pIn != "query" {
-			continue
-		}
+		pIn, _ := p["in"].(string)
 		paramLocations[pName] = pIn
 
 		pReq, _ := p["required"].(bool)
@@ -140,10 +177,11 @@ func extractOperation(root map[string]any, method, path string, op map[string]an
 		pDesc, _ := p["description"].(string)
 		var pSchema map[string]any
 		if sMap, ok := p["schema"].(map[string]any); ok {
-			pSchema = copyMap(sMap)
+			pSchema = sMap
 		} else {
 			pSchema = map[string]any{"type": "string"}
 		}
+		pSchema = inlineSchema(root, pSchema, map[string]bool{})
 		if pDesc != "" && pSchema["description"] == nil {
 			pSchema["description"] = pDesc
 		}
@@ -160,12 +198,9 @@ func extractOperation(root map[string]any, method, path string, op map[string]an
 				}
 			}
 			if bodySchema != nil {
-				// 支持解引用 $ref: "#/components/schemas/..."
-				if refStr, ok := bodySchema["$ref"].(string); ok && refStr != "" {
-					if resolved := resolveSchemaRef(root, refStr); resolved != nil {
-						bodySchema = resolved
-					}
-				}
+				// 递归内联所有 $ref（含嵌套对象/数组），否则 MCP 客户端拿到的是
+				// "#/components/schemas/X" 这种无法解析的引用。
+				bodySchema = inlineSchema(root, bodySchema, map[string]bool{})
 
 				if bProps, ok := bodySchema["properties"].(map[string]any); ok {
 					for k, v := range bProps {
@@ -205,14 +240,84 @@ func extractOperation(root map[string]any, method, path string, op map[string]an
 	}, nil
 }
 
-// resolveSchemaRef 解析 OpenAPI 内部的 JSON Pointer 引用，如 "#/components/schemas/Foo"。
-func resolveSchemaRef(root map[string]any, ref string) map[string]any {
+// inlineSchema 递归内联 OpenAPI 内部的 $ref（JSON Pointer）。
+// 遇到循环引用时返回空 schema 并停止，而不是无限递归。
+func inlineSchema(root map[string]any, v any, stack map[string]bool) map[string]any {
+	switch t := v.(type) {
+	case map[string]any:
+		if ref, ok := t["$ref"].(string); ok && ref != "" {
+			if stack[ref] {
+				return map[string]any{}
+			}
+			resolved := resolveJSONPointer(root, ref)
+			if resolved == nil {
+				return map[string]any{}
+			}
+			stack[ref] = true
+			out := inlineSchema(root, resolved, stack)
+			delete(stack, ref)
+			// OpenAPI 3.1 允许 $ref 旁边跟其它字段。
+			for k, sub := range t {
+				if k == "$ref" {
+					continue
+				}
+				out[k] = inlineAny(root, sub, stack)
+			}
+			return out
+		}
+		out := make(map[string]any, len(t))
+		for k, sub := range t {
+			out[k] = inlineAny(root, sub, stack)
+		}
+		return out
+	default:
+		return map[string]any{}
+	}
+}
+
+// inlineAny 与 inlineSchema 相同，但保留任意 JSON 值类型（数组/标量）。
+func inlineAny(root map[string]any, v any, stack map[string]bool) any {
+	switch t := v.(type) {
+	case map[string]any:
+		if ref, ok := t["$ref"].(string); ok && ref != "" {
+			if stack[ref] {
+				return map[string]any{}
+			}
+			resolved := resolveJSONPointer(root, ref)
+			if resolved == nil {
+				return map[string]any{}
+			}
+			stack[ref] = true
+			out := inlineSchema(root, resolved, stack)
+			delete(stack, ref)
+			return out
+		}
+		out := make(map[string]any, len(t))
+		for k, sub := range t {
+			out[k] = inlineAny(root, sub, stack)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, sub := range t {
+			out[i] = inlineAny(root, sub, stack)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// resolveJSONPointer 解析 "#/a/b/c" 形式的 JSON Pointer（含 ~0/~1 转义）。
+func resolveJSONPointer(root map[string]any, ref string) map[string]any {
 	if !strings.HasPrefix(ref, "#/") {
 		return nil
 	}
 	parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
 	var current any = root
 	for _, part := range parts {
+		part = strings.ReplaceAll(part, "~1", "/")
+		part = strings.ReplaceAll(part, "~0", "~")
 		m, ok := current.(map[string]any)
 		if !ok {
 			return nil
@@ -220,20 +325,5 @@ func resolveSchemaRef(root map[string]any, ref string) map[string]any {
 		current = m[part]
 	}
 	res, _ := current.(map[string]any)
-	return copyMap(res)
-}
-
-func copyMap(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		if subMap, ok := v.(map[string]any); ok {
-			out[k] = copyMap(subMap)
-		} else {
-			out[k] = v
-		}
-	}
-	return out
+	return res
 }

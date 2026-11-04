@@ -23,6 +23,17 @@ func (r *RedisCache) Client() redis.UniversalClient {
 	return r.client
 }
 
+// Close 关闭底层 Redis 客户端。
+//
+// 由 [New] 创建的 Redis 客户端在模块关闭时由 Lifecycle 自动关闭；
+// 调用方自行注入客户端时，关闭责任仍归注入方。
+func (r *RedisCache) Close() error {
+	if r == nil || r.client == nil {
+		return nil
+	}
+	return r.client.Close()
+}
+
 func (r *RedisCache) Get(ctx context.Context, key string) ([]byte, error) {
 	val, err := r.client.Get(ctx, key).Bytes()
 	if err != nil {
@@ -35,7 +46,18 @@ func (r *RedisCache) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (r *RedisCache) Set(ctx context.Context, key string, val []byte, ttl time.Duration) error {
-	return r.client.Set(ctx, key, val, ttl).Err()
+	return r.client.Set(ctx, key, val, normalizeRedisTTL(ttl)).Err()
+}
+
+// normalizeRedisTTL 统一 Redis 与内存实现的 TTL 语义。
+//
+// go-redis 把负 TTL 解释为 KEEPTTL（保留原过期时间），而 Cache 接口与内存
+// 实现约定 ttl <= 0 表示永不过期。这里把负数归一到 0。
+func normalizeRedisTTL(ttl time.Duration) time.Duration {
+	if ttl < 0 {
+		return 0
+	}
+	return ttl
 }
 
 func (r *RedisCache) Delete(ctx context.Context, key string) error {

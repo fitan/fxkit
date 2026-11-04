@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/gormx"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // EventPublisher publishes raw payload bytes to a topic (Hatchet event key = topic name).
@@ -50,7 +51,7 @@ type Relay struct {
 type NewRelayParams struct {
 	Client     *gormx.Client
 	Outbox     *Config
-	Publishers []EventPublisher 
+	Publishers []EventPublisher
 }
 
 // NewRelay builds a Relay. The last non-nil [EventPublisher] in the fx group is used.
@@ -112,6 +113,10 @@ func (r *Relay) Notify() {
 type batchResult struct {
 	Published int
 	Claimed   int
+	// Failed 是本次「领取后投递失败」的条数。用于判断能否立刻继续 drain：
+	// 只有真正有进展（成功发布过）才值得立刻进入下一轮，
+	// 否则会形成「批量领取 → 全部投递失败 → 立刻重领」的 CPU 热循环。
+	Failed int
 }
 
 // ProcessBatch claims and publishes up to batch_size pending (or stale processing) events.
@@ -145,6 +150,7 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 		return batchResult{}, nil
 	}
 	out := batchResult{Claimed: len(events)}
+	recordBatch(ctx, len(events))
 
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	var hbwg sync.WaitGroup
@@ -161,55 +167,126 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 		hbwg.Wait()
 	}()
 
-	for _, ev := range events {
-		meta := publishMetadata(ev)
-		if err := pub.PublishEvent(ctx, ev.Pubsub, ev.Topic, ev.Payload, meta); err != nil {
-			n, markErr := r.markFailed(ctx, ev, maxRetries, err)
-			if markErr != nil {
-				slog.ErrorContext(ctx, "outbox: markFailed after publish error",
-					"id", ev.ID, "error", markErr,
-				)
-				continue
+	concurrency := r.cfg.PublishConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(events) {
+		concurrency = len(events)
+	}
+
+	if concurrency == 1 {
+		for _, ev := range events {
+			o := r.publishOne(ctx, pub, ev, maxRetries)
+			if o.published {
+				out.Published++
 			}
-			if n == 0 {
-				slog.InfoContext(ctx, "outbox: markFailed skipped (lease lost)",
-					"id", ev.ID, "lease_id", ev.LeaseID,
-				)
-				continue
+			if o.failed {
+				out.Failed++
 			}
-			slog.WarnContext(ctx, "outbox: publish failed, will retry",
-				"id", ev.ID, "topic", ev.Topic, "attempts", ev.Attempts, "error", err,
-			)
-			continue
 		}
-		n, err := r.markPublished(ctx, ev)
-		if err != nil {
-			slog.ErrorContext(ctx, "outbox: markPublished failed (may republish after claim timeout)",
-				"id", ev.ID, "error", err,
-			)
-			continue
+		return out, nil
+	}
+
+	// 可选并发：默认 1 保持旧行为；>1 时不保证同一批内的投递顺序。
+	outcomes := make([]publishOutcome, len(events))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i := range events {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			outcomes[i] = r.publishOne(ctx, pub, events[i], maxRetries)
+		}(i)
+	}
+	wg.Wait()
+	for _, o := range outcomes {
+		if o.published {
+			out.Published++
 		}
-		if n == 0 {
-			slog.InfoContext(ctx, "outbox: markPublished skipped (lease lost)",
-				"id", ev.ID, "lease_id", ev.LeaseID,
-			)
-			continue
+		if o.failed {
+			out.Failed++
 		}
-		out.Published++
-		slog.InfoContext(ctx, "outbox: published",
-			"id", ev.ID, "topic", ev.Topic, "pubsub", ev.Pubsub,
-			"idempotency_key", idempotencyKeyValue(ev),
-		)
 	}
 	return out, nil
 }
 
-func publishMetadata(ev OutboxEvent) map[string]string {
-	key := idempotencyKeyValue(ev)
-	if key == "" {
+type publishOutcome struct {
+	published bool
+	failed    bool
+}
+
+// publishOne 投递单条事件并更新它的状态（失败则按重试策略回到 pending / failed）。
+func (r *Relay) publishOne(ctx context.Context, pub EventPublisher, ev OutboxEvent, maxRetries int) publishOutcome {
+	out := publishOutcome{}
+	ctx, span := startPublishSpan(ctx, ev.Topic)
+	defer span.End()
+
+	meta := publishMetadata(ctx, ev)
+	start := time.Now()
+	pubErr := pub.PublishEvent(ctx, ev.Pubsub, ev.Topic, ev.Payload, meta)
+	recordPublish(ctx, time.Since(start), pubErr == nil)
+	if pubErr != nil {
+		span.RecordError(pubErr)
+		span.SetStatus(codes.Error, "publish failed")
+		n, markErr := r.markFailed(ctx, ev, maxRetries, pubErr)
+		if markErr != nil {
+			slog.ErrorContext(ctx, "outbox: markFailed after publish error",
+				"id", ev.ID, "error", markErr,
+			)
+			out.failed = true
+			return out
+		}
+		if n == 0 {
+			slog.InfoContext(ctx, "outbox: markFailed skipped (lease lost)",
+				"id", ev.ID, "lease_id", ev.LeaseID,
+			)
+			out.failed = true
+			return out
+		}
+		slog.WarnContext(ctx, "outbox: publish failed, will retry",
+			"id", ev.ID, "topic", ev.Topic, "attempts", ev.Attempts, "error", pubErr,
+		)
+		out.failed = true
+		return out
+	}
+	n, err := r.markPublished(ctx, ev)
+	if err != nil {
+		slog.ErrorContext(ctx, "outbox: markPublished failed (may republish after claim timeout)",
+			"id", ev.ID, "error", err,
+		)
+		return out
+	}
+	if n == 0 {
+		slog.InfoContext(ctx, "outbox: markPublished skipped (lease lost)",
+			"id", ev.ID, "lease_id", ev.LeaseID,
+		)
+		return out
+	}
+	out.published = true
+	if !ev.CreatedAt.IsZero() {
+		recordLag(ctx, time.Since(ev.CreatedAt))
+	}
+	slog.InfoContext(ctx, "outbox: published",
+		"id", ev.ID, "topic", ev.Topic, "pubsub", ev.Pubsub,
+		"idempotency_key", idempotencyKeyValue(ev),
+	)
+	return out
+}
+
+func publishMetadata(ctx context.Context, ev OutboxEvent) map[string]string {
+	meta := make(map[string]string, 2)
+	if key := idempotencyKeyValue(ev); key != "" {
+		meta[MetadataIdempotencyKey] = key
+	}
+	// 传播 W3C traceparent，消费端可 opt-in 续接链路。
+	injectTraceContext(ctx, meta)
+	if len(meta) == 0 {
 		return nil
 	}
-	return map[string]string{MetadataIdempotencyKey: key}
+	return meta
 }
 
 func idempotencyKeyValue(ev OutboxEvent) string {
@@ -267,6 +344,8 @@ func (r *Relay) markPublished(ctx context.Context, ev OutboxEvent) (int64, error
 
 func (r *Relay) markFailed(ctx context.Context, ev OutboxEvent, maxRetries int, pubErr error) (int64, error) {
 	status := StatusPending
+	// ev.Attempts 在 claim 时已自增，因此它是「含本次在内的总尝试次数」。
+	// max_retries 语义为总尝试次数上限：0 = 只试一次就落 failed，N = 最多 N 次尝试。
 	if ev.Attempts >= maxRetries {
 		status = StatusFailed
 	}
@@ -341,9 +420,9 @@ func (r *Relay) runLoop(runCtx context.Context, interval time.Duration) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.ErrorContext(runCtx, "outbox: relay batch failed", "error", err)
 		}
-		// Full batch ⇒ likely more pending; drain without waiting a full poll tick.
-		// Empty/partial batches wait so a persistent error cannot hot-loop.
-		if err == nil && res.Claimed > 0 && res.Claimed >= r.cfg.BatchSize {
+		// 满批 **且确实有发布进展** 才立刻 drain，避免「全部失败 → 立刻重领」的
+		// 热循环：失败行会被放回 pending，下一轮又被领走，CPU 会被打满。
+		if err == nil && res.Published > 0 && res.Claimed >= r.cfg.BatchSize && res.Failed == 0 {
 			continue
 		}
 		select {

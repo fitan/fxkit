@@ -9,9 +9,16 @@ package buildinfo
 import (
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	"github.com/fitan/fxkit/di"
 )
+
+// mus 保护下面这些由 -ldflags 注入的包级变量。
+//
+// 它们只在构建时写入，但 Normalize 会把规范化后的值回写，而 /version 是
+// 每次请求都会调用 Get() 的——不加锁会触发数据竞争（go test -race 可复现）。
+var mus sync.RWMutex
 
 // 以下变量在构建时通过 -ldflags 注入。
 var (
@@ -38,8 +45,14 @@ type Info struct {
 }
 
 // Normalize 修剪空白并为未设置字段填入合理默认值。未应用链接时 -ldflags（例如 Air 使用裸 go build）时，
-// 会从 debug.BuildInfo 的 vcs 设置回填。可安全多次调用。
+// 会从 debug.BuildInfo 的 vcs 设置回填。可安全多次调用（并发安全）。
 func Normalize() {
+	mus.Lock()
+	defer mus.Unlock()
+	normalizeLocked()
+}
+
+func normalizeLocked() {
 	applyVCSFallback()
 	Version = strings.TrimSpace(Version)
 	Commit = strings.TrimSpace(Commit)
@@ -130,7 +143,9 @@ func parseDirty(s string) bool {
 
 // Meta 返回可写入 Consul 等目录的构建字段。空值省略。
 func Meta() map[string]string {
-	Normalize()
+	mus.Lock()
+	defer mus.Unlock()
+	normalizeLocked()
 	pairs := []struct{ k, v string }{
 		{"version", Version},
 		{"build_commit", Commit},
@@ -151,9 +166,11 @@ func Meta() map[string]string {
 	return out
 }
 
-// Get 返回当前（已 Normalize）构建信息的快照。
+// Get 返回当前（已 Normalize）构建信息的快照。并发安全。
 func Get() Info {
-	Normalize()
+	mus.Lock()
+	defer mus.Unlock()
+	normalizeLocked()
 	return Info{
 		Version:   Version,
 		Commit:    Commit,

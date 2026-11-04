@@ -14,8 +14,14 @@
 //     - 基于 Consul 会话（Session）：自动管理会话生命周期与心跳续期（Heartbeat Renew），
 //     在崩溃或网络分区时由 Consul TTL（默认 15s）机制自动释放锁，避免死锁。
 //     - 强一致互斥：通过 KV ?acquire=<session-id> 与 ?release=<session-id> 实现严格排他互斥。
-//     - 阻塞与非阻塞模式：支持 TryLock（快速冲突失败）与 Lock（基于 Blocking Query 的事件唤醒等待）。
-//     - 闭包安全封装：提供 WithLock 快捷执行闭包，保证在业务执行完毕或 panic 时自动释放锁。
-//     - 本地测试/单机降级：提供 NewMemoryLocker 内存锁实现，方便单元测试与本地独立开发。
+//     - 阻塞与非阻塞模式：支持 TryLock（快速冲突失败）与 Lock（基于 X-Consul-Index + wait
+//     的真正 Blocking Query 事件唤醒等待）。
+//     - 不可重入：同一 Lock 实例上的重复 Lock/TryLock 返回 ErrLockHeld；不同 goroutine
+//     不会同时进入同一实例的临界区。
+//     - 锁丢失可感知：续租连续失败会立即把 IsHeld 置为 false，触发 OnLost 回调，
+//     并让 Unlock 返回 ErrLockLost；Lock 只会在续租协程确定存活时才返回成功。
+//     - 闭包安全封装：提供 WithLock 快捷执行闭包，保证在业务执行完毕或 panic 时自动释放锁；
+//     fn 与 Unlock 的错误会通过 errors.Join 一并返回。
+//     - 本地测试/单机降级：提供 NewMemoryLocker 内存锁实现（同样支持 Prefix 语义）。
 //     - Fx 容器自动注入：consulx.Module 自动向 Fx 容器提供 Locker 依赖。
 package consulx

@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/fitan/fxkit/fxerrors"
 	"gorm.io/gorm"
@@ -53,7 +54,17 @@ type ListInput[M, Row any] struct {
 
 // List runs a ZStack-style list query (filters, sort, offset or keyset cursor),
 // optional count, nextCursor, and DTO projection. Callers own the *gorm.DB.
+// List 执行白名单列表查询（offset 或 keyset cursor）。
+//
+// 内部实现见 listImpl；这里额外记录耗时/行数/错误原因指标。
 func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row], error) {
+	start := time.Now()
+	res, err := listImpl(ctx, in)
+	recordList(ctx, time.Since(start), len(res.Items), err)
+	return res, err
+}
+
+func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row], error) {
 	if in.ToRow == nil {
 		return ListResult[Row]{}, fxerrors.Internal("crudx.List: ToRow is required")
 	}
@@ -66,9 +77,23 @@ func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row
 	}
 
 	tx := in.DB.WithContext(ctx)
-	if len(in.Select) > 0 {
-		cols := make([]any, len(in.Select))
-		for i, col := range in.Select {
+	selectCols := in.Select
+	// 游标需要读取主键来生成 nextCursor；Select 未投影主键时自动补上，
+	// 否则 FormatPrimaryKey 会取到零值，第二页直接变空。
+	if (in.Params.Cursor != "" || in.Params.UseCursor) && len(selectCols) > 0 {
+		if meta.Column == "" {
+			return ListResult[Row]{}, InvalidQueryCondition("", ReasonCursorNeedsPK)
+		}
+		pkCol := qualifiedColumn(meta.Table, meta.Column)
+		if !selectHasColumn(selectCols, meta.Column, pkCol) {
+			cp := make([]string, 0, len(selectCols)+1)
+			cp = append(cp, selectCols...)
+			selectCols = append(cp, pkCol)
+		}
+	}
+	if len(selectCols) > 0 {
+		cols := make([]any, len(selectCols))
+		for i, col := range selectCols {
 			cols[i] = col
 		}
 		tx = tx.Select(cols[0], cols[1:]...)
@@ -161,6 +186,34 @@ func GetByID[M, Detail any](
 		return zero, err
 	}
 	return toDetail(*row), nil
+}
+
+// selectHasColumn reports whether cols already project name (qualified or bare),
+// a bare "*", or an equivalent aliased expression.
+func selectHasColumn(cols []string, names ...string) bool {
+	for _, c := range cols {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if c == "*" {
+			return true
+		}
+		base := c
+		if i := strings.LastIndex(base, "."); i >= 0 {
+			base = base[i+1:]
+		}
+		for _, n := range names {
+			n = strings.TrimSpace(n)
+			if n == "" {
+				continue
+			}
+			if strings.EqualFold(c, n) || strings.EqualFold(base, n) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func nextCursor[M any](last *M, params ListParams, spec ListSpec, meta *ModelMeta) (string, error) {

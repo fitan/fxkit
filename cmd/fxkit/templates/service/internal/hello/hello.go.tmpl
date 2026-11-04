@@ -9,8 +9,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit"
-	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/di"
+	fxhuma "github.com/fitan/fxkit/huma"
 )
 
 type Service struct{}
@@ -51,7 +51,7 @@ func Register(svc *Service) fxhuma.Registrar {
 	})
 }
 
-var Module = fx.Options(
+var Module = di.Options(
 	fxkit.Service("hello", NewService),
 	fxhuma.ProvideRegistrar(Register),
 )

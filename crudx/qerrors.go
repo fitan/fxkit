@@ -17,8 +17,11 @@ const (
 	ReasonTooManyLikeConditions  = "TOO_MANY_LIKE_CONDITIONS"
 	ReasonFieldNotIndexed        = "FIELD_NOT_INDEXED"
 	ReasonInvalidSortField       = "INVALID_SORT_FIELD"
-	ReasonCursorNeedsPK          = "CURSOR_NEEDS_PRIMARY_KEY"
-	ReasonCursorRelationSort     = "CURSOR_RELATION_SORT_UNSUPPORTED"
+	// ReasonDistinctRelationSort: 一对多 JOIN 需要 DISTINCT 时，不能按关联列排序
+	// （PG 要求 ORDER BY 表达式出现在 SELECT 列表；MySQL 语义也不确定）。
+	ReasonDistinctRelationSort = "DISTINCT_RELATION_SORT_UNSUPPORTED"
+	ReasonCursorNeedsPK        = "CURSOR_NEEDS_PRIMARY_KEY"
+	ReasonCursorRelationSort   = "CURSOR_RELATION_SORT_UNSUPPORTED"
 )
 
 // InvalidQueryCondition returns HTTP 400 for q= parse/validation failures.

@@ -1,4 +1,4 @@
-.PHONY: help build run tidy clean verify openapi gen-client gen-web edge edge-down down
+.PHONY: help build run tidy clean verify verify-local openapi gen-client gen-web edge edge-down down
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo showcase)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -24,6 +24,7 @@ help:
 	@echo "make edge              # docker compose: Traefik 3.7.12 (static + Consul)"
 	@echo "make edge-down"
 	@echo "make verify            # start services, probe, then leave them running"
+	@echo "make verify-local      # SQLite 单机端到端冒烟（不需要 Docker/Postgres）"
 	@echo "make down              # stop catalog/storefront + Traefik"
 
 build:
@@ -68,3 +69,38 @@ clean:
 
 verify: tidy build
 	bash scripts/verify.sh
+
+# 不依赖 Docker/Postgres/Consul/Hatchet 的端到端冒烟（SQLite）。
+verify-local:
+	bash scripts/verify-local.sh
+
+# 配置与装配自检（不监听端口，可在 CI 中运行）
+#
+# storefront 的 example 配置开了 auth.enabled 但没配 issuer/audience
+# （它依赖 dev_header_user + 下游服务鉴权），validate 会如实报错，
+# 因此这里只对 catalog 做 --strict 校验，storefront 仅报告。
+#
+# --di-graph 需要能完成 PreStart（casbin 需要数据库），所以用自包含的
+# sqlite 临时配置，而不是依赖 postgres 的开发配置。
+SELFCHECK_CFG := /tmp/fxkit-selfcheck.yaml
+
+$(SELFCHECK_CFG):
+	@printf 'app:\n  name: catalog\nserver:\n  port: "18099"\ndb:\n  driver: "sqlite"\n  dsn: "/tmp/fxkit-selfcheck.db"\n' > $(SELFCHECK_CFG)
+
+check: build $(SELFCHECK_CFG)
+	@echo "== config validate (catalog, strict) =="
+	./bin/catalog validate --config services/catalog/configs/config.yaml --strict
+	@echo "== config validate (storefront, report only) =="
+	-./bin/storefront validate --config services/storefront/configs/config.yaml
+	@echo "== DI graph sanity (catalog) =="
+	rm -f /tmp/fxkit-selfcheck.db
+	./bin/catalog serve --config $(SELFCHECK_CFG) --di-graph > /tmp/fxkit-di.txt 2>/dev/null
+	@! grep -q EMPTY /tmp/fxkit-di.txt || { echo "empty DI group detected"; cat /tmp/fxkit-di.txt; exit 1; }
+	@grep -qE '^  server\.Route +[1-9]' /tmp/fxkit-di.txt \
+		|| { echo "server.Route group is empty"; cat /tmp/fxkit-di.txt; exit 1; }
+	@echo "DI graph ok"
+	@echo "== DI graph sanity (storefront) =="
+	./bin/storefront serve --config $(SELFCHECK_CFG) --di-graph > /tmp/fxkit-di-sf.txt 2>/dev/null
+	@grep -qE '^  server\.Route +[1-9]' /tmp/fxkit-di-sf.txt \
+		|| { echo "storefront wiring broken"; cat /tmp/fxkit-di-sf.txt; exit 1; }
+	@echo "storefront DI graph ok"

@@ -14,11 +14,14 @@
 package authz
 
 import (
+	"context"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/gormx"
 	fxhuma "github.com/fitan/fxkit/huma"
+	"github.com/fitan/fxkit/server"
 )
 
 var Module = di.Module("fxkit/authz",
@@ -37,21 +40,35 @@ var Module = di.Module("fxkit/authz",
 		})
 
 		ProvideHTTPRoutes(adminHTTPRoutes)(i)
-		fxhuma.ProvideMiddleware(provideHumaMiddleware)(i)
+
+		// mux 模式：一处鉴权覆盖 Huma + 裸 chi + docs/MCP；否则用 Huma 层中间件。
+		cfgPtr, _ := di.Invoke[*Config](i)
+		if cfgPtr != nil && cfgPtr.MuxMiddleware {
+			server.ProvideMiddleware(provideMuxMiddleware)(i)
+		} else {
+			fxhuma.ProvideMiddleware(provideHumaMiddleware)(i)
+		}
 		fxhuma.ProvideRegistrar(provideAdminRegistrar)(i)
 
-		lc, _ := di.Invoke[*di.Lifecycle](i)
-		cfg, _ := di.Invoke[*Config](i)
-		enf, _ := di.Invoke[*Enforcer](i)
-		routes := di.GetGroup[HTTPRoute](i)
-		api, _ := di.Invoke[huma.API](i)
-		registerRoutesOnStart(autoRegisterParams{
-			LC:       lc,
-			Config:   cfg,
-			Enforcer: enf,
-			Routes:   routes,
-			API:      api,
-		})
+		// 自动注册 Casbin 策略依赖「完整的 Huma operation 集合」，必须等
+		// huma registrar 全部安装完（同为 PhaseWireGroup，按注册顺序在 huma 之后）。
+		if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {
+			lc.AppendPreStartPhase(di.PhaseWireGroup+1, di.Hook{
+				OnStart: func(context.Context) error {
+					cfg, _ := di.Invoke[*Config](i)
+					enf, _ := di.Invoke[*Enforcer](i)
+					api, _ := di.Invoke[huma.API](i)
+					registerRoutesOnStart(autoRegisterParams{
+						LC:       lc,
+						Config:   cfg,
+						Enforcer: enf,
+						Routes:   di.GetGroup[HTTPRoute](i),
+						API:      api,
+					})
+					return nil
+				},
+			})
+		}
 	},
 )
 

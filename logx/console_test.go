@@ -33,3 +33,16 @@ func TestColorHandlerColorsWarn(t *testing.T) {
 		t.Fatalf("expected yellow ANSI in %q", out)
 	}
 }
+
+// BenchmarkConsoleHandlerHandle 验证每条日志不再重建内层 handler。
+func BenchmarkConsoleHandlerHandle(b *testing.B) {
+	h := NewConsoleHandler(nopWriter{}, nil).
+		WithAttrs([]slog.Attr{slog.String("service", "api")}).
+		WithGroup("req")
+	logger := slog.New(h)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		logger.Info("request done", "status", 200, "path", "/articles")
+	}
+}

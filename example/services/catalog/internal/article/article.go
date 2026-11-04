@@ -24,6 +24,8 @@ import (
 const articleCreatedTopic = "article-created"
 
 // Article is the GORM model. JSON tags are "-" because the API uses DTOs.
+//
+// 过滤/排序白名单见 NewService 里的 crudx.ListSpec（map 字面量，每行自包含）。
 type Article struct {
 	ID        int64     `gorm:"primaryKey" json:"-"`
 	Title     string    `gorm:"size:255;not null;index" json:"-"`
@@ -99,22 +101,25 @@ func NewService(client *gormx.Client, store *outbox.Store, inbox *outbox.Inbox, 
 		store:  store,
 		inbox:  inbox,
 		outbox: obcfg,
-		listSpec: crudx.ListSpec{
-			Fields: map[string]crudx.FieldSpec{
-				"id":     {Column: "articles.id", Kind: crudx.FieldNumber},
-				"title":  {Column: "articles.title", Kind: crudx.FieldString, Indexed: true},
-				"status": {Column: "articles.status", Kind: crudx.FieldString, Indexed: true},
-				"author": {Column: "articles.author", Kind: crudx.FieldString, Indexed: true},
-			},
-			SortFields: map[string]string{
-				"id":         "articles.id",
-				"title":      "articles.title",
-				"status":     "articles.status",
-				"created_at": "articles.created_at",
-			},
-			DefaultSort: "id",
-			Limits:      crudx.Limits{LimitDefault: 20, LimitMax: 100},
+	}
+	// 过滤/排序白名单。使用 map 字面量而非链式 builder：
+	// 每行自包含，换行位置不影响语义，也不会出现「modifier 绑错字段」的隐式状态问题。
+	s.listSpec = crudx.ListSpec{
+		Fields: map[string]crudx.FieldSpec{
+			"id":     {Column: "articles.id", Kind: crudx.FieldNumber},
+			"title":  {Column: "articles.title", Kind: crudx.FieldString, Indexed: true, Likeable: true},
+			"status": {Column: "articles.status", Kind: crudx.FieldString, Indexed: true},
+			"author": {Column: "articles.author", Kind: crudx.FieldString, Indexed: true, Likeable: true},
+			// body 是 TEXT 列，故意不开放过滤/LIKE，避免全表扫描
 		},
+		SortFields: map[string]string{
+			"id":         "articles.id",
+			"title":      "articles.title",
+			"status":     "articles.status",
+			"created_at": "articles.created_at",
+		},
+		DefaultSort: "id",
+		Limits:      crudx.Limits{LimitDefault: 20, LimitMax: 100},
 	}
 	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {

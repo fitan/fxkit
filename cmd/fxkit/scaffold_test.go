@@ -132,8 +132,10 @@ func TestScaffoldRepoAndService(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := renderTemplate("templates/service", svc, scaffoldData{
-		AppName: "orders",
-		Module:  "github.com/me/platform",
+		AppName:    "orders",
+		Module:     "github.com/me/platform",
+		ImportPath: "github.com/me/platform/services/orders",
+		ServiceDir: "services/orders",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +193,11 @@ func TestScaffoldMinimalService(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := renderTemplate("templates/service", dir, scaffoldData{
-		AppName: "tiny",
-		Module:  "github.com/me/platform",
-		Minimal: true,
+		AppName:    "tiny",
+		Module:     "github.com/me/platform",
+		Minimal:    true,
+		ImportPath: "github.com/me/platform/services/tiny",
+		ServiceDir: "services/tiny",
 	}); err != nil {
 		t.Fatal(err)
 	}

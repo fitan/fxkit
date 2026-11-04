@@ -6,11 +6,16 @@ server:
 
 app:
   name: "{{.AppName}}"         # Consul 注册名 / Huma 标题 / otel.service_name 回退
+
+docs:                          # fxkit/docs；默认关闭，生产请配合网关/鉴权再开
+  enabled: true
 {{if not .Minimal}}
 db:                            # fxkit/gormx；driver 或 dsn 空 = 不连库
   driver: ""                   # mysql | postgres | sqlite
   dsn: ""                      # compose: postgres://fxkit:fxkit@localhost:5432/fxkit?sslmode=disable
   log_level: "warn"            # silent | error | warn | info
+  auto_migrate: true           # 本地开发自动建表；生产请设 false 并用 `migrate print` 的 DDL
+  check_schema: false          # 生产建议 true：启动时校验表/列是否已由平台建好
   max_idle_conns: 10
   max_open_conns: 100
   conn_max_lifetime: 1h

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fitan/fxkit/di"
 	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	"github.com/fitan/fxkit/di"
 )
 
 // TokenValidator validates a raw Bearer access token into a [Subject].

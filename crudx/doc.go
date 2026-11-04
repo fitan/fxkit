@@ -7,7 +7,7 @@
 //   - 受控 OR 组：q=or(status=active,status=pending)；支持引号字面量保护（例如 or(tag='a,b',status=active)）。
 //   - 键集游标分页（Keyset Pagination）：基于排序字段 + 唯一主键构建不透明 Cursor/NextCursor，消除大偏移深度分页性能黑洞；
 //     自动支持 time.Time 时间字段的 RFC3339 序列化与原生驱动还原；递归支持 gorm.Model 等内嵌结构体排序。
-//   - 安全的模糊搜索：自动转义 LIKE 中的 %、_ 与 \，严格要求字段声明 Indexed: true。
+//   - 安全的模糊搜索：自动转义 LIKE 中的 %、_ 与 !（使用 ESCAPE '!'，兼容 MySQL/PG/SQLite），严格要求字段声明 Likeable: true。
 //   - 一站式查询封装：[List]（关联去重、Count Distinct、Limit/Offset 或 Keyset Cursor、声明式 Preloads 与 DTO 投影）。
 //   - 领域读写辅助：[FirstByID]、[GetByID]、[ZeroPrimaryKey]、[CopyPrimaryKey]、[MapDBError]。
 //
@@ -15,8 +15,8 @@
 //
 //	q=name=alice                 // 等于
 //	q=status!=disabled           // 不等于
-//	q=name~john                  // 包含（LIKE %john%，需 Indexed: true）
-//	q=name!~test                 // 不包含（NOT LIKE %test%，需 Indexed: true）
+//	q=name~john                  // 包含（LIKE %john%，需 Likeable: true）
+//	q=name!~test                 // 不包含（NOT LIKE %test%，需 Likeable: true）
 //	q=age>=18                    // 大于等于
 //	q=score<60                   // 小于
 //	q=status.in:active,pending   // IN 枚举
@@ -30,7 +30,7 @@
 //
 //	var userListSpec = crudx.ListSpec{
 //	    Fields: map[string]crudx.FieldSpec{
-//	        "name":      {Column: "users.name", Kind: crudx.FieldString, Indexed: true},
+//	        "name":      {Column: "users.name", Kind: crudx.FieldString, Indexed: true, Likeable: true},
 //	        "status":    {Column: "users.status", Kind: crudx.FieldString},
 //	        "createdAt": {Column: "users.created_at", Kind: crudx.FieldTime},
 //	    },

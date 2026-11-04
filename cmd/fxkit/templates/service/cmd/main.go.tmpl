@@ -5,11 +5,11 @@ import (
 	"github.com/fitan/fxkit/cli"
 	fxhuma "github.com/fitan/fxkit/huma"
 
-	"{{.Module}}/services/{{.AppName}}/internal/hello"
+	{{quote (printf "%s/internal/hello" .ImportPath)}}
 )
 
 func main() {
-	cli.SetRootName("{{.AppName}}", "{{.AppName}} service")
+	cli.SetRootName({{quote .AppName}}, {{quote (printf "%s service" .AppName)}})
 	fxkit.Run(
 		{{if .Minimal}}fxkit.Minimal(){{else}}fxkit.Default(){{end}},
 		fxhuma.Module,

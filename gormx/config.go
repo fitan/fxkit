@@ -22,6 +22,12 @@ type Config struct {
 	MaxOpenConns int `yaml:"max_open_conns"`
 	// ConnMaxLifetime 连接最长存活时间，默认 1h。0 = 不限制。
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
+	// AutoMigrate 允许框架自动建表。默认 **false**：生产由 SQL 上线平台执行
+	// gormx/migrations 下的 DDL（`myapp migrate print` 可导出）。
+	// 仅本地开发建议开启；测试用 NewTestClient 默认开启。
+	AutoMigrate bool `yaml:"auto_migrate"`
+	// CheckSchema 启动时校验框架表/列是否存在（配合外部 DDL 平台 fail fast）。
+	CheckSchema bool `yaml:"check_schema"`
 }
 
 // SetDefaults 填入编译期默认值。

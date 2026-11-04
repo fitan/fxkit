@@ -150,12 +150,16 @@ func TestGetOrSet_CacheNull(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, int64(1), atomic.LoadInt64(&loadCount))
 
-	// 第二次调用应当命中空值缓存，直接返回 ErrCacheMiss，而不会再次触发 loader（防穿透）
+	// 第二次调用应当命中空值缓存，直接返回「未找到」语义，而不会再次触发 loader（防穿透）。
+	// 注意不是 ErrCacheMiss：调用方通常用 errors.Is(err, gorm.ErrRecordNotFound) 判断，
+	// 首访与命中负缓存必须给出同一种错误语义。
 	_, err = GetOrSet(ctx, c, "user:404", func(ctx context.Context) (User, error) {
 		t.Fatal("should not call loader for cached null")
 		return User{}, nil
 	})
-	assert.ErrorIs(t, err, ErrCacheMiss)
+	require.Error(t, err)
+	assert.True(t, IsNegativeHit(err), "negative cache hit should be reported, got %v", err)
+	assert.False(t, errors.Is(err, ErrCacheMiss), "negative hit must not masquerade as a plain cache miss")
 	assert.Equal(t, int64(1), atomic.LoadInt64(&loadCount))
 }
 
@@ -188,4 +192,20 @@ func TestDIModule(t *testing.T) {
 	val, err := cacheInst.Get(ctx, "hello")
 	require.NoError(t, err)
 	assert.Equal(t, "world", string(val))
+}
+
+// BenchmarkMemoryCacheGet 基准：内存缓存读取（含值拷贝）。
+func BenchmarkMemoryCacheGet(b *testing.B) {
+	ctx := context.Background()
+	c := NewMemoryCache()
+	if err := c.Set(ctx, "k", []byte(`{"id":1,"name":"x"}`), time.Minute); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := c.Get(ctx, "k"); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

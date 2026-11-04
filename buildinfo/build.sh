@@ -40,19 +40,24 @@ done
 
 cd "$MODULE_ROOT"
 
-# shellcheck disable=SC2046
-eval $(BUILDINFO_DIR="$BUILDINFO_DIR" "$BUILDINFO_DIR/build-meta.sh")
+# 必须加引号：build-meta.sh 的输出以单引号包裹值，不加引号会被 shell 再次拆词。
+eval "$(BUILDINFO_DIR="$BUILDINFO_DIR" "$BUILDINFO_DIR/build-meta.sh")"
 
 BUILDINFO_PKG=${BUILDINFO_PKG:-github.com/fitan/fxkit/buildinfo}
 
-LDFLAGS="-X '${BUILDINFO_PKG}.Version=${VERSION}' \
-	-X '${BUILDINFO_PKG}.Commit=${COMMIT}' \
-	-X '${BUILDINFO_PKG}.GitRemote=${GIT_REMOTE}' \
-	-X '${BUILDINFO_PKG}.GitBranch=${GIT_BRANCH}' \
-	-X '${BUILDINFO_PKG}.Dirty=${GIT_DIRTY}' \
-	-X '${BUILDINFO_PKG}.GoVersion=${GO_VERSION}' \
-	-X '${BUILDINFO_PKG}.BuildTime=${BUILD_TIME}' \
-	-X '${BUILDINFO_PKG}.BuiltBy=${BUILT_BY}'"
+# 转义为 Go ldflags 双引号内的值（先反斜杠再双引号）。
+escape_ldflag() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+LDFLAGS="-X ${BUILDINFO_PKG}.Version=\"$(escape_ldflag "$VERSION")\" \
+	-X ${BUILDINFO_PKG}.Commit=\"$(escape_ldflag "$COMMIT")\" \
+	-X ${BUILDINFO_PKG}.GitRemote=\"$(escape_ldflag "$GIT_REMOTE")\" \
+	-X ${BUILDINFO_PKG}.GitBranch=\"$(escape_ldflag "$GIT_BRANCH")\" \
+	-X ${BUILDINFO_PKG}.Dirty=\"$(escape_ldflag "$GIT_DIRTY")\" \
+	-X ${BUILDINFO_PKG}.GoVersion=\"$(escape_ldflag "$GO_VERSION")\" \
+	-X ${BUILDINFO_PKG}.BuildTime=\"$(escape_ldflag "$BUILD_TIME")\" \
+	-X ${BUILDINFO_PKG}.BuiltBy=\"$(escape_ldflag "$BUILT_BY")\""
 
 mkdir -p .data "$(dirname "$OUT")"
 # -buildvcs=true: embed vcs.revision/time as fallback when ldflags are missing.

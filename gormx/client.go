@@ -15,10 +15,12 @@ type afterCommitKey struct{}
 
 type afterCommitHooks struct {
 	mu  sync.Mutex
-	fns []func()
+	fns []func(context.Context)
+	// ctx 是不带事务句柄的提交后 context（见 Transaction）。
+	ctx context.Context
 }
 
-func (h *afterCommitHooks) add(fn func()) {
+func (h *afterCommitHooks) add(fn func(context.Context)) {
 	if h == nil || fn == nil {
 		return
 	}
@@ -32,8 +34,12 @@ func (h *afterCommitHooks) run() {
 		return
 	}
 	h.mu.Lock()
-	fns := append([]func(){}, h.fns...)
+	fns := append([]func(context.Context){}, h.fns...)
+	ctx := h.ctx
 	h.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for _, fn := range fns {
 		func() {
 			defer func() {
@@ -41,7 +47,7 @@ func (h *afterCommitHooks) run() {
 					slog.Error("gormx AfterCommit panic", "error", r)
 				}
 			}()
-			fn()
+			fn(ctx)
 		}()
 	}
 }
@@ -59,7 +65,14 @@ func TxFromContext(ctx context.Context) (*gorm.DB, bool) {
 
 // AfterCommit 在 ctx 所属事务成功提交后运行 fn。无外层 [Client.Transaction] 时立即执行。
 // 嵌套 Transaction 共用外层 hook 列表，全部在最外层 commit 之后按注册顺序运行。
-func AfterCommit(ctx context.Context, fn func()) {
+//
+// fn 收到的是**不带事务句柄**的 context：在回调里用 [Client.Conn] 会走连接池，
+// 而不是已经提交/回滚完毕的事务。早期实现让回调闭包自己捕获事务 ctx，导致
+// 回调内的查询必然报 "transaction has already been committed or rolled back"。
+//
+// 注意：[WithTx] 只携带事务、没有提交边界。用它包裹的事务里调用 AfterCommit
+// 无法推迟执行，本函数会告警并立即执行——需要「提交后」语义请用 [Client.Transaction]。
+func AfterCommit(ctx context.Context, fn func(context.Context)) {
 	if fn == nil {
 		return
 	}
@@ -68,19 +81,32 @@ func AfterCommit(ctx context.Context, fn func()) {
 			h.add(fn)
 			return
 		}
+		if _, ok := TxFromContext(ctx); ok {
+			slog.Warn("gormx: AfterCommit called with a WithTx context (no commit boundary); running immediately")
+		}
+	} else {
+		ctx = context.Background()
 	}
-	fn()
+	fn(ctx)
 }
 
 // Client 包装根连接池。应用代码应使用 [Client.Conn] 做请求级访问（trace/cancel），
 // 使用 [Client.Transaction] 做事务范围。仅在需要长期 *gorm.DB 句柄的集成时使用 [Client.Pool]。
 type Client struct {
-	pool *gorm.DB
+	pool        *gorm.DB
+	autoMigrate bool
 }
 
 // NewTestClient wraps an existing DB handle for unit tests.
+// Tests rely on AutoMigrate, so it is enabled here (production defaults to off).
 func NewTestClient(db *gorm.DB) *Client {
-	return &Client{pool: db}
+	return &Client{pool: db, autoMigrate: true}
+}
+
+// AutoMigrate 报告是否允许框架自动建表（db.auto_migrate）。
+// 生产应由 SQL 上线平台执行 gormx/migrations 下的 DDL。
+func (c *Client) AutoMigrate() bool {
+	return c != nil && c.autoMigrate
 }
 
 // Conn 返回绑定 ctx 的 *gorm.DB：若 ctx 上有活跃事务则用之，否则为根池的 [gorm.DB.WithContext]。ctx 不可为 nil。
@@ -110,7 +136,7 @@ func (c *Client) Transaction(ctx context.Context, fn func(ctx context.Context) e
 	if _, ok := TxFromContext(ctx); ok {
 		return fn(ctx)
 	}
-	hooks := &afterCommitHooks{}
+	hooks := &afterCommitHooks{ctx: ctx}
 	ctx = context.WithValue(ctx, afterCommitKey{}, hooks)
 	if err := c.pool.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(WithTx(ctx, tx))

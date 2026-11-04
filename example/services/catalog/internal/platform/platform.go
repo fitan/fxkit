@@ -417,4 +417,6 @@ var Module = di.Options(
 	fxhuma.ProvideRegistrar(Register),
 	hatchetx.ProvideRegistrar(RegisterWorker),
 	authz.ProvideHTTPRoutes(platformHTTPRoutes),
+	// 业务级就绪探针：验证 counter 表真的可读（连接级 Ping 通过但迁移未完成时能提前发现）
+	ProvideReadiness(),
 )

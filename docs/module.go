@@ -2,13 +2,9 @@ package docs
 
 import (
 	_ "embed"
-	"encoding/json"
-	"log/slog"
-	"net/http"
 
+	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
-	"github.com/fitan/fxkit/server"
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed openapi.yaml
@@ -27,37 +23,29 @@ const scalarHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-func routes() []server.Route {
-	yamlHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
-		_, _ = w.Write(openAPIYAML)
-	})
-
-	jsonHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		var doc any
-		if err := yaml.Unmarshal(openAPIYAML, &doc); err != nil {
-			slog.Error("docs: openapi yaml parse failed", "error", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(doc)
-	})
-
-	docsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(scalarHTML))
-	})
-
-	return []server.Route{
-		{Pattern: "/docs", Handler: docsHandler},
-		{Pattern: "/docs/", Handler: docsHandler},
-		{Pattern: "/openapi.yaml", Handler: yamlHandler},
-		{Pattern: "/openapi.json", Handler: jsonHandler},
-	}
+// Config 控制 /docs 与 /openapi.{yaml,json} 是否暴露（yaml: docs）。
+//
+// 默认 **关闭**：文档会把 API 结构（含字段与错误码）暴露给任何能访问服务的人。
+// 生产环境应显式开启，并配合网关/鉴权保护。需要自定义 base spec 时用 [MergedModule]
+// （它是显式调用，不受本开关影响）。
+type Config struct {
+	Enabled bool `yaml:"enabled"`
 }
 
-// Module 在 /docs 提供 Scalar，在 /openapi.{yaml,json} 提供静态 OpenAPI 骨架。
+// SetDefaults 默认不暴露文档端点。
+func (c *Config) SetDefaults() {
+	c.Enabled = false
+}
+
+// Module 在 docs.enabled=true 时提供 /docs 与 /openapi.{yaml,json}
+// （引入 huma.Module 时自动合并 live spec）。
 var Module = di.Module("fxkit/docs",
-	server.ProvideRoutes(routes),
+	config.Provide[Config]("docs"),
+	func(i di.Injector) {
+		cfg, err := di.Invoke[*Config](i)
+		if err != nil || cfg == nil || !cfg.Enabled {
+			return
+		}
+		registerMerged(i, openAPIYAML)
+	},
 )

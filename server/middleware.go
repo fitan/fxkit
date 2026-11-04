@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -173,6 +174,68 @@ func recoverMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// accessLogMiddleware 输出结构化访问日志。
+//
+// route 用 chi 路由模板（如 /articles/{id}），避免把真实路径写进日志造成高基数/敏感信息。
+func accessLogMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		route := ""
+		if rc := chi.RouteContext(r.Context()); rc != nil {
+			route = rc.RoutePattern()
+		}
+		if route == "" {
+			route = "unmatched"
+		}
+		slog.InfoContext(r.Context(), "http request",
+			"method", r.Method,
+			"route", route,
+			"status", status,
+			"duration_ms", float64(time.Since(start).Microseconds())/1000.0,
+			"bytes", rec.bytes,
+			"remote_ip", clientIP(r),
+		)
+	})
+}
+
+// statusRecorder 记录状态码与响应字节数（不影响 Flush / Unwrap）。
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *statusRecorder) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusRecorder) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += n
+	return n, err
+}
+
+func (w *statusRecorder) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // requestBodyLogMiddleware 在固定上限内记录 JSON 请求/响应体。
 // 高吞吐路由可通过在 chi 子 router 上条件挂载来关闭。自动跳过 GET 与 SSE。
 // 跳过 CloudEvents（Dapr pub/sub 应用回调）：体积大、量大，且相对 JSON invoke API 很少需要。
@@ -300,21 +363,79 @@ func bodyPreview(body []byte) string {
 }
 
 var sensitiveJSONKeys = []string{
-	`"password"`, `"passwd"`, `"secret"`, `"token"`, `"access_token"`,
-	`"refresh_token"`, `"authorization"`, `"api_key"`, `"apikey"`,
+	"password", "passwd", "secret", "token", "access_token",
+	"refresh_token", "id_token", "authorization", "api_key", "apikey",
+	"client_secret", "private_key",
 }
 
+// redactPreview 按键名对 JSON 文本做脱敏，而不是「命中关键词就整段丢弃」。
+//
+// 早期实现只要 body 里出现 "token" 字样就返回 <redacted>，
+// 导致大量含 token 字段名的正常业务响应在日志里完全不可观测。
+// 这里解析为 JSON、递归替换敏感键的值，解析失败时才退化为整段丢弃。
 func redactPreview(s string) string {
 	if s == "" {
 		return s
 	}
-	low := strings.ToLower(s)
-	for _, key := range sensitiveJSONKeys {
-		if strings.Contains(low, key) {
+	var doc any
+	if err := json.Unmarshal([]byte(s), &doc); err != nil {
+		// 非 JSON（或已被截断）：无法结构化脱敏，保守丢弃。
+		if containsSensitiveKey(strings.ToLower(s)) {
 			return "<redacted>"
 		}
+		return s
 	}
-	return s
+	redacted := redactValue(doc)
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		return "<redacted>"
+	}
+	return string(encoded)
+}
+
+// redactValue 递归替换敏感键的值。
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			if isSensitiveKey(k) {
+				out[k] = "<redacted>"
+				continue
+			}
+			out[k] = redactValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = redactValue(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// isSensitiveKey 判断 JSON 键名是否敏感（忽略大小写与 - / _ 分隔差异）。
+func isSensitiveKey(key string) bool {
+	norm := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(key))
+	for _, s := range sensitiveJSONKeys {
+		if norm == s {
+			return true
+		}
+	}
+	return false
+}
+
+// containsSensitiveKey 用于非 JSON 文本的兜底判断。
+func containsSensitiveKey(lower string) bool {
+	for _, s := range sensitiveJSONKeys {
+		if strings.Contains(lower, `"`+s+`"`) {
+			return true
+		}
+	}
+	return false
 }
 
 func isJSONContentType(contentType string) bool {

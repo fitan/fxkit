@@ -66,3 +66,11 @@ func ProvideConfig[T any](key string) ServiceOption {
 func Routes(fn any) ServiceOption {
 	return ServiceOption{options: []di.Option{server.ProvideRoutes(fn)}}
 }
+
+// Invoke 注册一个在应用启动时（Lifecycle.OnStart）执行的副作用函数。
+// 参数按依赖注入解析；返回 error 时中止启动。
+//
+//	fxkit.Invoke(func(svc *OrderService) error { return svc.Warmup() })
+func Invoke(fn any) ServiceOption {
+	return ServiceOption{options: []di.Option{di.ToInvokeOption(fn)}}
+}

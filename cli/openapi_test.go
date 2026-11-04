@@ -9,10 +9,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/openapi"
 	"github.com/fitan/fxkit/server"
-	"github.com/fitan/fxkit/di"
 )
 
 func TestCollectOpenAPI_liveSpec(t *testing.T) {
@@ -38,7 +38,7 @@ func TestCollectOpenAPI_liveSpec(t *testing.T) {
 				})
 			})
 		}),
-	}, config.Options{}, openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML})
+	}, config.Options{}, openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +52,9 @@ func TestCollectOpenAPI_liveSpec(t *testing.T) {
 }
 
 func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
-	// Simulate an environment where DB or Hatchet fails in OnStart, but OpenAPI can still be generated offline
-	b, err := collectOpenAPI([]di.Option{
+	// Simulate an environment where DB or Hatchet fails in OnStart, but OpenAPI can still be generated offline.
+	// 默认（bestEffort=false）会直接失败；输出部分 spec 必须显式选择 best-effort。
+	opts := []di.Option{
 		config.Module,
 		server.Module,
 		server.ListenerModule,
@@ -79,9 +80,17 @@ func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
 				})
 			}
 		},
-	}, config.Options{}, openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML})
+	}
+
+	in := openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML}
+
+	if _, err := collectOpenAPI(opts, config.Options{}, in, false); err == nil {
+		t.Fatal("expected startup failure to abort spec generation by default")
+	}
+
+	b, err := collectOpenAPI(opts, config.Options{}, in, true)
 	if err != nil {
-		t.Fatalf("expected offline export to succeed, got %v", err)
+		t.Fatalf("expected best-effort export to succeed, got %v", err)
 	}
 	s := string(b)
 	if !strings.Contains(s, "offline-endpoint") {
@@ -93,7 +102,7 @@ func TestCollectOpenAPI_requiresHuma(t *testing.T) {
 	_, err := collectOpenAPI([]di.Option{
 		config.Module,
 		server.Module,
-	}, config.Options{}, openapi.EncodeInput{})
+	}, config.Options{}, openapi.EncodeInput{}, false)
 	if err == nil || !strings.Contains(err.Error(), "no Huma API") {
 		t.Fatalf("got %v", err)
 	}

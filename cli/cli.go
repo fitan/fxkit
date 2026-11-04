@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -74,6 +75,8 @@ func Run(opts ...di.Option) {
 	rootCmd.AddCommand(buildServeCmd(opts))
 	rootCmd.AddCommand(buildOpenAPICmd(opts))
 	rootCmd.AddCommand(buildMCPCmd(opts))
+	rootCmd.AddCommand(buildValidateCmd(opts))
+	rootCmd.AddCommand(buildMigrateCmd(opts))
 	rootCmd.AddCommand(buildVersionCmd())
 
 	extraCommandsMu.Lock()
@@ -89,10 +92,23 @@ func Run(opts ...di.Option) {
 }
 
 func buildServeCmd(opts []di.Option) *cobra.Command {
+	var (
+		diGraph    bool
+		readyWait  time.Duration
+		warmupMode string
+	)
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the HTTP service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			switch warmupMode {
+			case warmupOff, warmupBeforeStart, warmupReport:
+			default:
+				// 拼错时静默无效比报错难排错得多。
+				return fmt.Errorf("invalid --warmup %q (want %s|%s|%s)",
+					warmupMode, warmupOff, warmupBeforeStart, warmupReport)
+			}
+
 			startTO, stopTO := timeoutsFromCmd(cmd)
 			root := newApp(cmd, opts)
 
@@ -101,10 +117,46 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 				return err
 			}
 
+			if diGraph {
+				// 只构建对象图、不启动服务：把容器状态打到 stdout，便于 CI 断言与排查。
+				// 这里先跑 PreStart（解析延迟构造函数、固化 group），再输出报告。
+				if err := lc.StartPreStartOnly(cmd.Context()); err != nil {
+					return err
+				}
+				fmt.Fprint(cmd.OutOrStdout(), di.Report(root))
+				if warmupMode != warmupOff {
+					printWarmup(cmd.OutOrStdout(), di.Warmup(root))
+				}
+				_ = root.Shutdown()
+				return nil
+			}
+
+			// warmup=before-start：在监听端口前强制解析所有服务。
+			// 这让 lazy 注册的服务（构造函数返回 error / 依赖缺失）在启动期暴露，
+			// 而不是等某个低频请求路径第一次用到它。
+			//
+			// 注意：不能在这里单独调 StartPreStartOnly —— 那会把 huma registrar
+			// 跑一遍，随后 lc.Start 又跑一遍，导致 operation ID 重复注册而 panic。
+			// 正确做法是注册成 PreStart 的最后阶段（见 registerWarmup）。
+			if warmupMode == warmupBeforeStart {
+				registerWarmup(root)
+			}
+
 			startCtx, cancel := context.WithTimeout(context.Background(), startTO)
 			defer cancel()
-			if err := lc.Start(startCtx); err != nil {
-				return err
+			startAt := time.Now()
+			startErr := lc.Start(startCtx)
+			recordStartup("start", time.Since(startAt), startErr)
+			if startErr != nil {
+				return startErr
+			}
+
+			if readyWait > 0 {
+				// 启动后自检：给后台组件一点时间就绪，再打印一次容器状态。
+				go func() {
+					time.Sleep(readyWait)
+					slog.Info("di graph snapshot", "report", di.Report(root))
+				}()
 			}
 
 			// 等待退出信号
@@ -114,8 +166,11 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), stopTO)
 			defer stopCancel()
-			if err := lc.Stop(stopCtx); err != nil {
-				return err
+			stopAt := time.Now()
+			stopErr := lc.Stop(stopCtx)
+			recordStartup("stop", time.Since(stopAt), stopErr)
+			if stopErr != nil {
+				return stopErr
 			}
 			_ = root.Shutdown()
 			return nil
@@ -124,7 +179,62 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 	cmd.Flags().StringP("port", "p", "", "server port (overrides config)")
 	cmd.Flags().Duration("start-timeout", defaultStartTimeout, "OnStart timeout")
 	cmd.Flags().Duration("stop-timeout", defaultStopTimeout, "OnStop / HTTP Shutdown timeout")
+	cmd.Flags().BoolVar(&diGraph, "di-graph", false, "print the DI graph (services + groups) after wiring and exit")
+	cmd.Flags().DurationVar(&readyWait, "di-report-after", 0, "log a DI snapshot this long after startup (e.g. 2s)")
+	cmd.Flags().StringVar(&warmupMode, "warmup", warmupOff,
+		"pre-resolve all DI services: off (default) | before-start | report\n"+
+			"  before-start: construct every service before listening; abort on error\n"+
+			"  report: only print the result (with --di-graph)")
 	return cmd
+}
+
+// warmup 模式的取值。命名成常量而不是裸字符串，避免 CLI flag 拼错时静默无效。
+const (
+	warmupOff         = "off"
+	warmupBeforeStart = "before-start"
+	warmupReport      = "report"
+)
+
+// printWarmup 打印预热结果（不中止流程）。
+func printWarmup(w io.Writer, report di.WarmupReport) {
+	fmt.Fprintf(w, "warmup: resolved=%d failed=%d skipped=%d\n",
+		len(report.Resolved), len(report.Failed), len(report.Optional))
+	for _, f := range report.Failed {
+		fmt.Fprintf(w, "  FAILED   %s: %v\n", f.Service, f.Err)
+	}
+	for _, o := range report.Optional {
+		fmt.Fprintf(w, "  SKIPPED  %s: %v\n", o.Service, o.Err)
+	}
+}
+
+// registerWarmup 把「预热全部服务」注册为 PreStart 的最后阶段。
+//
+// 用 PhaseMountHTTP+1：此时所有延迟构造函数已求值、group 已完整、
+// huma operation 已注册完毕，但服务尚未对外监听。
+// 任何服务构造失败都会中止启动（这是关键：lazy 服务的问题不再延后到运行时）。
+func registerWarmup(root di.Injector) {
+	lc, err := di.Invoke[*di.Lifecycle](root)
+	if err != nil || lc == nil {
+		return
+	}
+	lc.AppendPreStartPhase(di.PhaseMountHTTP+1, di.Hook{
+		OnStart: func(context.Context) error {
+			return warmupOrFail(root)
+		},
+	})
+}
+
+// warmupOrFail 预热并在有失败项时中止启动。
+func warmupOrFail(root di.Injector) error {
+	report := di.Warmup(root)
+	if err := report.Error(); err != nil {
+		return fmt.Errorf("warmup: %w (use --warmup=off to skip pre-resolution)", err)
+	}
+	slog.Info("di warmup complete",
+		"resolved", len(report.Resolved),
+		"skipped", len(report.Optional),
+	)
+	return nil
 }
 
 func timeoutsFromCmd(cmd *cobra.Command) (start, stop time.Duration) {

@@ -17,6 +17,7 @@ import (
 	"github.com/XSAM/otelsql"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/server"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"gorm.io/driver/mysql"
@@ -33,14 +34,40 @@ import (
 // New 使用配置的 driver/DSN 打开 [Client]，启用 otelsql trace 与 metrics。
 // db.driver 未设置时返回 (nil, nil)，无 DB 服务仍可保留 gormx.Module。
 func New(c *Config) (*Client, error) {
-	pool, err := openPool(c)
+	if c == nil {
+		return nil, nil
+	}
+	// 直接构造的 Config 不会经过 config.Load 的 SetDefaults；
+	// 不补默认值时 database/sql 会得到 MaxOpenConns=0（无上限）、MaxIdleConns=0
+	// （不保留空闲连接），压测下容易打爆数据库。
+	cfg := *c
+	cfg.Driver = strings.ToLower(strings.TrimSpace(cfg.Driver))
+	cfg.DSN = strings.TrimSpace(cfg.DSN)
+	cfg.LogLevel = strings.ToLower(strings.TrimSpace(cfg.LogLevel))
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "warn"
+	}
+	if cfg.MaxOpenConns == 0 {
+		cfg.MaxOpenConns = 100
+	}
+	if cfg.MaxIdleConns == 0 {
+		cfg.MaxIdleConns = 10
+	}
+	if cfg.ConnMaxLifetime == 0 {
+		cfg.ConnMaxLifetime = time.Hour
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	pool, err := openPool(&cfg)
 	if err != nil {
 		return nil, err
 	}
 	if pool == nil {
 		return nil, nil
 	}
-	return &Client{pool: pool}, nil
+	return &Client{pool: pool, autoMigrate: cfg.AutoMigrate}, nil
 }
 
 func openPool(c *Config) (*gorm.DB, error) {
@@ -128,7 +155,7 @@ func openPool(c *Config) (*gorm.DB, error) {
 
 // sqlDriverName maps config db.driver to database/sql driver names.
 func sqlDriverName(driver string) (string, error) {
-	switch driver {
+	switch strings.ToLower(strings.TrimSpace(driver)) {
 	case "postgres":
 		return "pgx", nil
 	case "mysql":
@@ -251,5 +278,61 @@ var Module = di.Module("fxkit/gormx",
 			}
 			return client, nil
 		})
+
+		// 数据库健康检查：由 server/readyz 聚合。
+		// 必须使用 server.HealthChecker 这个**具名类型**注册 —— 曾在 gormx 内
+		// 声明结构相同的匿名接口别名，导致 do 按接口名字符串区分服务，
+		// group 被拆成多个互不相见的条目（/readyz 里看不到 "db"）。
+		if client, err := di.Invoke[*Client](i); err == nil && client != nil && client.Pool() != nil {
+			di.ProvideGroupItem[server.HealthChecker](i, dbHealthChecker{client: client})
+		} else if err == nil {
+			// 未配置数据库是合法状态，不注册检查项，避免 /readyz 出现空的 "db" 记录。
+			slog.Debug("gormx: database disabled, no health checker registered")
+		}
+
+		// 外部 SQL 平台执行 DDL 后，启动时校验 schema 契约（fail fast）。
+		if cfg, err := di.Invoke[*Config](i); err == nil && cfg != nil && cfg.CheckSchema {
+			if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {
+				lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
+					OnStart: func(ctx context.Context) error {
+						client, err := di.Invoke[*Client](i)
+						if err != nil || client == nil || client.Pool() == nil {
+							return err
+						}
+						if err := CheckSchema(ctx, client.Pool()); err != nil {
+							return fmt.Errorf("gormx: schema check failed (apply migrations via your SQL platform first, `myapp migrate print`): %w", err)
+						}
+						slog.Info("gormx: schema check passed")
+						return nil
+					},
+				})
+			}
+		}
 	},
 )
+
+// dbHealthChecker 实现 [server.HealthChecker]，对连接池做 Ping。
+type dbHealthChecker struct {
+	client *Client
+}
+
+// Name 返回检查项名称。
+func (dbHealthChecker) Name() string { return "db" }
+
+// Check 在超时内 Ping 数据库。
+func (c dbHealthChecker) Check(ctx context.Context) error {
+	// 防御 nil：HealthChecker 由 DI group 聚合而来，若某处误注册了零值，
+	// 这里 panic 会让整个 /readyz 请求崩掉（并可能被 recover 成 500，
+	// 掩盖真正的依赖故障）。返回错误更安全。
+	if c.client == nil || c.client.Pool() == nil {
+		return fmt.Errorf("db client is nil")
+	}
+	sqlDB, err := c.client.Pool().DB()
+	if err != nil {
+		return fmt.Errorf("db handle: %w", err)
+	}
+	if err := sqlDB.PingContext(ctx); err != nil {
+		return fmt.Errorf("db ping: %w", err)
+	}
+	return nil
+}

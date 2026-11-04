@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/fitan/fxkit/fxerrors"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -314,7 +315,106 @@ func TestApplyList_sortInjectionRejected(t *testing.T) {
 		SortBy:        "id; DROP TABLE users",
 		SortDirection: "asc",
 	}
-	tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, params)
+	_, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, params)
+	assertInvalid(t, err, ReasonInvalidSortField)
+}
+
+func TestApplyList_unknownSortFieldRejected(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	// 非空但不在白名单的 SortBy 应返回 400，而不是静默忽略（否则 offset 分页会重复/漏行）。
+	_, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, SortBy: "nope", SortDirection: "asc",
+	})
+	assertInvalid(t, err, ReasonInvalidSortField)
+}
+
+func TestApplyList_emptySortUsesNoOrder(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec() // 没有 DefaultSort
+	tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := tx.Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("want 3 rows, got %d", count)
+	}
+}
+
+func TestApplyList_nilGuards(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+
+	if _, err := ApplyList(nil, spec, &ListParams{Limit: 10}); !fxerrors.Is(err, fxerrors.KindInternal) {
+		t.Fatalf("nil db: want internal error, got %v", err)
+	}
+	if _, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, nil); !fxerrors.Is(err, fxerrors.KindInternal) {
+		t.Fatalf("nil params: want internal error, got %v", err)
+	}
+}
+
+func TestApplyList_inNull(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	cases := []struct {
+		q    string
+		want int64
+	}{
+		// description: id1 NULL, id2 "notes", id3 "prod"
+		{"description.in:null", 1},
+		{"description.in:notes,null", 2},
+		{"description.notin:null", 2},
+		{"description.notin:notes,null", 1},
+		{"description.in:notes,prod", 2},
+	}
+	for _, tc := range cases {
+		tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{Limit: 10, Q: []string{tc.q}})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.q, err)
+		}
+		var count int64
+		if err := tx.Count(&count).Error; err != nil {
+			t.Fatalf("%s: %v", tc.q, err)
+		}
+		if count != tc.want {
+			t.Fatalf("%s: want %d rows, got %d", tc.q, tc.want, count)
+		}
+	}
+}
+
+func TestApplyList_nullInValuesWithEqualOR(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, Q: []string{"description=notes|null"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := tx.Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("want 2 rows (notes + NULL), got %d", count)
+	}
+}
+
+func TestApplyList_sortWithJoinAndDistinct(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	spec.SortFields["name"] = "users.name"
+	// JOIN 会触发 SELECT DISTINCT；NULL 序首列必须在该场景下依然能执行。
+	tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit:         10,
+		Q:             []string{"name~prod", "cluster.name~prod"},
+		SortBy:        "name",
+		SortDirection: "asc",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,8 +422,30 @@ func TestApplyList_sortInjectionRejected(t *testing.T) {
 	if err := tx.Pluck("users.name", &names).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(names) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(names))
+	if len(names) != 1 || names[0] != "prod-user" {
+		t.Fatalf("want [prod-user], got %v", names)
+	}
+}
+
+func TestApplyList_likeEscapesBang(t *testing.T) {
+	db := setupUsersDB(t)
+	if err := db.Exec(`INSERT INTO users (id, name, state, cpu_num, memory, enable, description, cluster_id)
+		VALUES (4, 'hello!world', 'Running', 1, 1, 1, NULL, 1), (5, 'helloXworld', 'Running', 1, 1, 1, NULL, 1)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	spec := testSpec()
+	tx, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, Q: []string{"name~hello!"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	if err := tx.Pluck("users.name", &names).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "hello!world" {
+		t.Fatalf("want [hello!world], got %v", names)
 	}
 }
 
@@ -368,4 +490,33 @@ func TestApplyList_cursorRejectsRelationSort(t *testing.T) {
 		Limit: 10, Cursor: tok, SortBy: "cluster.name", SortDirection: "asc",
 	})
 	assertInvalid(t, err, ReasonCursorRelationSort)
+}
+
+// TestApplyList_distinctOnlyForToManyJoins 基数已知的多对一关联不需要 DISTINCT。
+func TestApplyList_distinctOnlyForToManyJoins(t *testing.T) {
+	db := setupUsersDB(t)
+
+	run := func(card RelationCardinality) bool {
+		spec := testSpec()
+		spec.Relations["cluster"].Cardinality = card
+		tx := db.Session(&gorm.Session{DryRun: true}).Model(&struct{}{}).Table("users")
+		out, jc, err := applyList(tx, spec, &ListParams{Limit: 10, Q: []string{"cluster.name=prod-cluster"}}, listApplyOpts{})
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if jc != 1 {
+			t.Fatalf("joinCount=%d, want 1", jc)
+		}
+		return out.Statement.Distinct
+	}
+
+	if !run(RelationUnknown) {
+		t.Fatal("unknown cardinality must keep DISTINCT (旧行为不能变)")
+	}
+	if run(RelationToOne) {
+		t.Fatal("to-one join should skip DISTINCT")
+	}
+	if !run(RelationToMany) {
+		t.Fatal("to-many join must keep DISTINCT")
+	}
 }

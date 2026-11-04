@@ -13,8 +13,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/logx"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
@@ -34,7 +36,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-	"github.com/fitan/fxkit/di"
 )
 
 // Setup 是安装 OTel SDK 的 Fx invoker。由 [Module] 装配；仅测试时直接调用。
@@ -62,6 +63,19 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 	}
 
 	var shutdowns []func(context.Context) error
+
+	// 若 setup 中途失败，已安装的 provider 必须回滚，否则 batcher goroutine
+	// 常驻且退出时 span/log 全部丢失。
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		ctx := context.Background()
+		for i := len(shutdowns) - 1; i >= 0; i-- {
+			_ = shutdowns[i](ctx)
+		}
+	}()
 
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
@@ -115,17 +129,23 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 
 	if lc != nil {
 		lc.Append(di.Hook{
-		OnStop: func(ctx context.Context) error {
-			slog.Info("otel shutting down")
-			var errs []error
-			for _, fn := range shutdowns {
-				if err := fn(ctx); err != nil {
-					errs = append(errs, err)
+			OnStop: func(ctx context.Context) error {
+				slog.Info("otel shutting down")
+				// 不要直接用共享的 stop-timeout ctx：前面的 HTTP shutdown 可能已把它耗尽，
+				// 导致这里拿到已过期的 deadline 而丢弃批处理中的 span/log。
+				flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+
+				var errs []error
+				// LIFO：先关 logs（最先产生），最后关 traces。
+				for i := len(shutdowns) - 1; i >= 0; i-- {
+					if err := shutdowns[i](flushCtx); err != nil {
+						errs = append(errs, err)
+					}
 				}
-			}
-			return errors.Join(errs...)
-		},
-	})
+				return errors.Join(errs...)
+			},
+		})
 	}
 
 	slog.Info("otel initialised",
@@ -138,6 +158,7 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 		"logs", fmt.Sprintf("%v/%s", cfg.Logs.Enabled, cfg.Logs.Exporter),
 	)
 
+	success = true
 	return nil
 }
 
@@ -343,12 +364,34 @@ func parseRatio(s string) (float64, error) {
 }
 
 // Module 在 otel.enabled 为 true 时安装 OTel SDK 生命周期。
+//
+// 安装动作放在最早的 PreStart 阶段：配置错误（如 service_name 缺失、exporter
+// 构造失败）会中止启动，而不是被静默吞掉、服务正常起来但遥测完全缺失。
 var Module = di.Module("fxkit/otelx",
 	config.Provide[Config]("otel"),
 	func(i di.Injector) {
-		cfg, _ := di.Invoke[*Config](i)
-		app, _ := di.Invoke[*config.App](i)
 		lc, _ := di.Invoke[*di.Lifecycle](i)
-		_ = Setup(lc, cfg, app)
+		if lc == nil {
+			cfg, err := di.Invoke[*Config](i)
+			if err != nil {
+				panic(fmt.Sprintf("otelx: %v", err))
+			}
+			app, _ := di.Invoke[*config.App](i)
+			if err := Setup(nil, cfg, app); err != nil {
+				panic(fmt.Sprintf("otelx: %v", err))
+			}
+			return
+		}
+
+		lc.AppendPreStartPhase(di.PhaseResolveContributors-10, di.Hook{
+			OnStart: func(context.Context) error {
+				cfg, err := di.Invoke[*Config](i)
+				if err != nil {
+					return fmt.Errorf("otelx: %w", err)
+				}
+				app, _ := di.Invoke[*config.App](i)
+				return Setup(lc, cfg, app)
+			},
+		})
 	},
 )

@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 )
@@ -69,6 +70,22 @@ func TestAdminHTTPRoutesRequirePermission(t *testing.T) {
 	for _, r := range routes {
 		if r.Permission != AdminPermission {
 			t.Fatalf("route %s %s permission=%q want %q", r.Method, r.Path, r.Permission, AdminPermission)
+		}
+	}
+}
+
+// BenchmarkRouteFind 验证预编译路由匹配的分配情况（应接近 0 allocs/op）。
+func BenchmarkRouteFind(b *testing.B) {
+	routes := make([]HTTPRoute, 0, 64)
+	for i := 0; i < 60; i++ {
+		routes = append(routes, HTTPRoute{Method: http.MethodGet, Path: fmt.Sprintf("/res%d/{id}", i)})
+	}
+	idx := indexRoutes(routes)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, ok := idx.find(http.MethodGet, "/res59/42"); !ok {
+			b.Fatal("route not found")
 		}
 	}
 }

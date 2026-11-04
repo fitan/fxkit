@@ -8,7 +8,7 @@ import (
 )
 
 func renderResource(data *resourceTemplate) ([]byte, error) {
-	tmpl, err := template.New("resource").Parse(resourceTmpl)
+	tmpl, err := template.New("resource").Funcs(funcs).Parse(resourceTmpl)
 	if err != nil {
 		return nil, fmt.Errorf("template parse: %w", err)
 	}
@@ -18,12 +18,16 @@ func renderResource(data *resourceTemplate) ([]byte, error) {
 	}
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
-		return buf.Bytes(), fmt.Errorf("gofmt generated source: %w", err)
+		return nil, fmt.Errorf("gofmt generated source: %w (this is a fxkit bug; please report it)", err)
 	}
 	return formatted, nil
 }
 
 // resourceTmpl 是 `fxkit gen resource` 输出的 Go 源码模板。
+//
+// 所有插入 Go 字符串字面量的值都经 {{quote .X}}（strconv.Quote）转义，
+// 避免 --table / --sort 等输入拼出非法或恶意源码。
+// Struct tag 位于反引号内，其内容只由已校验的字段名与固定标记片段组成。
 const resourceTmpl = `// 由 fxkit gen resource 生成；提交后可自由编辑。
 package {{.Package}}
 
@@ -32,6 +36,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/fitan/fxkit"
 	"github.com/fitan/fxkit/crudx"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
@@ -48,6 +53,10 @@ type {{.TypeName}} struct {
 	CreatedAt time.Time ` + "`json:\"-\"`" + `
 	UpdatedAt time.Time ` + "`json:\"-\"`" + `
 }
+
+// TableName 把表名固定下来：crudx.List 的列限定与 GORM 的默认推导必须一致，
+// 否则 --table 会只影响 List，而 Create/Get/AutoMigrate 仍指向推导出的表名。
+func ({{.TypeName}}) TableName() string { return {{quote .Table}} }
 
 // {{.TypeName}}ListRow 是列表投影（可裁剪字段以隐藏数据）。
 type {{.TypeName}}ListRow struct {
@@ -88,7 +97,7 @@ type Service struct {
 
 func NewService(client *gormx.Client, lc *di.Lifecycle) (*Service, error) {
 	if client == nil {
-		return nil, fxerrors.Internal("{{.Package}}: nil gormx client")
+		return nil, fxerrors.Internal({{quote .NilClientMsg}})
 	}
 	if _, err := crudx.ResolveModel[{{.TypeName}}](client.Conn(context.Background())); err != nil {
 		return nil, err
@@ -98,15 +107,15 @@ func NewService(client *gormx.Client, lc *di.Lifecycle) (*Service, error) {
 		listSpec: crudx.ListSpec{
 			Fields: map[string]crudx.FieldSpec{
 {{- range .ListFields}}
-				"{{.Name}}": {Column: "{{$.PathSlug}}.{{.Name}}", Kind: {{.Kind}}{{if .Indexed}}, Indexed: true{{end}}},
+				{{quote .Name}}: {Column: {{quote .Column}}, Kind: {{.Kind}}{{if .Indexed}}, Indexed: true{{end}}{{if .Like}}, Likeable: true{{end}}},
 {{- end}}
 			},
 			SortFields: map[string]string{
 {{- range .SortFields}}
-				"{{.}}": "{{$.PathSlug}}.{{.}}",
+				{{quote .Name}}: {{quote .Column}},
 {{- end}}
 			},
-			DefaultSort: "{{.SortBy}}",
+			DefaultSort: {{quote .SortBy}},
 			Limits:      crudx.Limits{LimitDefault: 20, LimitMax: 100},
 		},
 	}
@@ -121,7 +130,7 @@ func NewService(client *gormx.Client, lc *di.Lifecycle) (*Service, error) {
 
 func (s *Service) List(ctx context.Context, params crudx.ListParams) (crudx.ListResult[{{.TypeName}}ListRow], error) {
 	return crudx.List(ctx, crudx.ListInput[{{.TypeName}}, {{.TypeName}}ListRow]{
-		DB:     s.client.Conn(ctx).Model(&{{.TypeName}}{}).Table("{{.PathSlug}}"),
+		DB:     s.client.Conn(ctx).Model(&{{.TypeName}}{}).Table({{quote .Table}}),
 		Spec:   s.listSpec,
 		Params: params,
 		ToRow:  to{{.TypeName}}ListRow,
@@ -156,7 +165,7 @@ func (s *Service) Update(ctx context.Context, req Update{{.TypeName}}Req) ({{.Ty
 		next.{{.Name}} = req.{{.Name}}
 {{- end}}
 {{- if .Fields}}
-		if err := s.client.Conn(txCtx).Select({{range $i, $f := .Fields}}{{if $i}}, {{end}}"{{$f.Column}}"{{end}}).Updates(&next).Error; err != nil {
+		if err := s.client.Conn(txCtx).Select({{range $i, $f := .Fields}}{{if $i}}, {{end}}{{quote $f.Column}}{{end}}).Updates(&next).Error; err != nil {
 			return {{.TypeName}}Detail{}, crudx.MapDBError(err)
 		}
 {{- end}}
@@ -182,8 +191,8 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 func NewHumaRegistrar(svc *Service) fxhuma.Registrar {
 	return fxhuma.FuncRegistrar(func(api huma.API) {
 		fxhuma.RegisterResource(api, svc, fxhuma.RegisterResourceInput[Update{{.TypeName}}Req]{
-			Path: "{{.Path}}",
-			Tags: []string{"{{.Tag}}"},
+			Path: {{quote .Path}},
+			Tags: []string{ {{quote .Tag}} },
 			BindUpdate: func(id string, body Update{{.TypeName}}Req) Update{{.TypeName}}Req {
 				body.ID = id
 				return body
@@ -212,8 +221,8 @@ func to{{.TypeName}}Detail(m {{.TypeName}}) {{.TypeName}}Detail {
 	}
 }
 
-var Module = fx.Module("{{.Package}}",
-	fx.Provide(NewService),
+var Module = di.Options(
+	fxkit.Service({{quote .Package}}, NewService),
 	fxhuma.ProvideRegistrar(NewHumaRegistrar),
 )
 `

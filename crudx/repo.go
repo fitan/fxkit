@@ -90,7 +90,8 @@ func (r *Repo[T]) Transaction(ctx context.Context, fn func(ctx context.Context) 
 	return r.client.Transaction(ctx, fn)
 }
 
-// Create inserts entity (zeroes PK first).
+// Create inserts entity. Only auto-increment numeric primary keys are cleared;
+// client-generated keys (UUID / business IDs) are preserved.
 func (r *Repo[T]) Create(ctx context.Context, entity *T) error {
 	if entity == nil {
 		return fxerrors.Internal("crudx.Repo.Create: nil entity")

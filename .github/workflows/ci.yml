@@ -5,12 +5,300 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  GOFLAGS: -mod=mod
+
 jobs:
   test:
+    runs-on: ubuntu-latest
+    env:
+      # 严格装配：装配期（Option 内）读 group 直接 panic。
+      FXKIT_STRICT_WIRING: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt (fail on unformatted)
+        run: |
+          out=$(gofmt -l . | grep -v '^example/' || true)
+          if [ -n "$out" ]; then
+            echo "these files need gofmt:"
+            echo "$out"
+            exit 1
+          fi
+
+      # -race 是最重要的一道闸：本仓库有大量 goroutine（relay 心跳、锁续约、
+      # consul watch、生命周期并发检查），过去这类问题只能靠人工发现。
+      - name: test (race)
+        run: go test -race -count=1 -coverprofile=cover.out -covermode=atomic ./...
+
+      - name: coverage summary
+        run: go tool cover -func=cover.out | tail -1
+
+      # 核心抽象（di / config / crudx）是框架正确性的地基，单独设门禁；
+      # 其余包设较低门槛，防止覆盖率继续下滑。
+      - name: coverage gate
+        run: |
+          set -e
+          check() {
+            pkg="$1"; min="$2"
+            pct=$(go test -cover -count=1 "$pkg" 2>/dev/null | sed -n 's/.*coverage: \([0-9.]*\)%.*/\1/p')
+            if [ -z "$pct" ]; then echo "no coverage for $pkg"; exit 1; fi
+            echo "$pkg: ${pct}% (min ${min}%)"
+            awk -v a="$pct" -v b="$min" 'BEGIN{exit !(a+0 < b+0)}' && {
+              echo "FAIL: $pkg coverage ${pct}% below ${min}%"; exit 1;
+            }
+            return 0
+          }
+          # 核心：核心抽象，高门槛
+          check ./di 75
+          check ./config 70
+          check ./crudx 70
+          check ./reqx 75
+          # 关键基础设施
+          check ./outbox 55
+          check ./cachex 55
+          check ./server 50
+          check ./gormx 45
+          check ./cli 40
+          check ./docs 40
+          check ./otelx 30
+
+  dialect:
+    # 把 SQL 方言风险关掉：同一批 crudx 断言在 PostgreSQL / MySQL 上再跑一遍。
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fxkit
+          POSTGRES_PASSWORD: fxkit
+          POSTGRES_DB: fxkit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fxkit -d fxkit"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: fxkit
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      FXKIT_TEST_POSTGRES_DSN: postgres://fxkit:fxkit@127.0.0.1:5432/fxkit?sslmode=disable
+      FXKIT_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/fxkit?parseTime=true&multiStatements=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: crudx dialect + migrations (postgres)
+        run: |
+          go test -count=1 -run 'TestDialect' -v ./crudx
+          go test -count=1 -run 'TestMigrationsPostgres|TestMigrationsMySQL' -v ./gormx
+
+  integration:
+    # 真实 Redis / Consul：cachex 负缓存+singleflight、consulx 锁+自注册、reqx 服务发现。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go test ./...
+          cache: true
+
+      - name: start backend services
+        run: |
+          docker run -d --name ci-redis -p 6379:6379 redis:7
+          docker run -d --name ci-consul -p 8500:8500 hashicorp/consul:1.21 agent -dev -client=0.0.0.0
+          until docker exec ci-redis redis-cli ping >/dev/null 2>&1; do sleep 1; done
+          until docker exec ci-consul consul members >/dev/null 2>&1; do sleep 1; done
+
+      - name: cachex (redis)
+        env:
+          FXKIT_TEST_REDIS_ADDR: 127.0.0.1:6379
+        run: go test -count=1 -run 'TestRedisIntegration' -v ./cachex
+
+      - name: consulx (lock + register)
+        env:
+          FXKIT_TEST_CONSUL_ADDR: http://127.0.0.1:8500
+        run: go test -count=1 -run 'TestConsul.*Integration|TestConsulLockFailureModes' -v ./consulx
+
+      - name: reqx (discovery)
+        env:
+          FXKIT_TEST_CONSUL_ADDR: http://127.0.0.1:8500
+        run: go test -count=1 -run 'TestDiscoveryIntegration' -v ./reqx
+
+  atlas:
+    # DDL 由 SQL 平台执行；这里只做迁移文件的校验（可执行性 + 破坏性变更）。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ariga/setup-atlas@v0
+
+      - name: lint postgres migrations
+        run: |
+          atlas migrate hash --dir file://gormx/migrations/postgres
+          atlas migrate lint --dir file://gormx/migrations/postgres --dev-url "docker://postgres/16/dev?search_path=public" --latest 1
+
+      - name: lint mysql migrations
+        run: |
+          atlas migrate hash --dir file://gormx/migrations/mysql
+          atlas migrate lint --dir file://gormx/migrations/mysql --dev-url "docker://mysql/8/dev" --latest 1
+
+      - name: lint sqlite migrations
+        run: |
+          atlas migrate hash --dir file://gormx/migrations/sqlite
+          atlas migrate lint --dir file://gormx/migrations/sqlite --dev-url "sqlite://dev?mode=memory" --latest 1
+
+  example:
+    runs-on: ubuntu-latest
+    env:
+      FXKIT_STRICT_WIRING: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build + test example module
+        working-directory: example
+        run: |
+          go build ./...
+          go test -race -count=1 ./...
+
+  smoke:
+    # 真实 HTTP 端到端：单测糖不出的问题（如游标翻页 400、中间件丢失）靠它拦截。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: local e2e (sqlite)
+        working-directory: example
+        run: bash scripts/verify-local.sh
+
+  generated-code:
+    # 生成器产出的代码必须能编译。历史上 `fxkit new` 与 `fxkit gen resource`
+    # 都产出过无法编译的代码（误用 uber-go/fx），而只做语法检查的测试没发现。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build CLI
+        run: go build -o /tmp/fxkit ./cmd/fxkit
+
+      - name: scaffold a service and compile it
+        run: |
+          set -euo pipefail
+          fxkit_repo="$PWD"
+          work=$(mktemp -d)
+          cd "$work"
+          cat > go.mod <<EOF
+          module github.com/example/scaffolded
+
+          go 1.27.0
+
+          require github.com/fitan/fxkit v0.0.0
+
+          replace github.com/fitan/fxkit => $fxkit_repo
+          EOF
+          cp "$fxkit_repo/go.sum" .
+          /tmp/fxkit new hello --skip-tidy
+          go build ./...
+          go vet ./...
+
+      - name: generate a resource and compile it
+        run: |
+          set -euo pipefail
+          fxkit_repo="$PWD"
+          work=$(mktemp -d)
+          cd "$work"
+          cat > go.mod <<EOF
+          module github.com/example/scaffolded
+
+          go 1.27.0
+
+          require github.com/fitan/fxkit v0.0.0
+
+          replace github.com/fitan/fxkit => $fxkit_repo
+          EOF
+          cp "$fxkit_repo/go.sum" .
+          /tmp/fxkit new hello --skip-tidy
+          /tmp/fxkit gen resource Article \
+            --field title:string:required \
+            --field body:text \
+            --field author_id:int64:index \
+            --out ./services/hello/internal/article
+          go build ./...
+
+  di-graph:
+    # 启动自检：把「模块装配成功但 group 为空」这类静默故障变成 CI 失败。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build catalog
+        working-directory: example
+        run: go build -o /tmp/catalog ./services/catalog/cmd
+
+      - name: dump DI graph
+        working-directory: example
+        run: |
+          set -euo pipefail
+          cat > /tmp/ci.yaml <<EOF
+          app:
+            name: catalog
+          server:
+            port: "18081"
+          db:
+            driver: "sqlite"
+            dsn: "/tmp/ci.db"
+          EOF
+          # --di-graph 只构建对象图、不监听端口
+          /tmp/catalog serve --config /tmp/ci.yaml --di-graph > /tmp/di.txt
+          echo "--- DI graph ---"
+          cat /tmp/di.txt
+
+          # 关键 group 必须有内容，否则说明贡献点接线失败
+          grep -q 'huma.Registrar' /tmp/di.txt || { echo "huma.Registrar group missing"; exit 1; }
+          grep -q 'server.Route' /tmp/di.txt || { echo "server.Route group missing"; exit 1; }
+          if grep -q 'EMPTY' /tmp/di.txt; then
+            echo "empty group detected"; exit 1
+          fi
+
+      - name: validate config
+        working-directory: example
+        run: |
+          cat > /tmp/cfg.yaml <<EOF
+          app:
+            name: catalog
+          server:
+            port: "18081"
+          db:
+            driver: "sqlite"
+            dsn: "/tmp/ci.db"
+          EOF
+          /tmp/catalog validate --config /tmp/cfg.yaml

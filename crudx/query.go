@@ -2,15 +2,25 @@ package crudx
 
 import "strings"
 
-// ParseSort parses "col desc", "col,desc" or "col" (asc).
+// ParseSort parses "col desc", "col,desc", "-col" (desc), "+col" or "col" (asc).
 func ParseSort(spec string) (field, dir string) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return "", ""
 	}
-	parts := strings.Fields(spec)
-	field = parts[0]
 	dir = "asc"
+	// 支持 doc.go / README 里的 "-createdAt" 前缀写法。
+	if strings.HasPrefix(spec, "-") {
+		dir = "desc"
+		spec = strings.TrimSpace(spec[1:])
+	} else if strings.HasPrefix(spec, "+") {
+		spec = strings.TrimSpace(spec[1:])
+	}
+	parts := strings.Fields(spec)
+	if len(parts) == 0 {
+		return "", ""
+	}
+	field = parts[0]
 	if len(parts) > 1 {
 		switch strings.ToLower(parts[1]) {
 		case "desc", "descending", "-":

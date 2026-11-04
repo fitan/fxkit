@@ -4,15 +4,30 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fitan/fxkit/config"
+)
+
+const (
+	// renewFailureThreshold 连续续租失败达到该值即判定会话失效（锁可能已易主）。
+	renewFailureThreshold = 2
+	// minWatchWait Blocking Query 的 wait 下限，避免退化为忙轮询。
+	minWatchWait = 100 * time.Millisecond
+	// maxWatchWait Blocking Query 的 wait 上限。
+	maxWatchWait = 10 * time.Minute
+	// tryLockAcquireAttempts TryLock 在遇到 5xx/传输错误时的最大尝试次数。
+	tryLockAcquireAttempts = 3
 )
 
 type consulLocker struct {
@@ -21,6 +36,7 @@ type consulLocker struct {
 }
 
 // NewConsulLocker 创建基于 Consul Session 与 KV 的分布式锁管理器。
+// client 可注入自定义 Transport（http.Client 为空时使用默认 10s 超时的 client）。
 func NewConsulLocker(consulAddr string, client *http.Client) (Locker, error) {
 	addr := strings.TrimSpace(consulAddr)
 	if addr == "" {
@@ -44,9 +60,17 @@ func (l *consulLocker) NewLock(key string, opts ...LockOption) (Lock, error) {
 	if cleanKey == "" {
 		return nil, fmt.Errorf("consulx: lock key cannot be empty")
 	}
+	if err := validateLockKey(cleanKey); err != nil {
+		return nil, err
+	}
 	opt := DefaultLockOptions()
 	for _, o := range opts {
 		o(&opt)
+	}
+	opt = normalizeLockOptions(opt, true)
+	// 校验 prefix+key 拼出的最终 KV 路径（Consul 对字符集有严格要求）。
+	if err := validateLockKey(opt.keyPath(cleanKey)); err != nil {
+		return nil, err
 	}
 	return &consulLock{
 		locker: l,
@@ -55,7 +79,7 @@ func (l *consulLocker) NewLock(key string, opts ...LockOption) (Lock, error) {
 	}, nil
 }
 
-func (l *consulLocker) WithLock(ctx context.Context, key string, fn func(ctx context.Context) error, opts ...LockOption) error {
+func (l *consulLocker) WithLock(ctx context.Context, key string, fn func(ctx context.Context) error, opts ...LockOption) (err error) {
 	lock, err := l.NewLock(key, opts...)
 	if err != nil {
 		return err
@@ -64,21 +88,74 @@ func (l *consulLocker) WithLock(ctx context.Context, key string, fn func(ctx con
 		return err
 	}
 	defer func() {
-		_ = lock.Unlock(context.Background())
+		uctx, cancel := cleanupContext()
+		defer cancel()
+		err = joinUnlockErr(err, key, lock.Unlock(uctx))
 	}()
 	return fn(ctx)
 }
 
-type consulLock struct {
-	locker    *consulLocker
-	key       string
-	opts      LockOptions
-	mu        sync.Mutex
-	isHeld    bool
+// renewState 是单次加锁尝试（session）的续租状态。
+// 续租协程只写本结构，不获取 consulLock.mu，因此与 Unlock 不存在锁序依赖。
+type renewState struct {
 	sessionID string
-	stopRenew chan struct{}
-	renewDone chan struct{}
-	lockLost  bool
+	stop      chan struct{}
+	done      chan struct{}
+	stopOnce  sync.Once
+	alive     atomic.Bool // 续租协程是否仍在运行
+	lost      atomic.Bool // 续租判定会话失效
+
+	mu     sync.Mutex
+	lostEr error
+}
+
+func newRenewState(sessionID string) *renewState {
+	return &renewState{
+		sessionID: sessionID,
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
+	}
+}
+
+func (s *renewState) stopRenew() {
+	s.stopOnce.Do(func() { close(s.stop) })
+}
+
+func (s *renewState) wait() {
+	<-s.done
+}
+
+func (s *renewState) markLost(err error) {
+	s.mu.Lock()
+	if s.lostEr == nil {
+		s.lostEr = err
+	}
+	s.mu.Unlock()
+	s.lost.Store(true)
+}
+
+func (s *renewState) lostErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lostEr
+}
+
+func (s *renewState) usable() bool {
+	return !s.lost.Load() && s.alive.Load()
+}
+
+type consulLock struct {
+	locker *consulLocker
+	key    string
+	opts   LockOptions
+
+	// renewInterval 为 0 时按 TTL/3 推导（下限 2s）。仅测试需要覆盖。
+	renewInterval time.Duration
+
+	mu      sync.Mutex
+	held    bool
+	pending bool // 正在获取中（Lock 阻塞等待期间），用于实现不可重入
+	renew   *renewState
 }
 
 func (l *consulLock) Key() string {
@@ -88,136 +165,251 @@ func (l *consulLock) Key() string {
 func (l *consulLock) IsHeld() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.isHeld && !l.lockLost
+	return l.held && l.renew != nil && l.renew.usable()
 }
 
 func (l *consulLock) fullKey() string {
-	prefix := strings.TrimLeft(l.opts.Prefix, "/")
-	if prefix != "" && !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	return prefix + l.key
+	return l.opts.keyPath(l.key)
 }
 
-func (l *consulLock) TryLock(ctx context.Context) error {
+// beginAcquire 在开始一次获取前检查实例状态：
+//   - 仍在有效持有中 → ErrLockHeld（不可重入）
+//   - 持有已丢失 → 清理旧会话后允许重新获取
+//   - 另一个 goroutine 正在获取 → ErrLockHeld
+func (l *consulLock) beginAcquire() error {
+	l.mu.Lock()
+	if l.held {
+		st := l.renew
+		if st != nil && st.lost.Load() {
+			l.held = false
+			l.renew = nil
+			l.mu.Unlock()
+			l.discardSession(st)
+			return l.beginAcquire()
+		}
+		l.mu.Unlock()
+		return ErrLockHeld
+	}
+	if l.pending {
+		l.mu.Unlock()
+		return ErrLockHeld
+	}
+	l.pending = true
+	l.mu.Unlock()
+	return nil
+}
+
+func (l *consulLock) endAcquire() {
+	l.mu.Lock()
+	l.pending = false
+	l.mu.Unlock()
+}
+
+// commit 在确认续租协程存活后把会话登记为当前持有状态。
+func (l *consulLock) commit(st *renewState) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	if l.isHeld {
-		return nil
+	if l.held || l.renew != nil {
+		return ErrLockHeld
 	}
+	l.held = true
+	l.renew = st
+	return nil
+}
 
-	sessionID, err := l.createSession(ctx)
+// discardSession 停掉续租协程并销毁会话（不等待调用方 ctx）。
+func (l *consulLock) discardSession(st *renewState) {
+	if st == nil {
+		return
+	}
+	st.stopRenew()
+	st.wait()
+	ctx, cancel := cleanupContext()
+	defer cancel()
+	if err := l.destroySession(ctx, st.sessionID); err != nil {
+		slog.Debug("consulx: destroy abandoned session failed",
+			"session", st.sessionID, "error", err)
+	}
+}
+
+func (l *consulLock) TryLock(ctx context.Context) (err error) {
+	start := time.Now()
+	defer func() { recordLockAcquire(ctx, time.Since(start), err) }()
+
+	if err := l.beginAcquire(); err != nil {
+		return err
+	}
+	defer l.endAcquire()
+
+	sessionID, st, err := l.startSession(ctx)
 	if err != nil {
 		return err
 	}
 
-	acquired, err := l.acquireKV(ctx, sessionID)
+	acquired, _, err := l.acquireWithRetry(ctx, sessionID, tryLockAcquireAttempts)
 	if err != nil {
-		_ = l.destroySession(context.Background(), sessionID)
-		if ctx.Err() != nil {
-			return ctx.Err()
+		l.discardSession(st)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		return err
 	}
 	if !acquired {
-		_ = l.destroySession(context.Background(), sessionID)
+		l.discardSession(st)
 		return ErrLockHeld
 	}
-
-	l.sessionID = sessionID
-	l.isHeld = true
-	l.lockLost = false
-	l.stopRenew = make(chan struct{})
-	l.renewDone = make(chan struct{})
-
-	go l.renewLoop(sessionID, l.stopRenew, l.renewDone)
+	// 关键：续租协程已经死亡时绝不能报告“持锁成功”。
+	if !st.usable() {
+		l.discardSession(st)
+		return l.sessionLostError(st)
+	}
+	if err := l.commit(st); err != nil {
+		l.discardSession(st)
+		return err
+	}
+	if !st.usable() {
+		// 提交与续租失败之间的竞态：撤销持有状态并如实报错。
+		_ = l.Unlock(ctx)
+		return l.sessionLostError(st)
+	}
 	return nil
 }
 
-func (l *consulLock) Lock(ctx context.Context) error {
-	l.mu.Lock()
-	if l.isHeld {
-		l.mu.Unlock()
-		return nil
-	}
-	l.mu.Unlock()
+func (l *consulLock) Lock(ctx context.Context) (err error) {
+	start := time.Now()
+	defer func() { recordLockAcquire(ctx, time.Since(start), err) }()
 
-	sessionID, err := l.createSession(ctx)
-	if err != nil {
+	if err := l.beginAcquire(); err != nil {
 		return err
 	}
+	defer l.endAcquire()
 
-	// 启动心跳协程，保证在阻塞等待期间该 Session 不会因 TTL 超时而提前失效
-	stopRenew := make(chan struct{})
-	renewDone := make(chan struct{})
-	go l.renewLoop(sessionID, stopRenew, renewDone)
-
-	fullKey := l.fullKey()
-	ticker := time.NewTicker(l.opts.RetryWait)
-	defer ticker.Stop()
-
+	var index uint64
 	for {
-		acquired, err := l.acquireKV(ctx, sessionID)
-		if err != nil {
-			close(stopRenew)
-			<-renewDone
-			_ = l.destroySession(context.Background(), sessionID)
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if acquired {
-			l.mu.Lock()
-			l.sessionID = sessionID
-			l.isHeld = true
-			l.lockLost = false
-			l.stopRenew = stopRenew
-			l.renewDone = renewDone
-			l.mu.Unlock()
-			return nil
+
+		sessionID, st, err := l.startSession(ctx)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if !isRetryable(err) {
+				return err
+			}
+			if !sleepCtx(ctx, l.opts.RetryWait) {
+				return ctx.Err()
+			}
+			continue
 		}
 
-		// 阻塞等待释放或超时
-		select {
-		case <-ctx.Done():
-			close(stopRenew)
-			<-renewDone
-			_ = l.destroySession(context.Background(), sessionID)
-			return ctx.Err()
-		case <-ticker.C:
-			// 尝试使用 Consul 的 Blocking Query 探测，若不支持或超时直接继续
-			_ = l.waitKVChange(ctx, fullKey)
+		// 内层循环复用当前 session（续租协程持续保活），直到拿到锁或会话失效。
+		for {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				l.discardSession(st)
+				return ctxErr
+			}
+
+			acquired, idx, err := l.acquireWithRetry(ctx, sessionID, 0)
+			if idx > 0 {
+				index = idx
+			}
+			if err != nil {
+				l.discardSession(st)
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				return err
+			}
+			if acquired {
+				if !st.usable() {
+					// 会话/续租协程已失效：重建 session 后重试，绝不能假装持锁。
+					l.discardSession(st)
+					break
+				}
+				if err := l.commit(st); err != nil {
+					l.discardSession(st)
+					return err
+				}
+				if !st.usable() {
+					_ = l.Unlock(ctx)
+					break
+				}
+				return nil
+			}
+
+			// 使用真正的 Blocking Query：带上 X-Consul-Index 与 wait。
+			nextIndex, werr := l.waitKVChange(ctx, l.fullKey(), index, l.opts.RetryWait)
+			if nextIndex > 0 {
+				index = nextIndex
+			}
+			if werr != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					l.discardSession(st)
+					return ctxErr
+				}
+				if !isRetryable(werr) {
+					l.discardSession(st)
+					return werr
+				}
+				if !sleepCtx(ctx, l.opts.RetryWait) {
+					l.discardSession(st)
+					return ctx.Err()
+				}
+			}
 		}
 	}
 }
 
 func (l *consulLock) Unlock(ctx context.Context) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if !l.isHeld {
+	if !l.held {
+		l.mu.Unlock()
 		return ErrLockNotHeld
 	}
+	st := l.renew
+	lost := st != nil && st.lost.Load()
+	l.held = false
+	l.renew = nil
+	l.mu.Unlock()
 
-	sessionID := l.sessionID
-	if l.stopRenew != nil {
-		close(l.stopRenew)
-		<-l.renewDone
-		l.stopRenew = nil
-		l.renewDone = nil
+	// 必须先释放 l.mu 再等待续租协程退出：续租协程可能与 Unlock 并发，
+	// 持锁等待 renewDone 会造成死锁。
+	if st == nil {
+		return nil
 	}
+	st.stopRenew()
+	st.wait()
 
-	// 释放 KV 上的锁
-	_ = l.releaseKV(ctx, sessionID)
-	// 销毁 Session
-	_ = l.destroySession(ctx, sessionID)
+	var errs []error
+	if !lost {
+		errs = append(errs, l.releaseKV(ctx, st.sessionID))
+	} else {
+		errs = append(errs, ErrLockLost, st.lostErr())
+	}
+	errs = append(errs, l.destroySession(ctx, st.sessionID))
+	return errors.Join(errs...)
+}
 
-	l.isHeld = false
-	l.sessionID = ""
-	l.lockLost = false
-	return nil
+func (l *consulLock) sessionLostError(st *renewState) error {
+	if err := st.lostErr(); err != nil {
+		return errors.Join(ErrLockLost, err)
+	}
+	return ErrLockLost
+}
+
+// startSession 创建 Consul Session 并启动续租协程。
+// alive 在启动前同步置位，避免调用方在 goroutine 尚未调度时误判为死亡。
+func (l *consulLock) startSession(ctx context.Context) (string, *renewState, error) {
+	sessionID, err := l.createSession(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	st := newRenewState(sessionID)
+	st.alive.Store(true)
+	go l.renewLoop(st)
+	return sessionID, st, nil
 }
 
 type createSessionRequest struct {
@@ -228,11 +420,8 @@ type createSessionRequest struct {
 }
 
 func (l *consulLock) createSession(ctx context.Context) (string, error) {
-	ttlSec := int(l.opts.TTL.Seconds())
-	if ttlSec < 10 {
-		ttlSec = 10
-	}
-	delaySec := int(l.opts.LockDelay.Seconds())
+	ttlSec := ttlSecondsCeil(l.opts.TTL)
+	delaySec := lockDelaySeconds(l.opts.LockDelay)
 
 	payload := createSessionRequest{
 		Name:      "fxkit-lock:" + l.fullKey(),
@@ -258,9 +447,9 @@ func (l *consulLock) createSession(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("consul create session status=%d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	body, err := readBodyAndCheck("consul create session", resp)
+	if err != nil {
+		return "", err
 	}
 
 	var res struct {
@@ -275,12 +464,18 @@ func (l *consulLock) createSession(ctx context.Context) (string, error) {
 	return res.ID, nil
 }
 
-func (l *consulLock) renewLoop(sessionID string, stop <-chan struct{}, done chan<- struct{}) {
-	defer close(done)
+func (l *consulLock) renewLoop(st *renewState) {
+	defer func() {
+		st.alive.Store(false)
+		close(st.done)
+	}()
 
-	interval := l.opts.TTL / 3
-	if interval < 2*time.Second {
-		interval = 2 * time.Second
+	interval := l.renewInterval
+	if interval <= 0 {
+		interval = l.opts.TTL / 3
+		if interval < 2*time.Second {
+			interval = 2 * time.Second
+		}
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -288,31 +483,50 @@ func (l *consulLock) renewLoop(sessionID string, stop <-chan struct{}, done chan
 	failures := 0
 	for {
 		select {
-		case <-stop:
+		case <-st.stop:
 			return
 		case <-ticker.C:
-			if err := l.renewSession(sessionID); err != nil {
-				failures++
-				slog.Warn("consul lock session renew failed", "session", sessionID, "failures", failures, "error", err)
-				if failures >= 2 {
-					l.mu.Lock()
-					l.lockLost = true
-					l.mu.Unlock()
-					return
-				}
-			} else {
+			err := l.renewSession(st.sessionID)
+			if err == nil {
 				failures = 0
+				continue
+			}
+			failures++
+			recordRenewFailure(context.Background())
+			slog.Warn("consul lock session renew failed",
+				"key", l.key, "session", st.sessionID, "failures", failures, "error", err)
+			// 404 = 会话已不存在；连续失败 = 会话大概率已过期。两者都按丢失处理。
+			if isStatusError(err, http.StatusNotFound) || failures >= renewFailureThreshold {
+				st.markLost(fmt.Errorf("consulx: session renew failed %d time(s): %w", failures, err))
+				recordRenewFailure(context.Background())
+				recordLockLost(context.Background())
+				slog.Error("consul lock lost; session renew failed",
+					"key", l.key, "session", st.sessionID, "failures", failures, "error", err)
+				if l.opts.OnLost != nil {
+					go safeOnLost(l.opts.OnLost, l.key, st.lostErr())
+				}
+				return
 			}
 		}
 	}
+}
+
+// safeOnLost 执行用户回调，吞掉 panic 以免终止进程。
+func safeOnLost(fn func(key string, err error), key string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("consulx: OnLost callback panicked", "key", key, "panic", r)
+		}
+	}()
+	fn(key, err)
 }
 
 func (l *consulLock) renewSession(sessionID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/v1/session/renew/%s", l.locker.baseURL, sessionID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
+	u := fmt.Sprintf("%s/v1/session/renew/%s", l.locker.baseURL, url.PathEscape(sessionID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, nil)
 	if err != nil {
 		return err
 	}
@@ -324,18 +538,16 @@ func (l *consulLock) renewSession(sessionID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("renew session status=%d", resp.StatusCode)
-	}
-	return nil
+	_, err = readBodyAndCheck("consul renew session", resp)
+	return err
 }
 
 func (l *consulLock) destroySession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return nil
 	}
-	url := fmt.Sprintf("%s/v1/session/destroy/%s", l.locker.baseURL, sessionID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
+	u := fmt.Sprintf("%s/v1/session/destroy/%s", l.locker.baseURL, url.PathEscape(sessionID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, nil)
 	if err != nil {
 		return err
 	}
@@ -343,40 +555,86 @@ func (l *consulLock) destroySession(ctx context.Context, sessionID string) error
 
 	resp, err := l.locker.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("consul destroy session: %w", err)
 	}
 	defer resp.Body.Close()
-	return nil
+
+	_, err = readBodyAndCheck("consul destroy session", resp)
+	return err
 }
 
-func (l *consulLock) acquireKV(ctx context.Context, sessionID string) (bool, error) {
-	url := fmt.Sprintf("%s/v1/kv/%s?acquire=%s", l.locker.baseURL, l.fullKey(), sessionID)
+// escapeKeyPath 对 key 的每一段做 PathEscape，保留 "/" 作为分隔符。
+func escapeKeyPath(fullKey string) string {
+	segments := strings.Split(fullKey, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
+}
+
+func (l *consulLock) kvURL(fullKey string) string {
+	return l.locker.baseURL + "/v1/kv/" + escapeKeyPath(fullKey)
+}
+
+func (l *consulLock) acquireKV(ctx context.Context, sessionID string) (bool, uint64, error) {
 	var body io.Reader
 	if len(l.opts.Value) > 0 {
 		body = bytes.NewReader(l.opts.Value)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
+	q := "?acquire=" + url.QueryEscape(sessionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, l.kvURL(l.fullKey())+q, body)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	config.ApplyConsulToken(req)
 
 	resp, err := l.locker.client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("consul acquire kv: %w", err)
+		return false, 0, fmt.Errorf("consul acquire kv: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false, fmt.Errorf("consul acquire kv status=%d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	bodyBytes, err := readBodyAndCheck("consul acquire kv", resp)
+	if err != nil {
+		return false, parseConsulIndex(resp.Header), err
 	}
-	return strings.TrimSpace(string(respBody)) == "true", nil
+	return strings.TrimSpace(string(bodyBytes)) == "true", parseConsulIndex(resp.Header), nil
+}
+
+// acquireWithRetry 对 5xx/传输错误按指数退避重试；4xx 立即失败。
+// maxAttempts<=0 表示一直重试直到 ctx 结束。
+func (l *consulLock) acquireWithRetry(ctx context.Context, sessionID string, maxAttempts int) (bool, uint64, error) {
+	backoff := l.opts.RetryWait
+	if backoff <= 0 {
+		backoff = 250 * time.Millisecond
+	}
+	for attempt := 1; ; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, 0, ctxErr
+		}
+		acquired, index, err := l.acquireKV(ctx, sessionID)
+		if err == nil {
+			return acquired, index, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, index, ctxErr
+		}
+		if !isRetryable(err) {
+			return false, index, err
+		}
+		if maxAttempts > 0 && attempt >= maxAttempts {
+			return false, index, err
+		}
+		if !sleepCtx(ctx, backoff) {
+			return false, index, ctx.Err()
+		}
+		backoff = backoffNext(backoff)
+	}
 }
 
 func (l *consulLock) releaseKV(ctx context.Context, sessionID string) error {
-	url := fmt.Sprintf("%s/v1/kv/%s?release=%s", l.locker.baseURL, l.fullKey(), sessionID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
+	q := "?release=" + url.QueryEscape(sessionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, l.kvURL(l.fullKey())+q, nil)
 	if err != nil {
 		return err
 	}
@@ -384,27 +642,68 @@ func (l *consulLock) releaseKV(ctx context.Context, sessionID string) error {
 
 	resp, err := l.locker.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("consul release kv: %w", err)
 	}
 	defer resp.Body.Close()
-	return nil
+
+	_, err = readBodyAndCheck("consul release kv", resp)
+	return err
 }
 
-func (l *consulLock) waitKVChange(ctx context.Context, fullKey string) error {
-	waitCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
-	defer cancel()
+// waitKVChange 发起真正的 Consul Blocking Query：
+// 携带上次的 X-Consul-Index 与 wait，直到索引变化或等待窗口结束。
+func (l *consulLock) waitKVChange(ctx context.Context, fullKey string, index uint64, wait time.Duration) (uint64, error) {
+	if wait < minWatchWait {
+		wait = minWatchWait
+	}
+	if wait > maxWatchWait {
+		wait = maxWatchWait
+	}
+	q := url.Values{}
+	q.Set("wait", wait.String())
+	if index > 0 {
+		q.Set("index", strconv.FormatUint(index, 10))
+	}
 
-	url := fmt.Sprintf("%s/v1/kv/%s?wait=1s", l.locker.baseURL, fullKey)
-	req, err := http.NewRequestWithContext(waitCtx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.kvURL(fullKey)+"?"+q.Encode(), nil)
 	if err != nil {
-		return err
+		return index, err
 	}
 	config.ApplyConsulToken(req)
 
 	resp, err := l.locker.client.Do(req)
 	if err != nil {
-		return err
+		return index, err
 	}
 	defer resp.Body.Close()
-	return nil
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	next := parseConsulIndex(resp.Header)
+	if next == 0 {
+		next = index
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		// key 不存在（已被释放）：不是错误，继续尝试 acquire。
+		return next, nil
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return next, nil
+	default:
+		return next, &statusError{Op: "consul kv watch", Code: resp.StatusCode}
+	}
+}
+
+func parseConsulIndex(h http.Header) uint64 {
+	if h == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(h.Get("X-Consul-Index"))
+	if raw == "" {
+		return 0
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }

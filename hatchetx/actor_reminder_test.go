@@ -2,6 +2,7 @@ package hatchetx
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -68,6 +69,20 @@ func TestDeleteReminder_Validation(t *testing.T) {
 
 	if err := DeleteActorReminder(ctx, &Client{}, "wf", "r1", ""); err == nil || !strings.Contains(err.Error(), "reminderName and actorID are required") {
 		t.Fatalf("expected reminderName and actorID required error, got %v", err)
+	}
+}
+
+// TestIsNoContentErr 锁定「SDK 204 误报」的识别（删除结果另行列表校验）。
+func TestIsNoContentErr(t *testing.T) {
+	t.Parallel()
+	if isNoContentErr(nil) {
+		t.Fatal("nil must be false")
+	}
+	if !isNoContentErr(errors.New("received non-200 response from server. got status 204 with body ''")) {
+		t.Fatal("204 must be recognized")
+	}
+	if isNoContentErr(errors.New("got status 500")) {
+		t.Fatal("500 must not be treated as 204")
 	}
 }
 

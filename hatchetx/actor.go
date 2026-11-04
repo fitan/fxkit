@@ -8,11 +8,12 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/fitan/fxkit/di"
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	"github.com/tidwall/gjson"
-	"github.com/fitan/fxkit/di"
 )
 
 // DefaultActorConcurrencyExpr keys Hatchet concurrency on the actor instance id.
@@ -102,6 +103,16 @@ func NewActor[In, Out any](name string, handler ActorHandler[In, Out], opts ...A
 		if cache != nil && !cache.jsonTagFound && (cache.getter != nil || cache.hasActorID) {
 			slog.Warn("hatchetx: NewActor: input type has actor ID but does not JSON-serialize 'actorId' (embed hatchetx.ActorRef or field with json:\"actorId\")",
 				"actor", name, "type", inType.String())
+		}
+	}
+
+	if handler != nil {
+		inner := handler
+		handler = func(ctx context.Context, in In) (Out, error) {
+			start := time.Now()
+			out, err := inner(ctx, in)
+			recordActorRun(ctx, name, time.Since(start), err != nil)
+			return out, err
 		}
 	}
 

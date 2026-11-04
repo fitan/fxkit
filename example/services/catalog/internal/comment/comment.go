@@ -18,6 +18,9 @@ import (
 
 // Comment is a second resource used for explicit Huma Register (not RegisterResource)
 // plus crudx q= / cursor / JOIN / isnull.
+// Comment 的 gorm/model 字段。
+//
+// 过滤/排序白名单见 NewService 里的 crudx.ListSpec（含跨表 JOIN）。
 type Comment struct {
 	ID        int64          `gorm:"primaryKey" json:"-"`
 	ArticleID int64          `gorm:"index;not null" json:"-"`
@@ -73,32 +76,36 @@ func NewService(client *gormx.Client, cfg *Config, lc *di.Lifecycle) (*Service, 
 	s := &Service{
 		client: client,
 		cfg:    cfg,
-		listSpec: crudx.ListSpec{
-			Fields: map[string]crudx.FieldSpec{
-				"id":         {Column: "comments.id", Kind: crudx.FieldNumber},
-				"article_id": {Column: "comments.article_id", Kind: crudx.FieldNumber, Indexed: true},
-				"body":       {Column: "comments.body", Kind: crudx.FieldString, Indexed: true},
-				"note":       {Column: "comments.note", Kind: crudx.FieldString, Indexed: true},
-				"author":     {Column: "comments.author", Kind: crudx.FieldString, Indexed: true},
-				"created_at": {Column: "comments.created_at", Kind: crudx.FieldTime},
-			},
-			Relations: map[string]*crudx.RelationSpec{
-				"article": {
-					Table: "articles",
-					Alias: "article",
-					On:    "article.id = comments.article_id",
-					Fields: map[string]crudx.FieldSpec{
-						"title": {Column: "article.title", Kind: crudx.FieldString, Indexed: true},
-					},
+	}
+	// 过滤/排序白名单。map 字面量：Relations 与 Fields/SortFields 同级并列，
+	// JOIN 条件直接写在 On 里，不需要额外的嵌套 builder。
+	s.listSpec = crudx.ListSpec{
+		Fields: map[string]crudx.FieldSpec{
+			"id":         {Column: "comments.id", Kind: crudx.FieldNumber},
+			"article_id": {Column: "comments.article_id", Kind: crudx.FieldNumber, Indexed: true},
+			// body/note 是 TEXT 列：MySQL 无法建索引，用 Likeable 显式承认
+			// 全表扫描成本（既有行为，保留但明确标注）。
+			"body":       {Column: "comments.body", Kind: crudx.FieldString, Likeable: true},
+			"note":       {Column: "comments.note", Kind: crudx.FieldString, Likeable: true},
+			"author":     {Column: "comments.author", Kind: crudx.FieldString, Indexed: true},
+			"created_at": {Column: "comments.created_at", Kind: crudx.FieldTime},
+		},
+		Relations: map[string]*crudx.RelationSpec{
+			"article": {
+				Table: "articles",
+				Alias: "article",
+				On:    "article.id = comments.article_id",
+				Fields: map[string]crudx.FieldSpec{
+					"title": {Column: "article.title", Kind: crudx.FieldString, Indexed: true, Likeable: true},
 				},
 			},
-			SortFields: map[string]string{
-				"id":         "comments.id",
-				"created_at": "comments.created_at",
-			},
-			DefaultSort: "id",
-			Limits:      crudx.Limits{LimitDefault: page, LimitMax: 100},
 		},
+		SortFields: map[string]string{
+			"id":         "comments.id",
+			"created_at": "comments.created_at",
+		},
+		DefaultSort: "id",
+		Limits:      crudx.Limits{LimitDefault: page, LimitMax: 100},
 	}
 	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {

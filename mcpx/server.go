@@ -3,8 +3,11 @@ package mcpx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -17,15 +20,20 @@ type ServerConfig struct {
 	Handler    http.Handler      // 进程内直接分发请求的 HTTP Handler (如 chi.Mux，0 网络开销原生直通 Huma)
 	Headers    map[string]string // 转发请求时附带的请求头 (如 Authorization, X-API-Key 等)
 	Dispatcher Dispatcher        // 自定义调度器 (若未指定则自动基于 Handler 构造 InProcessDispatcher)
+	// MaxResponseBytes 限制单次 tool 调用返回的字符数（避免撑爆模型上下文）。
+	// 0 = 默认 1 MiB；负数 = 不限制。
+	MaxResponseBytes int
 }
 
 // Server 是基于 github.com/mark3labs/mcp-go 标准库构建的 Model Context Protocol 服务器。
 type Server struct {
 	cfg        ServerConfig
+	dispMu     sync.RWMutex
 	dispatcher Dispatcher
 	mcpServer  *mcpserver.MCPServer
 	toolsMu    sync.RWMutex
 	tools      map[string]Tool
+	maxResp    int
 }
 
 // NewServer 创建并初始化一个 MCP Server 实例。
@@ -55,6 +63,10 @@ func NewServer(cfg ServerConfig, tools []Tool) *Server {
 		dispatcher: disp,
 		mcpServer:  rawServer,
 		tools:      make(map[string]Tool, len(tools)),
+		maxResp:    cfg.MaxResponseBytes,
+	}
+	if s.maxResp == 0 {
+		s.maxResp = 1 << 20 // 1 MiB
 	}
 
 	for _, t := range tools {
@@ -72,15 +84,19 @@ func NewInProcessServer(name string, handler http.Handler, tools []Tool) *Server
 	}, tools)
 }
 
-// SetDispatcher 动态替换或设置请求分发执行器。
+// SetDispatcher 动态替换或设置请求分发执行器（并发安全）。
 func (s *Server) SetDispatcher(d Dispatcher) {
+	s.dispMu.Lock()
 	s.dispatcher = d
+	s.dispMu.Unlock()
 }
 
-// SetHandler 动态绑定进程内 HTTP Handler 并自动配置 InProcessDispatcher。
+// SetHandler 动态绑定进程内 HTTP Handler 并自动配置 InProcessDispatcher（并发安全）。
 func (s *Server) SetHandler(h http.Handler) {
+	s.dispMu.Lock()
 	s.cfg.Handler = h
 	s.dispatcher = NewInProcessDispatcher(h, s.cfg.Headers)
+	s.dispMu.Unlock()
 }
 
 // RegisterTool 动态注册或更新工具，并将其挂载到底层 MCP Server。
@@ -88,6 +104,9 @@ func (s *Server) RegisterTool(tool Tool) {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 
+	if _, exists := s.tools[tool.Name]; exists {
+		slog.Warn("mcpx: duplicate tool name, overwriting", "tool", tool.Name)
+	}
 	s.tools[tool.Name] = tool
 	mcpTool := tool.ToMCP()
 
@@ -95,8 +114,12 @@ func (s *Server) RegisterTool(tool Tool) {
 		args, ok := req.Params.Arguments.(map[string]any)
 		if !ok && req.Params.Arguments != nil {
 			b, err := json.Marshal(req.Params.Arguments)
-			if err == nil {
-				_ = json.Unmarshal(b, &args)
+			if err != nil {
+				return mcp.NewToolResultError("invalid tool arguments: " + err.Error()), nil
+			}
+			if err := json.Unmarshal(b, &args); err != nil {
+				// 不要静默降级为“空参数执行”——那会用一个零值请求打真实接口。
+				return mcp.NewToolResultError("invalid tool arguments: " + err.Error()), nil
 			}
 		}
 		if args == nil {
@@ -129,18 +152,30 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 
 // Dispatcher 返回当前配置的执行调度器。
 func (s *Server) Dispatcher() Dispatcher {
+	s.dispMu.RLock()
+	defer s.dispMu.RUnlock()
 	return s.dispatcher
 }
 
 // executeToolCall 将 Tool 调用委托给底层的 InProcessDispatcher。
 func (s *Server) executeToolCall(ctx context.Context, tool Tool, args map[string]any) (string, bool) {
-	if s.dispatcher == nil {
+	disp := s.Dispatcher()
+	if disp == nil {
+		recordToolCall(ctx, tool.Name, 0, true)
 		return "No in-process dispatcher configured for MCP server", true
 	}
 
-	result, err := s.dispatcher.Dispatch(ctx, tool, args)
+	start := time.Now()
+	ctx, span := startToolSpan(ctx, tool)
+	result, err := disp.Dispatch(ctx, tool, args)
+	recordToolCall(ctx, tool.Name, time.Since(start), err != nil)
+	endToolSpan(span, err)
 	if err != nil {
 		return err.Error(), true
+	}
+	if s.maxResp > 0 && len(result) > s.maxResp {
+		orig := len(result)
+		result = result[:s.maxResp] + fmt.Sprintf("\n…(truncated, %d bytes total)", orig)
 	}
 	return result, false
 }

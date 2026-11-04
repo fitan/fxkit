@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,14 +15,19 @@ import (
 
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
-	"github.com/fitan/fxkit/server"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/server"
 )
 
 const (
 	defaultTTL             = "15s"
 	defaultDeregisterAfter = "1m"
 	ttlPassInterval        = 5 * time.Second
+	// ttlWarnAfterFailures 连续失败达到该次数后从 Debug 升到 Warn（带次数，避免刷屏）。
+	ttlWarnAfterFailures = 2
+	// ttlReregisterAfterFailures 连续失败达到该次数后尝试重新注册
+	// （默认 3*5s ≈ 15s，即默认 TTL 窗口）。
+	ttlReregisterAfterFailures = 3
 )
 
 type registerConfigError struct{ msg string }
@@ -42,9 +46,8 @@ func isRegisterConfigError(err error) bool {
 type registerSelfParams struct {
 	LC     *di.Lifecycle
 	Disc   *Config
-	App    *config.App          
-	Server *server.Config       
-	HTTP   *server.HTTPServer    // start-order: listen before register
+	App    *config.App
+	Server *server.Config
 }
 
 // registerSelfLifecycle registers app.name on the Consul agent when discovery.register is true.
@@ -53,46 +56,53 @@ func registerSelfLifecycle(p registerSelfParams) {
 	if p.Disc == nil {
 		return
 	}
-	_ = p.HTTP // depend on listener so the port is bound before TTL registration
 	var cancelTTL context.CancelFunc
 	var registeredID string
 	if p.LC != nil {
 		p.LC.Append(di.Hook{
-		OnStart: func(ctx context.Context) error {
-			id, err := registerSelf(ctx, p.Disc, p.App, p.Server)
-			if err != nil {
-				if isRegisterConfigError(err) {
-					return err
+			OnStart: func(ctx context.Context) error {
+				id, err := registerSelf(ctx, p.Disc, p.App, p.Server)
+				if err != nil {
+					if isRegisterConfigError(err) {
+						return err
+					}
+					slog.Warn("consul register skipped", "error", err)
+					return nil
 				}
-				slog.Warn("consul register skipped", "error", err)
+				if id == "" {
+					return nil
+				}
+				registeredID = id
+				ttlCtx, cancel := context.WithCancel(context.Background())
+				cancelTTL = cancel
+				// 恢复后若服务/检查已被 Consul 移除，需要重新注册。
+				reregister := func(rctx context.Context) (string, error) {
+					return registerSelfWithClient(rctx, &http.Client{Timeout: 8 * time.Second}, p.Disc, p.App, p.Server)
+				}
+				go ttlPassLoop(ttlCtx, p.Disc, id, reregister)
 				return nil
-			}
-			if id == "" {
+			},
+			OnStop: func(ctx context.Context) error {
+				if cancelTTL != nil {
+					cancelTTL()
+				}
+				if registeredID == "" {
+					return nil
+				}
+				if err := deregisterSelf(ctx, p.Disc, registeredID); err != nil {
+					slog.Warn("consul deregister skipped", "error", err)
+				}
 				return nil
-			}
-			registeredID = id
-			ttlCtx, cancel := context.WithCancel(context.Background())
-			cancelTTL = cancel
-			go ttlPassLoop(ttlCtx, p.Disc, id)
-			return nil
-		},
-		OnStop: func(ctx context.Context) error {
-			if cancelTTL != nil {
-				cancelTTL()
-			}
-			if registeredID == "" {
-				return nil
-			}
-			if err := deregisterSelf(ctx, p.Disc, registeredID); err != nil {
-				slog.Warn("consul deregister skipped", "error", err)
-			}
-			return nil
-		},
-	})
+			},
+		})
 	}
 }
 
 func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *server.Config) (string, error) {
+	return registerSelfWithClient(ctx, &http.Client{Timeout: 8 * time.Second}, disc, app, srv)
+}
+
+func registerSelfWithClient(ctx context.Context, client *http.Client, disc *Config, app *config.App, srv *server.Config) (string, error) {
 	if disc == nil || !disc.Register {
 		return "", nil
 	}
@@ -146,7 +156,9 @@ func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *serve
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	if client == nil {
+		client = &http.Client{Timeout: 8 * time.Second}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, agentBase+"/v1/agent/service/register", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -158,9 +170,8 @@ func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *serve
 		return "", err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("consul register status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	if _, err := readBodyAndCheck("consul register", resp); err != nil {
+		return "", err
 	}
 	_ = passTTL(ctx, client, agentBase, id)
 	slog.Info("consul service registered",
@@ -186,7 +197,23 @@ func mergeRegisterTags(extra []string) []string {
 	return out
 }
 
-func ttlPassLoop(ctx context.Context, disc *Config, serviceID string) {
+// ttlPassLoop 以 production 默认参数运行 TTL 心跳。
+func ttlPassLoop(ctx context.Context, disc *Config, serviceID string, reregister func(context.Context) (string, error)) {
+	ttlPassLoopWithClient(ctx, &http.Client{Timeout: 3 * time.Second}, ttlPassInterval, disc, serviceID, reregister)
+}
+
+// ttlPassLoopWithClient 发送 TTL 心跳：
+//   - 连续失败达到 ttlWarnAfterFailures 后从 Debug 升级为 Warn（带 failures 计数，避免刷屏）；
+//   - 404（check/service 已不存在）或连续失败达到 ttlReregisterAfterFailures 时调用
+//     reregister 重新注册，成功后退避计数归零。
+func ttlPassLoopWithClient(
+	ctx context.Context,
+	client *http.Client,
+	interval time.Duration,
+	disc *Config,
+	serviceID string,
+	reregister func(context.Context) (string, error),
+) {
 	if disc == nil {
 		return
 	}
@@ -198,17 +225,64 @@ func ttlPassLoop(ctx context.Context, disc *Config, serviceID string) {
 	if err != nil {
 		return
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	t := time.NewTicker(ttlPassInterval)
+	if client == nil {
+		client = &http.Client{Timeout: 3 * time.Second}
+	}
+	if interval <= 0 {
+		interval = ttlPassInterval
+	}
+	// 重新注册的冷却时间：避免 404 持续存在时每个 tick 都重注册。
+	cooldown := 3 * interval
+
+	t := time.NewTicker(interval)
 	defer t.Stop()
+
+	failures := 0
+	var lastRegister time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := passTTL(ctx, client, agentBase, serviceID); err != nil {
-				slog.Debug("consul ttl pass failed", "id", serviceID, "error", err)
+			err := passTTL(ctx, client, agentBase, serviceID)
+			if err == nil {
+				if failures >= ttlWarnAfterFailures {
+					slog.Info("consul ttl pass recovered", "id", serviceID, "failures", failures)
+				}
+				failures = 0
+				continue
 			}
+			failures++
+			if failures >= ttlWarnAfterFailures {
+				slog.Warn("consul ttl pass failed", "id", serviceID, "failures", failures, "error", err)
+			} else {
+				slog.Debug("consul ttl pass failed", "id", serviceID, "failures", failures, "error", err)
+			}
+
+			removed := isStatusError(err, http.StatusNotFound)
+			if !removed && failures < ttlReregisterAfterFailures {
+				continue
+			}
+			if reregister == nil {
+				continue
+			}
+			if !lastRegister.IsZero() && time.Since(lastRegister) < cooldown {
+				continue
+			}
+			lastRegister = time.Now()
+
+			newID, rerr := reregister(ctx)
+			if rerr != nil {
+				slog.Warn("consul re-register after ttl failures failed",
+					"id", serviceID, "failures", failures, "error", rerr)
+				continue
+			}
+			if newID != "" && newID != serviceID {
+				slog.Warn("consul re-register changed service id", "old", serviceID, "new", newID)
+			}
+			slog.Info("consul service re-registered after ttl failures",
+				"id", serviceID, "failures", failures)
+			failures = 0
 		}
 	}
 }
@@ -225,11 +299,8 @@ func passTTL(ctx context.Context, client *http.Client, agentBase, serviceID stri
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	return nil
+	_, err = readBodyAndCheck("consul ttl pass", resp)
+	return err
 }
 
 func deregisterSelf(ctx context.Context, disc *Config, serviceID string) error {
@@ -254,9 +325,8 @@ func deregisterSelf(ctx context.Context, disc *Config, serviceID string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("consul deregister status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	if _, err := readBodyAndCheck("consul deregister", resp); err != nil {
+		return err
 	}
 	slog.Info("consul service deregistered", "id", serviceID)
 	return nil

@@ -17,6 +17,9 @@ type Config struct {
 	MaxRetries int `yaml:"max_retries"`
 	// ClaimTimeout processing 租约时长。默认 30s；必须 > 0。
 	ClaimTimeout time.Duration `yaml:"claim_timeout"`
+	// PublishConcurrency 同一批内的并发投递数。默认 1（严格顺序）；
+	// >1 可提升吞吐，但不保证同一批内的投递顺序（语义仍是 at-least-once）。
+	PublishConcurrency int `yaml:"publish_concurrency"`
 }
 
 // SetDefaults 填入编译期默认值。
@@ -25,6 +28,7 @@ func (c *Config) SetDefaults() {
 	c.BatchSize = 50
 	c.MaxRetries = 10
 	c.ClaimTimeout = 30 * time.Second
+	c.PublishConcurrency = 1
 }
 
 // Validate 拒绝非正间隔/批次。非法值启动失败。
@@ -40,6 +44,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxRetries < 0 {
 		return fmt.Errorf("outbox.max_retries must be >= 0")
+	}
+	if c.PublishConcurrency < 0 {
+		return fmt.Errorf("outbox.publish_concurrency must be >= 0 (0 = default 1)")
 	}
 	return nil
 }

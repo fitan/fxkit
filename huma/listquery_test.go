@@ -1,10 +1,7 @@
 package huma
 
 import (
-	"errors"
 	"testing"
-
-	"github.com/fitan/fxkit/fxerrors"
 )
 
 func TestListParamsFromInput(t *testing.T) {
@@ -32,12 +29,12 @@ func TestListParamsFromInput(t *testing.T) {
 }
 
 func TestListParamsFromInput_decodeError(t *testing.T) {
-	_, err := ListParamsFromInput(&ListQueryInput{Q: []string{"%ZZ"}})
-	if err == nil {
-		t.Fatal("expected decode error")
+	// 非法百分号转义现在是字面量（搜索词按原文匹配），不再打 400。
+	p, err := ListParamsFromInput(&ListQueryInput{Q: []string{"%ZZ"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	var fe *fxerrors.Error
-	if !errors.As(err, &fe) || fe.Details["reason"] != "URL_DECODE_FAILED" {
-		t.Fatalf("got %v", err)
+	if len(p.Q) != 1 || p.Q[0] != "%ZZ" {
+		t.Fatalf("got %v, want literal %%ZZ", p.Q)
 	}
 }

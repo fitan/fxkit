@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fitan/fxkit/fxerrors"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +22,12 @@ type listApplyOpts struct {
 // or nextCursor: ApplyList already applies Limit, so Count on the returned session
 // is truncated.
 func ApplyList(tx *gorm.DB, spec ListSpec, params *ListParams) (*gorm.DB, error) {
+	if tx == nil {
+		return nil, fxerrors.Internal("crudx.ApplyList: nil db")
+	}
+	if params == nil {
+		return nil, fxerrors.Internal("crudx.ApplyList: nil params")
+	}
 	out, _, err := applyList(tx, spec, params, pkOptsFromDB(tx))
 	return out, err
 }
@@ -56,6 +63,12 @@ func qualifiedColumn(table, column string) string {
 }
 
 func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpts) (*gorm.DB, int, error) {
+	if tx == nil {
+		return nil, 0, fxerrors.Internal("crudx.ApplyList: nil db")
+	}
+	if params == nil {
+		return nil, 0, fxerrors.Internal("crudx.ApplyList: nil params")
+	}
 	spec = deriveSortFields(spec)
 	spec.Normalize(params)
 
@@ -67,6 +80,10 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 	joined := map[string]struct{}{}
 	lim := spec.Limits.normalized()
 	joinCount := 0
+	// needDistinct：只有「可能放大行数」的 JOIN（未知基数或一对多）才需要 DISTINCT。
+	// 多对一/一对一关联跳过 DISTINCT，既省一次排序去重，也避免 PG 的
+	// "ORDER BY expressions must appear in select list" 限制。
+	needDistinct := false
 
 	ensureJoins := func(rawQ string, joins []joinPlan) error {
 		for _, j := range joins {
@@ -76,6 +93,9 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 			joinCount++
 			if joinCount > lim.MaxJoins {
 				return InvalidQueryCondition(rawQ, ReasonTooManyJoins)
+			}
+			if j.Cardinality != RelationToOne {
+				needDistinct = true
 			}
 			tx = tx.Joins(j.SQL)
 			joined[j.Alias] = struct{}{}
@@ -131,9 +151,40 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 	}
 
 	sortBy, sortDir := params.SortBy, params.SortDirection
+	hasCursor := params.Cursor != ""
+	var cursorSortVal any
+	var cursorPK string
+	if hasCursor {
+		csb, csd, sortVal, pk, err := DecodeCursor(params.Cursor)
+		if err != nil {
+			return nil, joinCount, err
+		}
+		// 游标内的排序是权威的：翻页时客户端可以只带 cursor（direction 为空会被
+		// Normalize 归一为 asc）。只有调用方显式传入且与游标不一致才算冲突。
+		// 游标内的排序是权威的：传输层（例如 Huma 的 `default:"asc"`）会在
+		// 客户端未传时填入默认值，无法区分「显式传入」与「框架默认」。
+		// 因此方向冲突一律以游标为准，不报错（否则 desc 翻页第二页必 400）。
+		if csb != "" && params.sortByExplicit && csb != params.SortBy {
+			return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
+		}
+		if csb != "" {
+			sortBy = csb
+		}
+		if csd != "" {
+			sortDir = csd
+		}
+		cursorSortVal, cursorPK = sortVal, pk
+	}
+	if strings.TrimSpace(sortBy) == "" && spec.DefaultSort != "" {
+		sortBy, sortDir = ParseSort(spec.DefaultSort)
+	}
 	col, dir, ok := validatedSortPath(spec, sortBy, sortDir)
+	if !ok && (params.sortByExplicit || (hasCursor && strings.TrimSpace(sortBy) != "")) {
+		// 非白名单排序字段不再静默忽略（否则 offset 分页会重复/漏行）。
+		return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
+	}
 	if ok {
-		if res, err := resolveFieldForSort(spec, params.SortBy); err == nil {
+		if res, err := resolveFieldForSort(spec, sortBy); err == nil {
 			if err := ensureJoins("", res.Joins); err != nil {
 				return nil, joinCount, err
 			}
@@ -141,43 +192,44 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		if err := rejectRelationCursor(spec, params, sortBy); err != nil {
 			return nil, joinCount, err
 		}
+		// NULL 统一排在最后：PG/MySQL/SQLite 都把 false 排在 true 之前。
+		//
+		// 但 PostgreSQL 不允许 `SELECT DISTINCT` 下 ORDER BY 引用未出现在 SELECT
+		// 列表里的表达式（SQLSTATE 42P10）。一对多 JOIN 需要 DISTINCT 时只能
+		// 跳过该表达式，NULL 排序交给数据库默认（仅影响可空排序列）。
+		if !needDistinct {
+			tx = tx.Order(fmt.Sprintf("(%s IS NULL)", col))
+		}
 		tx = tx.Order(fmt.Sprintf("%s %s", col, dir))
 		if opts.PKColumn != "" && !isSameColumn(opts.PKColumn, col) {
 			tx = tx.Order(fmt.Sprintf("%s %s", opts.PKColumn, dir))
 		}
+		// 记录实际生效的排序，供 List 生成 nextCursor 时使用（游标翻页时 params
+		// 里的 direction 可能已被空值归一成 asc）。
+		params.SortBy, params.SortDirection = sortBy, dir
 	}
 
-	if params.Cursor != "" {
+	if hasCursor {
 		if opts.PKColumn == "" {
 			return nil, joinCount, InvalidQueryCondition("", ReasonCursorNeedsPK)
 		}
-		csb, csd, sortVal, pk, err := DecodeCursor(params.Cursor)
-		if err != nil {
-			return nil, joinCount, err
-		}
-		if csb != "" && params.SortBy != "" && csb != params.SortBy {
-			return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
-		}
-		if csd != "" && params.SortDirection != "" && csd != params.SortDirection {
-			return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
-		}
 		if !ok {
-			col, dir, ok = validatedSortPath(spec, csb, csd)
-			if !ok {
-				return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
-			}
+			return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
 		}
-		if err := rejectRelationCursor(spec, params, firstNonEmpty(params.SortBy, csb)); err != nil {
-			return nil, joinCount, err
-		}
-		sql, err := cursorWhereSQL(col, opts.PKColumn, dir)
+		sql, args, err := cursorWhereSQL(col, opts.PKColumn, dir, cursorSortVal, coerceCursorPK(cursorPK, opts.PKKind))
 		if err != nil {
 			return nil, joinCount, err
 		}
-		tx = tx.Where(sql, sortVal, sortVal, coerceCursorPK(pk, opts.PKKind))
+		tx = tx.Where(sql, args...)
 	}
 
-	if joinCount > 0 {
+	if joinCount > 0 && needDistinct {
+		// 一对多 JOIN 会放大行数，必须 DISTINCT；此时按关联列排序在各方言上
+		// 语义不一致（PG 直接拒绝：ORDER BY 表达式必须出现在 SELECT 列表）。
+		// 与其让 PG 报 500、SQLite “看起来能用”，不如在各方言上统一为 400。
+		if ok && isForeignColumn(col, opts.PKColumn) {
+			return nil, joinCount, InvalidQueryCondition("", ReasonDistinctRelationSort)
+		}
 		// SELECT DISTINCT of the root model collapses 1:N JOIN duplicates.
 		tx = tx.Distinct()
 	}
@@ -191,6 +243,19 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 	return tx, joinCount, nil
 }
 
+// isForeignColumn 判断列是否不属于根表（即来自 JOIN 的关联表）。
+func isForeignColumn(col, pkColumn string) bool {
+	i := strings.LastIndex(col, ".")
+	if i < 0 {
+		return false
+	}
+	j := strings.LastIndex(pkColumn, ".")
+	if j < 0 {
+		return false
+	}
+	return col[:i] != pkColumn[:j]
+}
+
 func isSameColumn(a, b string) bool {
 	if a == b {
 		return true
@@ -202,15 +267,6 @@ func isSameColumn(a, b string) bool {
 		return true
 	}
 	return false
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func rejectRelationCursor(spec ListSpec, params *ListParams, sortBy string) error {
@@ -258,13 +314,14 @@ func applyCondition(tx *gorm.DB, col string, c Condition) (*gorm.DB, error) {
 		if !ok {
 			return nil, InvalidQueryCondition("", ReasonInvalidValueType)
 		}
-		return tx.Where(col+` LIKE ? ESCAPE '\'`, "%"+escapeLikePattern(s)+"%"), nil
+		// 用 '!' 作转义符：MySQL 默认 sql_mode 下反斜杠会转义引号。
+		return tx.Where(col+" LIKE ? ESCAPE '!'", "%"+escapeLikePattern(s)+"%"), nil
 	case OpNotLike:
 		s, ok := c.Values[0].(string)
 		if !ok {
 			return nil, InvalidQueryCondition("", ReasonInvalidValueType)
 		}
-		return tx.Where(col+` NOT LIKE ? ESCAPE '\'`, "%"+escapeLikePattern(s)+"%"), nil
+		return tx.Where(col+" NOT LIKE ? ESCAPE '!'", "%"+escapeLikePattern(s)+"%"), nil
 	case OpGT, OpGTE, OpLT, OpLTE:
 		if len(c.Values) == 0 || c.Values[0] == nil {
 			return nil, InvalidQueryCondition(c.RawQ, ReasonInvalidValueType)
@@ -272,15 +329,31 @@ func applyCondition(tx *gorm.DB, col string, c Condition) (*gorm.DB, error) {
 		cmp := map[Operator]string{OpGT: " > ?", OpGTE: " >= ?", OpLT: " < ?", OpLTE: " <= ?"}
 		return tx.Where(col+cmp[c.Op], c.Values[0]), nil
 	case OpIn:
-		if len(c.Values) == 0 {
+		vals, hasNull := splitNullValues(c.Values)
+		switch {
+		case len(vals) == 0 && !hasNull:
 			return tx.Where("1 = 0"), nil
+		case len(vals) == 0:
+			return tx.Where(col + " IS NULL"), nil
+		case hasNull:
+			// SQL 的 IN (NULL) 永远不成立，必须显式合并 IS NULL。
+			return tx.Where("("+col+" IN ? OR "+col+" IS NULL)", vals), nil
+		default:
+			return tx.Where(col+" IN ?", vals), nil
 		}
-		return tx.Where(col+" IN ?", c.Values), nil
 	case OpNotIn:
-		if len(c.Values) == 0 {
+		vals, hasNull := splitNullValues(c.Values)
+		switch {
+		case len(vals) == 0 && !hasNull:
 			return tx, nil
+		case len(vals) == 0:
+			return tx.Where(col + " IS NOT NULL"), nil
+		case hasNull:
+			// NOT IN (NULL) 对任何行都是 UNKNOWN，必须显式排除 NULL。
+			return tx.Where("("+col+" NOT IN ? AND "+col+" IS NOT NULL)", vals), nil
+		default:
+			return tx.Where(col+" NOT IN ?", vals), nil
 		}
-		return tx.Where(col+" NOT IN ?", c.Values), nil
 	default:
 		return tx, nil
 	}
@@ -330,8 +403,23 @@ func coerceCursorPK(pk string, kind reflect.Kind) any {
 	return pk
 }
 
-// escapeLikePattern escapes \, %, and _ so user input is matched literally inside LIKE.
+// escapeLikePattern escapes the LIKE escape char '!', plus % and _ so user input
+// is matched literally inside LIKE ... ESCAPE '!'.
 func escapeLikePattern(s string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	replacer := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
 	return replacer.Replace(s)
+}
+
+// splitNullValues separates nil entries from real IN/NOT IN values.
+func splitNullValues(values []any) ([]any, bool) {
+	out := make([]any, 0, len(values))
+	hasNull := false
+	for _, v := range values {
+		if v == nil {
+			hasNull = true
+			continue
+		}
+		out = append(out, v)
+	}
+	return out, hasNull
 }
