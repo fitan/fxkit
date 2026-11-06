@@ -13,6 +13,7 @@
 > 第一次使用？先看 **[整体使用指南（docs/guide.md）](./docs/guide.md)**（按使用旅程组织）；
 > 本文是分章参考，查具体配置/API 时用。
 > 上线前读 **[生产清单（docs/production-checklist.md）](./docs/production-checklist.md)**；
+> 暴露公网前读 **[南北向网关（docs/gateway-traefik.md）](./docs/gateway-traefik.md)**；
 > 写测试看 **[测试指南（docs/testing.md）](./docs/testing.md)**。
 
 1. [快速开始](#1-快速开始)
@@ -42,6 +43,7 @@
 16. [脚手架 CLI](#16-脚手架-cli)
 17. [脚手架示例](#17-脚手架示例)
 18. [安全与运维清单](#18-安全与运维清单)
+    - [南北向网关（Traefik）](#南北向网关traefik)
 19. [架构示意](#19-架构示意)
 20. [升级与迁移](#20-升级与迁移)
 
@@ -1559,6 +1561,27 @@ Consul watch、健康检查并发聚合），非并发测试发现不了问题�
 
 `authz` / `hatchetx` / `huma` / `mcpx` / `openapi` / `fxerrors` 暂无门禁
 （40–66%），后续可按需加入。新增代码时请勿让所在包的覆盖率跌破门禁。
+
+---
+
+### 南北向网关（Traefik）
+
+框架**不做**网关：TLS 终止、跨副本全局限流、L7 路由/灰度、WAF 都属于基础设施。
+推荐分工：**Traefik 负责边缘，fxkit 负责业务鉴权与单实例自保**。
+
+完整指南（含可直接改用的配置文件）：
+**[docs/gateway-traefik.md](./docs/gateway-traefik.md)**；
+参考配置：`example/traefik/traefik.prod.yml` + `example/traefik/dynamic.prod.yml`。
+
+要点速览：
+
+- 路由由**服务自己**在 Consul tag 里声明（`traefik.http.routers.<name>.rule`），加服务不改网关
+- 四个必配中间件：安全头、边缘限流、熔断、body 上限
+- SSE / MCP 路由要**单独建 router**：不挂 `buffering`，entryPoint 的 `writeTimeout` 为 0
+- 框架侧的 `server.rate_limit` 在网关后应**关闭**：它按 `RemoteAddr` 计数且不信任 XFF，
+  网关后所有请求同 IP，会退化成整站单桶
+- 三处超时要按「网关 ≥ 框架 ≥ 业务」排列，否则会出现网关 504 但服务日志显示成功
+- `/docs`、`/openapi.*`、`/mcp`、`/authz/*` 不要配公网路由
 
 ---
 

@@ -1,0 +1,83 @@
+# 生产参考配置：南北向入口（Traefik v3）
+#
+# 用法：
+#   docker run --rm \
+#     -v "$PWD/traefik.prod.yml:/etc/traefik/traefik.yml:ro" \
+#     -v "$PWD/dynamic.prod.yml:/etc/traefik/dynamic.yml:ro" \
+#     -v "$PWD/acme:/acme" \
+#     -p 80:80 -p 443:443 -p 8080:8080 \
+#     traefik:v3.7
+#
+# 前置已有云 LB / Ingress 做 TLS 终止时，删掉 websecure 与 ACME，
+# 并把服务侧 router 的 entrypoints 改成 web。
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: le
+    # SSE / MCP 长连接：writeTimeout 必须为 0，且该路由不挂 buffering
+    transport:
+      respondingTimeouts:
+        readTimeout: 60s
+        writeTimeout: 0
+        idleTimeout: 120s
+    # 让后端拿到真实客户端 IP（仅在你信任这些网段时开启）
+    forwardedHeaders:
+      trustedIPs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+
+certificatesResolvers:
+  le:
+    acme:
+      email: ops@example.com # 改成你的运维邮箱
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+
+api:
+  dashboard: true
+  # 生产不要 insecure，改用下面这种「内网可访问」的方式
+  # insecure: true
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+  consulCatalog:
+    exposedByDefault: false # 只有带 traefik.enable=true 的服务才会被路由
+    prefix: traefik
+    refreshInterval: 2s
+    endpoint:
+      address: "127.0.0.1:8500"
+      scheme: http
+
+# 后端超时：外层 >= 内层，与 fxkit server.read_timeout 对齐
+serversTransport:
+  forwardingTimeouts:
+    dialTimeout: 5s
+    responseHeaderTimeout: 60s
+    idleConnTimeout: 90s
+
+log:
+  level: INFO
+
+# 与 fxkit 的 OTel 输出到同一个 collector，靠 traceparent 串联
+# tracing:
+#   serviceName: traefik
+#   sampleRate: 0.1
+#   otlp:
+#     http:
+#       endpoint: "http://otel-collector:4318/v1/traces"

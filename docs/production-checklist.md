@@ -68,7 +68,7 @@ otel:
 - [ ] `db.dsn` 已带语句级超时（`statement_timeout` / `readTimeout`）
 - [ ] `server.log_payloads=false`
 - [ ] CORS 不是 `*`
-- [ ] 限流已开（框架 + 网关）
+- [ ] 限流已开（边缘靠网关；框架内限流在网关后应关闭，否则退化成整站单桶）
 
 ### 为什么 DSN 必须带语句级超时
 
@@ -149,7 +149,23 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 
 ---
 
-## 5. 多副本注意事项
+## 5. 南北向网关
+
+公网入口必须经过网关，完整方案见 **[gateway-traefik.md](./gateway-traefik.md)**。
+
+- [ ] TLS 终止（网关或前置 LB），HTTP 全部跳转 HTTPS
+- [ ] 安全响应头（HSTS / nosniff / referrer-policy）
+- [ ] 边缘限流（按 API Key 或真实 IP，**不是**按网关 IP）
+- [ ] 熔断（异常实例快速摘除，避免重试放大）
+- [ ] `maxRequestBodyBytes` 与 `server.max_body_bytes` 对齐
+- [ ] SSE/MCP 路由：不挂 buffering，entryPoint `writeTimeout: 0`
+- [ ] `/docs`、`/openapi.*`、`/mcp`、`/authz/*` 无公网路由
+- [ ] 超时链路：网关 ≥ `server.write_timeout` ≥ 业务耗时
+- [ ] `server.rate_limit.enabled=false`（网关后它失去按客户端限流的意义）
+
+---
+
+## 6. 多副本注意事项
 
 - [ ] Consul 锁：确认 `TTL`（默认 15s）大于一次续租 RTT 的 3 倍以上；关注
       `consulx.lock.renew.failures` 与 `consulx.lock.lost`。
@@ -161,7 +177,7 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 
 ---
 
-## 6. 安全清单
+## 7. 安全清单
 
 - [ ] JWT：`issuer` / `audience` / JWKS 可达；`tls_insecure=false`
 - [ ] Casbin：`bootstrap_role` 不授予通配；`auto_bind_bootstrap=false`
@@ -172,7 +188,7 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 
 ---
 
-## 7. 上线后 24h 观察
+## 8. 上线后 24h 观察
 
 - [ ] `/readyz` 无抖动
 - [ ] `outbox.event.lag` P99 稳定

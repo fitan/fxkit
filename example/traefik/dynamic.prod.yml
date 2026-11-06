@@ -1,0 +1,75 @@
+# 生产参考：中间件定义（file provider）
+#
+# 中间件只需在此定义一次，服务侧用 Consul tag 引用名字，例如：
+#   traefik.http.routers.catalog.middlewares=sec-headers,catalog-strip,rate-limit-principal,cb,buffered
+#
+# 注意：SSE / MCP 路由不要挂 buffered / retry-idempotent。
+
+http:
+  middlewares:
+    # ---- 安全响应头（含 HSTS；确认全站 HTTPS 后再开 stsSeconds）----
+    sec-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: strict-origin-when-cross-origin
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+
+    # ---- 边缘限流 ----
+    # 有 API Key 的开放接口：按 key 限流（避免多租户互相影响）
+    rate-limit-principal:
+      rateLimit:
+        average: 200
+        burst: 400
+        period: 1s
+        sourceCriterion:
+          requestHeaderName: X-Api-Key
+
+    # 无 API Key 的接口：按来源 IP 限流
+    rate-limit-ip:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
+
+    # ---- 熔断：异常实例快速摘除，避免重试放大 ----
+    cb:
+      circuitBreaker:
+        expression: NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.25
+        checkPeriod: 10s
+        fallbackDuration: 30s
+        recoveryDuration: 10s
+
+    # ---- 请求/响应体上限（与 fxkit server.max_body_bytes 保持一致）----
+    buffered:
+      buffering:
+        maxRequestBodyBytes: 1048576 # 1 MiB
+        memRequestBodyBytes: 65536
+        maxResponseBodyBytes: 10485760 # 10 MiB
+
+    # ---- 重试：只给幂等方法挂 ----
+    retry-idempotent:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    # ---- 内部端点白名单（/docs、/mcp、/authz 等）----
+    internal-only:
+      ipAllowList:
+        sourceRange:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+
+    # ---- 路径前缀剥离 ----
+    catalog-strip:
+      stripPrefix:
+        prefixes:
+          - /catalog
+    storefront-strip:
+      stripPrefix:
+        prefixes:
+          - /storefront
