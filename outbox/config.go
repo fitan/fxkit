@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -17,9 +18,18 @@ type Config struct {
 	MaxRetries int `yaml:"max_retries"`
 	// ClaimTimeout processing 租约时长。默认 30s；必须 > 0。
 	ClaimTimeout time.Duration `yaml:"claim_timeout"`
-	// PublishConcurrency 同一批内的并发投递数。默认 1（严格顺序）；
-	// >1 可提升吞吐，但不保证同一批内的投递顺序（语义仍是 at-least-once）。
+	// PublishConcurrency 同一批内的并发投递数。默认 1（严格顺序）。
+	//
+	// 未设 [PartitionField] 时：>1 可提升吞吐，但不保证同一批内的投递顺序。
+	// 设了 [PartitionField] 时：它变成「并行组数」——同一分组内严格串行，
+	// 不同分组并行，因此每个 key 的事件仍然按产生顺序投递。
+	// 语义始终是 at-least-once。
 	PublishConcurrency int `yaml:"publish_concurrency"`
+	// PartitionField 是 payload 中用于分组顺序的 JSON 字段（如 "actorId"）。
+	//
+	// 为空 = 不分组（默认）。设置后，同一字段值的事件串行投递，
+	// 不同值的事件可并行——用于「高吞吐 + 同一 actor 保序」。
+	PartitionField string `yaml:"partition_field"`
 }
 
 // SetDefaults 填入编译期默认值。
@@ -45,8 +55,12 @@ func (c Config) Validate() error {
 	if c.MaxRetries < 0 {
 		return fmt.Errorf("outbox.max_retries must be >= 0")
 	}
+	// partition_field 必须是简单的 JSON 路径（字段名或 a.b）。
+	if f := strings.TrimSpace(c.PartitionField); strings.ContainsAny(f, " \t\n*?") {
+		return fmt.Errorf("outbox.partition_field %q must be a simple JSON path", c.PartitionField)
+	}
 	if c.PublishConcurrency < 0 {
-		return fmt.Errorf("outbox.publish_concurrency must be >= 0 (0 = default 1)")
+		return fmt.Errorf("outbox.publish_concurrency must be >= 0")
 	}
 	return nil
 }

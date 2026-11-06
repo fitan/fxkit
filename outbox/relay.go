@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/gormx"
+	"github.com/tidwall/gjson"
 	"go.opentelemetry.io/otel/codes"
 )
 
@@ -203,7 +205,13 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 		return out, errors.Join(markErrs...)
 	}
 
-	// 可选并发：默认 1 保持旧行为；>1 时不保证同一批内的投递顺序。
+	// 按 partition_field 分组：同一分组内串行（保序），不同分组并行。
+	// 设了它时，并发度就是「并行组数」，“同 actorId 保序 + 高吞吐”由此成立。
+	if field := strings.TrimSpace(r.cfg.PartitionField); field != "" {
+		return r.processPartitioned(ctx, pub, events, field, concurrency, maxRetries, &out)
+	}
+
+	// 未分组：全局并发，不保证同一批内的投递顺序。
 	outcomes := make([]publishOutcome, len(events))
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
@@ -237,6 +245,85 @@ type publishOutcome struct {
 	failed    bool
 	// markErr 非 nil 表示消息已投递、但状态未能标记成功（会在租约过期后重投）。
 	markErr error
+}
+
+// processPartitioned 按 payload 中的 field 分组投递：
+// 同一分组内严格串行（保持产生顺序），不同分组由最多 concurrency 个 worker 并行。
+//
+// 注意：分组只影响「同一批内」的顺序；跨批次顺序由 claimBatch 的 id ASC
+// 与「整批完成后才取下一批」共同保证，因此端到端仍然按 key 有序。
+func (r *Relay) processPartitioned(
+	ctx context.Context,
+	pub EventPublisher,
+	events []OutboxEvent,
+	field string,
+	concurrency int,
+	maxRetries int,
+	out *batchResult,
+) (batchResult, error) {
+	// 分组（保持组内相对顺序）。
+	order := make([]string, 0, len(events))
+	groups := make(map[string][]OutboxEvent, len(events))
+	for _, ev := range events {
+		key := partitionKeyOf(ev, field)
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], ev)
+	}
+
+	if len(groups) > concurrency {
+		concurrency = len(groups)
+	}
+
+	type groupResult struct {
+		published int
+		failed    int
+		markErrs  []error
+	}
+	results := make([]groupResult, len(order))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, key := range order {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, evs []OutboxEvent) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			var res groupResult
+			for _, ev := range evs {
+				o := r.publishOne(ctx, pub, ev, maxRetries)
+				if o.published {
+					res.published++
+				}
+				if o.failed {
+					res.failed++
+				}
+				if o.markErr != nil {
+					res.markErrs = append(res.markErrs, o.markErr)
+				}
+			}
+			results[i] = res
+		}(i, groups[key])
+	}
+	wg.Wait()
+
+	var markErrs []error
+	for _, res := range results {
+		out.Published += res.published
+		out.Failed += res.failed
+		markErrs = append(markErrs, res.markErrs...)
+	}
+	return *out, errors.Join(markErrs...)
+}
+
+// partitionKeyOf 取 payload 中 field 的值作为分组键。
+// 取不到时返回空串（这些事件会归入同一串行组，宁可牺牲并发也不打乱顺序）。
+func partitionKeyOf(ev OutboxEvent, field string) string {
+	if len(ev.Payload) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(ev.Payload, field).String())
 }
 
 // publishOne 投递单条事件并更新它的状态（失败则按重试策略回到 pending / failed）。
