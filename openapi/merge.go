@@ -74,7 +74,32 @@ func mergeDocs(base, overlay map[string]any) map[string]any {
 	out["tags"] = mergeTags(out["tags"], overlay["tags"])
 	out["servers"] = mergeServers(out["servers"], overlay["servers"])
 
+	// 其余顶层键（security / webhooks / externalDocs / jsonSchemaDialect 等）
+	// 直接按「覆盖层优先」搬过去。早期实现只处理上面 6 个键，
+	// overlay 里的 security 会被静默丢弃。
+	for k, v := range overlay {
+		switch k {
+		case "openapi", "info", "paths", "components", "tags", "servers":
+			continue
+		}
+		out[k] = cloneValue(v)
+	}
+
 	return out
+}
+
+// cloneValue 对 map/slice 做浅拷贝，避免合并结果与入参共享可变结构。
+func cloneValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return cloneMap(t)
+	case []any:
+		out := make([]any, len(t))
+		copy(out, t)
+		return out
+	default:
+		return v
+	}
 }
 
 func mergeInfo(base, overlay map[string]any) map[string]any {
@@ -84,11 +109,11 @@ func mergeInfo(base, overlay map[string]any) map[string]any {
 	if len(base) == 0 {
 		return cloneMap(overlay)
 	}
+	// 覆盖层优先：与 [MergeYAML] 的约定、以及同包 paths/components 的合并方向保持一致。
+	// 早期实现是「只填空不覆盖」，导致内嵌占位骨架的 info.title 永远压过 Huma 的真实标题。
 	out := cloneMap(base)
 	for k, v := range overlay {
-		if _, exists := out[k]; !exists {
-			out[k] = v
-		}
+		out[k] = v
 	}
 	return out
 }
@@ -138,59 +163,39 @@ func mergeComponents(base, overlay map[string]any) map[string]any {
 	return out
 }
 
-func mergeTags(base, overlay any) any {
-	baseTags := tagSlice(base)
-	overlayTags := tagSlice(overlay)
-	if len(overlayTags) == 0 {
-		return baseTags
-	}
-	seen := map[string]struct{}{}
-	var out []any
-	for _, t := range append(baseTags, overlayTags...) {
-		m, ok := t.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := m["name"].(string)
-		if name == "" {
-			out = append(out, t)
-			continue
-		}
-		if _, dup := seen[name]; dup {
-			continue
-		}
-		seen[name] = struct{}{}
-		out = append(out, t)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
+func mergeTags(base, overlay any) any { return mergeByKey(base, overlay, "name") }
 
-func mergeServers(base, overlay any) any {
-	baseList := serverSlice(base)
-	overlayList := serverSlice(overlay)
+func mergeServers(base, overlay any) any { return mergeByKey(base, overlay, "url") }
+
+// mergeByKey 按 key 字段去重合并两个数组（base 在前，overlay 在后）。
+// 缺少 key 的条目无法判断是否重复，原样保留。
+func mergeByKey(base, overlay any, key string) any {
+	baseList := asSlice(base)
+	overlayList := asSlice(overlay)
 	if len(overlayList) == 0 {
 		return baseList
 	}
-	seen := map[string]struct{}{}
-	var out []any
-	for _, s := range append(baseList, overlayList...) {
-		m, ok := s.(map[string]any)
+	all := make([]any, 0, len(baseList)+len(overlayList))
+	all = append(all, baseList...)
+	all = append(all, overlayList...)
+
+	seen := make(map[string]struct{}, len(all))
+	out := make([]any, 0, len(all))
+	for _, item := range all {
+		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		url, _ := m["url"].(string)
-		if url == "" {
-			out = append(out, s)
+		k, _ := m[key].(string)
+		if k == "" {
+			out = append(out, item)
 			continue
 		}
-		if _, dup := seen[url]; dup {
+		if _, dup := seen[k]; dup {
 			continue
 		}
-		seen[url] = struct{}{}
-		out = append(out, s)
+		seen[k] = struct{}{}
+		out = append(out, item)
 	}
 	if len(out) == 0 {
 		return nil
@@ -198,20 +203,7 @@ func mergeServers(base, overlay any) any {
 	return out
 }
 
-func tagSlice(v any) []any {
-	if v == nil {
-		return nil
-	}
-	if s, ok := v.([]any); ok {
-		return s
-	}
-	return nil
-}
-
-func serverSlice(v any) []any {
-	if v == nil {
-		return nil
-	}
+func asSlice(v any) []any {
 	if s, ok := v.([]any); ok {
 		return s
 	}

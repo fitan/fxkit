@@ -2,60 +2,46 @@ package cachex
 
 import (
 	"reflect"
+	"strconv"
 	"sync"
 
 	"golang.org/x/sync/singleflight"
 )
 
-// singleflightRegistry 按 Cache 实例维护 singleflight group。
+// defaultSFGroup 给「未实现能力接口」的自定义 Cache 共享使用。
 //
-// 之前的实现是一个包级全局 group，key 只用业务 key，导致：
-// 两个不同的 Cache（不同 Redis 实例、不同租户前缀、测试里的不同 fixture）
-// 用同一个 key 并发访问时，后到者会拿到前者 loader 的结果。
-//
-// 现在用「实例地址」作 key：
-//   - 不再把 Cache 接口值当 map key（不可比较的实现会 panic）；
-//   - 不持有 Cache 引用，避免包级 registry 阻止实例被 GC。
-//
-// 仅在并发调用期间需要 group 状态，而那时调用方持有 Cache，地址不会被复用。
-type singleflightRegistry struct {
-	mu     sync.Mutex
-	groups map[uintptr]*singleflight.Group
-}
+// 共享一个 group 不会串结果：调用方会把实例标识并入 flight key（见 [singleflightGroup]）。
+// 这样既不需要按实例建表的全局注册表（旧实现只增不删，本身就是内存泄漏），
+// 又保留了自定义实现的并发合并能力。
+var defaultSFGroup singleflight.Group
 
-func newSingleflightRegistry() *singleflightRegistry {
-	return &singleflightRegistry{groups: make(map[uintptr]*singleflight.Group)}
-}
-
-// cacheIdentity 返回指针类 Cache 的地址；非指针实现返回 false。
-func cacheIdentity(c Cache) (uintptr, bool) {
+// singleflightGroup 返回 (group, keyPrefix)。
+//
+// 内置实现（MemoryCache / RedisCache / prefixedCache）通过内嵌 [sfHolder]
+// 各自持有 group，随实例回收；自定义实现退化为共享 group + 实例标识前缀，
+// 既不会把不同实例的结果串在一起，也不会泄漏注册表条目。
+func singleflightGroup(c Cache) (*singleflight.Group, string) {
+	if g, ok := c.(interface{ singleflightGroup() *singleflight.Group }); ok {
+		return g.singleflightGroup(), ""
+	}
 	v := reflect.ValueOf(c)
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.UnsafePointer:
-		if v.IsNil() {
-			return 0, false
+		if !v.IsNil() {
+			return &defaultSFGroup, strconv.FormatUint(uint64(v.Pointer()), 16) + "\x00"
 		}
-		return v.Pointer(), true
-	default:
-		return 0, false
 	}
+	// 值类型实现：无法区分实例，按类型隔离即可。
+	return &defaultSFGroup, v.Type().String() + "\x00"
 }
 
-// groupFor 返回属于 c 的 singleflight group（惰性创建）。
-//
-// 非指针/不可寻址的实现每次返回独立的 group（不合并），
-// 但保证不会 panic，也不会污染 registry。
-func (r *singleflightRegistry) groupFor(c Cache) *singleflight.Group {
-	id, ok := cacheIdentity(c)
-	if !ok {
-		return &singleflight.Group{}
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if g, ok := r.groups[id]; ok {
-		return g
-	}
-	g := &singleflight.Group{}
-	r.groups[id] = g
-	return g
+// sfHolder 供内置实现内嵌，惰性创建并持有自己的 group。
+type sfHolder struct {
+	once sync.Once
+	sf   *singleflight.Group
+}
+
+func (h *sfHolder) singleflightGroup() *singleflight.Group {
+	h.once.Do(func() { h.sf = &singleflight.Group{} })
+	return h.sf
 }

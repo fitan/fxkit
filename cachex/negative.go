@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/jackc/pgx/v5"
@@ -118,7 +117,6 @@ func (e *NegativeHitError) As(target any) bool {
 	}
 	*p = &fxerrors.Error{
 		Kind:    fxerrors.KindNotFound,
-		Status:  fxerrors.KindNotFound.Status(),
 		Message: msg,
 	}
 	return true
@@ -152,12 +150,13 @@ func classifyNotFound(err error) (notFoundFlags, bool) {
 		return flags, true
 	}
 
-	// 兼容非标准哨兵：只认完整文案或带 detail 的包装形式，避免把普通错误误判。
+	// 兼容非标准哨兵：只认**完全相等**的文案。
+	//
+	// 不能用 HasPrefix("record not found: ")：那样 `fmt.Errorf("record not found: %w", realErr)`
+	// 这类包装过的真实故障也会被判成「未找到」，进而写进负缓存，
+	// 把一次数据库错误变成一分钟的「数据不存在」。
 	msg := err.Error()
-	if msg == "record not found" || strings.HasPrefix(msg, "record not found: ") || strings.HasPrefix(msg, "record not found\n") {
-		return 0, true
-	}
-	if msg == "sql: no rows in result set" {
+	if msg == "record not found" || msg == "sql: no rows in result set" {
 		return 0, true
 	}
 	return 0, false

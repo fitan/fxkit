@@ -13,23 +13,7 @@ import (
 var (
 	opListPermissions = huma.Operation{
 		OperationID: "listAuthzPermissions", Method: http.MethodGet, Path: "/authz/permissions",
-		Summary: "列出 API 权限目录", Description: "返回已登记的 path/method + Huma 元数据", Tags: []string{"Authz"},
-	}
-	opCreatePermission = huma.Operation{
-		OperationID: "createAuthzPermission", Method: http.MethodPost, Path: "/authz/permissions",
-		Summary: "创建权限目录项", Tags: []string{"Authz"},
-	}
-	opGetPermission = huma.Operation{
-		OperationID: "getAuthzPermission", Method: http.MethodGet, Path: "/authz/permissions/{id}",
-		Summary: "获取权限目录项", Tags: []string{"Authz"},
-	}
-	opUpdatePermission = huma.Operation{
-		OperationID: "updateAuthzPermission", Method: http.MethodPut, Path: "/authz/permissions/{id}",
-		Summary: "更新权限目录项", Tags: []string{"Authz"},
-	}
-	opDeletePermission = huma.Operation{
-		OperationID: "deleteAuthzPermission", Method: http.MethodDelete, Path: "/authz/permissions/{id}",
-		Summary: "删除权限目录项", Description: "仅删除目录元数据，不删除 Casbin 策略", Tags: []string{"Authz"},
+		Summary: "列出 API 权限目录", Description: "从路由表 + Casbin 策略派生（只读）", Tags: []string{"Authz"},
 	}
 	opListRoles = huma.Operation{
 		OperationID: "listAuthzRoles", Method: http.MethodGet, Path: "/authz/roles",
@@ -95,7 +79,7 @@ const AdminPermission = "authz:admin"
 
 func adminHTTPRoutes() []HTTPRoute {
 	routes := HTTPRoutesFromOperations(
-		opListPermissions, opCreatePermission, opGetPermission, opUpdatePermission, opDeletePermission,
+		opListPermissions,
 		opListRoles, opCreateRole, opGetRole, opDeleteRole,
 		opListRolePermissions, opSetRolePermissions, opAddRolePermission, opRemoveRolePermission,
 		opListSubjectRoles, opSetSubjectRoles, opAddSubjectRole, opRemoveSubjectRole,
@@ -108,8 +92,8 @@ func adminHTTPRoutes() []HTTPRoute {
 }
 
 // 使用独立的具名类型，避免 Huma OpenAPI registry 在 Body schema 名上冲突。
+// permissionView 是目录项的 API 表示（派生视图，无数据库 id）。
 type permissionView struct {
-	ID          uint     `json:"id"`
 	Method      string   `json:"method"`
 	Path        string   `json:"path"`
 	Pattern     string   `json:"pattern"`
@@ -117,6 +101,7 @@ type permissionView struct {
 	Summary     string   `json:"summary"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
+	Grants      []string `json:"grants"`
 }
 
 type listPermissionsBody struct {
@@ -161,9 +146,9 @@ type permissionIDIn struct {
 
 func toPermissionView(r APIPermission) permissionView {
 	return permissionView{
-		ID: r.ID, Method: r.Method, Path: r.Path, Pattern: r.Pattern,
+		Method: r.Method, Path: r.Path, Pattern: r.Pattern,
 		OperationID: r.OperationID, Summary: r.Summary, Description: r.Description,
-		Tags: splitTags(r.Tags),
+		Tags: r.Tags, Grants: r.Grants,
 	}
 }
 
@@ -267,21 +252,27 @@ type listPoliciesOut struct {
 	Body listPoliciesBody
 }
 
-func provideAdminRegistrar(e *Enforcer) fxhuma.Registrar {
+func provideAdminRegistrar(e *Enforcer, routes func() []HTTPRoute) fxhuma.Registrar {
 	return fxhuma.FuncRegistrar(func(api huma.API) {
 		if e == nil || !e.Enabled() {
 			return
 		}
-		registerPermissionCatalog(api, e)
+		registerPermissionCatalog(api, e, routes)
 		registerRoleAdmin(api, e)
 		registerSubjectAdmin(api, e)
 		registerOverview(api, e)
 	})
 }
 
-func registerPermissionCatalog(api huma.API, e *Enforcer) {
+// registerPermissionCatalog 只提供只读列表：目录是从路由表 + Casbin 策略派生的，
+// 没有可写的独立实体，因此没有 create/update/delete。
+func registerPermissionCatalog(api huma.API, e *Enforcer, routes func() []HTTPRoute) {
 	fxhuma.Register(api, opListPermissions, func(ctx context.Context, in *listPermissionsIn) (*listPermissionsOut, error) {
-		page, err := e.ListRouteCatalogPage(ctx, ListRouteCatalogInput{
+		var rs []HTTPRoute
+		if routes != nil {
+			rs = routes()
+		}
+		page, err := e.ListRouteCatalogPage(ctx, rs, ListRouteCatalogInput{
 			Start: in.Start, Limit: in.Limit, Q: in.Q, ReplyWithCount: in.ReplyWithCount,
 		})
 		if err != nil {
@@ -296,39 +287,6 @@ func registerPermissionCatalog(api huma.API, e *Enforcer) {
 			resp.Body.Items = append(resp.Body.Items, toPermissionView(r))
 		}
 		return resp, nil
-	})
-	fxhuma.Register(api, opCreatePermission, func(ctx context.Context, in *createPermissionIn) (*permissionDetailOut, error) {
-		row, err := e.CreateAPIPermission(ctx, CreateAPIPermissionInput{
-			Method: in.Body.Method, Path: in.Body.Path, OperationID: in.Body.OperationID,
-			Summary: in.Body.Summary, Description: in.Body.Description, Tags: in.Body.Tags,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &permissionDetailOut{Body: toPermissionView(*row)}, nil
-	})
-	fxhuma.Register(api, opGetPermission, func(ctx context.Context, in *permissionIDIn) (*permissionDetailOut, error) {
-		row, err := e.GetAPIPermission(ctx, in.ID)
-		if err != nil {
-			return nil, err
-		}
-		return &permissionDetailOut{Body: toPermissionView(*row)}, nil
-	})
-	fxhuma.Register(api, opUpdatePermission, func(ctx context.Context, in *updatePermissionIn) (*permissionDetailOut, error) {
-		row, err := e.UpdateAPIPermission(ctx, UpdateAPIPermissionInput{
-			ID: in.ID, Method: in.Body.Method, Path: in.Body.Path, OperationID: in.Body.OperationID,
-			Summary: in.Body.Summary, Description: in.Body.Description, Tags: in.Body.Tags,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return &permissionDetailOut{Body: toPermissionView(*row)}, nil
-	})
-	fxhuma.Register(api, opDeletePermission, func(ctx context.Context, in *permissionIDIn) (*struct{}, error) {
-		if err := e.DeleteAPIPermission(ctx, DeleteAPIPermissionInput{ID: in.ID}); err != nil {
-			return nil, err
-		}
-		return &struct{}{}, nil
 	})
 }
 

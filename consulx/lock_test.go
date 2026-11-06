@@ -2,7 +2,6 @@ package consulx_test
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -296,8 +295,12 @@ func TestConsulLocker_Validation(t *testing.T) {
 	}
 }
 
-func TestProvideLocker_DisabledFallback(t *testing.T) {
-	locker := consulx.ProvideLocker(&consulx.Config{ConsulAddress: ""})
+// 无地址时 BuildLocker 返回可用的 disabledLocker（调用才报 ErrConsulDisabled）。
+func TestBuildLocker_DisabledWhenNoAddress(t *testing.T) {
+	locker, err := consulx.BuildLocker(&consulx.Config{ConsulAddress: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if locker == nil {
 		t.Fatal("expected non-nil Locker")
 	}
@@ -315,34 +318,5 @@ func TestProvideLocker_DisabledFallback(t *testing.T) {
 func TestBuildLocker_InvalidAddress(t *testing.T) {
 	if _, err := consulx.BuildLocker(&consulx.Config{ConsulAddress: "http://[::1"}); err == nil {
 		t.Fatal("expected error for invalid consul address")
-	}
-
-	// 兼容 API：ProvideLocker 仍然返回非 nil，但调用会暴露配置错误。
-	locker := consulx.ProvideLocker(&consulx.Config{ConsulAddress: "http://[::1"})
-	if locker == nil {
-		t.Fatal("expected non-nil Locker")
-	}
-	_, err := locker.NewLock("any")
-	if err == nil || !errors.Is(err, consulx.ErrConsulDisabled) {
-		t.Fatalf("expected ErrConsulDisabled-wrapped error, got %v", err)
-	}
-}
-
-func TestWithLockResult(t *testing.T) {
-	mem := consulx.NewMemoryLocker()
-	ctx := context.Background()
-
-	res, err := consulx.WithLockResult(mem, ctx, "calc-key", func(c context.Context) (int, error) {
-		return 999, nil
-	})
-	if err != nil || res != 999 {
-		t.Fatalf("expected 999, got %d %v", res, err)
-	}
-
-	res, err = consulx.WithLockResult(mem, ctx, "calc-key-err", func(c context.Context) (int, error) {
-		return 0, errors.New("computation failed")
-	})
-	if err == nil || res != 0 {
-		t.Fatalf("expected error and 0, got %d %v", res, err)
 	}
 }

@@ -2,171 +2,91 @@ package authz
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHTTPRouteFromOperation(t *testing.T) {
 	op := huma.Operation{
-		OperationID: "listUsers", Method: "GET", Path: "/users",
-		Summary: "列出用户", Description: "分页列表", Tags: []string{"Users"},
+		OperationID: "listUsers",
+		Method:      "GET",
+		Path:        "/users",
+		Summary:     "列出用户",
+		Description: "分页列出",
+		Tags:        []string{"Users"},
 	}
 	r := HTTPRouteFromOperation(op)
-	if r.OperationID != "listUsers" || r.Summary != "列出用户" || r.Path != "/users" {
-		t.Fatalf("%+v", r)
+	if r.Method != "GET" || r.Path != "/users" || r.OperationID != "listUsers" {
+		t.Fatalf("unexpected route: %+v", r)
 	}
 	if len(r.Tags) != 1 || r.Tags[0] != "Users" {
 		t.Fatalf("tags=%v", r.Tags)
 	}
 }
 
-func TestSyncRouteCatalog(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:authz_catalog?mode=memory&cache=shared"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := &Enforcer{db: db, enabled: true}
-	if err := ensurePermissionCatalog(db); err != nil {
-		t.Fatal(err)
-	}
-	routes := HTTPRoutesFromOperations(huma.Operation{
-		OperationID: "listUsers", Method: "GET", Path: "/users", Summary: "列出用户", Tags: []string{"Users"},
-	})
-	if err := e.SyncRouteCatalog(routes); err != nil {
-		t.Fatal(err)
-	}
-	// 用更新后的 summary 再 upsert 一次
-	routes[0].Summary = "列出全部用户"
-	if err := e.SyncRouteCatalog(routes); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := e.ListRouteCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("len=%d", len(rows))
-	}
-	if rows[0].Summary != "列出全部用户" || rows[0].OperationID != "listUsers" {
-		t.Fatalf("%+v", rows[0])
-	}
-	if rows[0].Pattern != "/users" || rows[0].Tags != "Users" {
-		t.Fatalf("%+v", rows[0])
-	}
+// TestListRouteCatalogPage_DerivedFromRoutes 覆盖派生视图：
+// 目录不再落库，而是直接来自路由表（+ Casbin 策略）。
+func TestListRouteCatalogPage_DerivedFromRoutes(t *testing.T) {
+	e := &Enforcer{enabled: false} // Casbin 关闭：只有路由，没有 grants
+	routes := HTTPRoutesFromOperations(
+		huma.Operation{OperationID: "listUsers", Method: "GET", Path: "/users", Summary: "列出用户", Tags: []string{"Users"}},
+		huma.Operation{OperationID: "createUser", Method: "POST", Path: "/users"},
+	)
 
-	// 再插入若干行用于分页
-	for i := 0; i < 5; i++ {
-		if _, err := e.CreateAPIPermission(t.Context(), CreateAPIPermissionInput{
-			Method: "GET", Path: fmt.Sprintf("/paged/%d", i), Summary: "page item",
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	page, err := e.ListRouteCatalogPage(t.Context(), ListRouteCatalogInput{
-		Start: 0, Limit: 2, ReplyWithCount: true, Q: "paged",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.Total == nil || *page.Total != 5 || len(page.Items) != 2 {
-		t.Fatalf("page=%+v total=%v", page.Items, page.Total)
-	}
-	page2, err := e.ListRouteCatalogPage(t.Context(), ListRouteCatalogInput{
-		Start: 2, Limit: 2, ReplyWithCount: true, Q: "paged",
-	})
-	if err != nil || len(page2.Items) != 2 {
-		t.Fatalf("page2=%+v err=%v", page2, err)
-	}
-
-	created, err := e.CreateAPIPermission(t.Context(), CreateAPIPermissionInput{
-		Method: "POST", Path: "/users", Summary: "创建用户", Tags: []string{"Users", "Users"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created.ID == 0 || created.Pattern != "/users" || created.Tags != "Users" {
-		t.Fatalf("%+v", created)
-	}
-	if _, err := e.CreateAPIPermission(t.Context(), CreateAPIPermissionInput{
-		Method: "POST", Path: "/users",
-	}); err == nil {
-		t.Fatal("expected conflict")
-	}
-
-	updated, err := e.UpdateAPIPermission(t.Context(), UpdateAPIPermissionInput{
-		ID: created.ID, Method: "POST", Path: "/users/{id}", Summary: "更新用户",
-		OperationID: "updateUser", Tags: []string{"Users"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Path != "/users/{id}" || updated.Pattern != "/users/:id" || updated.Summary != "更新用户" {
-		t.Fatalf("%+v", updated)
-	}
-
-	got, err := e.GetAPIPermission(t.Context(), created.ID)
-	if err != nil || got.OperationID != "updateUser" {
-		t.Fatalf("%+v err=%v", got, err)
-	}
-	if err := e.DeleteAPIPermission(t.Context(), DeleteAPIPermissionInput{ID: created.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.GetAPIPermission(t.Context(), created.ID); err == nil {
-		t.Fatal("expected not found after delete")
-	}
+	page, err := e.ListRouteCatalogPage(context.Background(), routes, ListRouteCatalogInput{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 2)
+	// 按 path, method 排序
+	assert.Equal(t, "/users", page.Items[0].Path)
+	assert.Equal(t, "GET", page.Items[0].Method)
+	assert.Equal(t, "createUser", page.Items[1].OperationID)
 }
 
-func TestHTTPRoutesFromOpenAPIAndMerge(t *testing.T) {
-	_, api := humatest.New(t)
-	huma.Register(api, huma.Operation{OperationID: "listItems", Method: http.MethodGet, Path: "/items", Summary: "list"},
-		func(context.Context, *struct{}) (*struct{ Body struct{ OK bool } }, error) {
-			return &struct{ Body struct{ OK bool } }{}, nil
-		})
-	huma.Register(api, huma.Operation{OperationID: "createItem", Method: http.MethodPost, Path: "/items"},
-		func(context.Context, *struct{}) (*struct{ Body struct{ OK bool } }, error) {
-			return &struct{ Body struct{ OK bool } }{}, nil
-		})
-	got := HTTPRoutesFromOpenAPI(api)
-	foundGET, foundPOST := false, false
-	for _, r := range got {
-		if r.Path == "/items" && strings.EqualFold(r.Method, http.MethodGet) {
-			foundGET = true
-		}
-		if r.Path == "/items" && strings.EqualFold(r.Method, http.MethodPost) {
-			foundPOST = true
-		}
-		if skipAuthzPath(r.Path) {
-			t.Fatalf("openapi scrape included builtin path %q", r.Path)
-		}
-	}
-	if !foundGET || !foundPOST {
-		t.Fatalf("missing items routes: %+v", got)
-	}
-
-	merged := mergeHTTPRoutes(
-		[]HTTPRoute{{Method: "GET", Path: "/items", Permission: "items:list"}},
-		got,
+func TestListRouteCatalogPage_FilterAndPaginate(t *testing.T) {
+	e := &Enforcer{}
+	routes := HTTPRoutesFromOperations(
+		huma.Operation{OperationID: "listUsers", Method: "GET", Path: "/users", Summary: "列出用户"},
+		huma.Operation{OperationID: "listOrders", Method: "GET", Path: "/orders", Summary: "列出订单"},
 	)
-	getCount := 0
-	for _, r := range merged {
-		if r.Path == "/items" && strings.EqualFold(r.Method, http.MethodGet) {
-			getCount++
-			if r.Permission != "items:list" {
-				t.Fatalf("explicit route should win: %+v", r)
-			}
-		}
+
+	filtered, err := e.ListRouteCatalogPage(context.Background(), routes, ListRouteCatalogInput{Q: "订单"})
+	require.NoError(t, err)
+	require.Len(t, filtered.Items, 1)
+	assert.Equal(t, "/orders", filtered.Items[0].Path)
+
+	page, err := e.ListRouteCatalogPage(context.Background(), routes, ListRouteCatalogInput{
+		Start: 1, Limit: 1, ReplyWithCount: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	require.NotNil(t, page.Total)
+	assert.Equal(t, int64(2), *page.Total)
+	// 按 path 字典序：/orders < /users，故 start=1 取第二项 /users。
+	assert.Equal(t, "/users", page.Items[0].Path)
+}
+
+// TestAdminPermissionList_IsReadOnly 确认权限目录只剩只读列表：
+// 旧实现还有 create/get/update/delete 四个写接口（维护独立副本的表）。
+func TestAdminPermissionList_IsReadOnly(t *testing.T) {
+	db, api := humatest.New(t)
+	_ = db
+	routes := func() []HTTPRoute {
+		return HTTPRoutesFromOperations(huma.Operation{
+			OperationID: "listUsers", Method: "GET", Path: "/users", Summary: "列出用户",
+		})
 	}
-	if getCount != 1 {
-		t.Fatalf("duplicate GET /items after merge: %d", getCount)
-	}
+	registerPermissionCatalog(api, &Enforcer{}, routes)
+
+	resp := api.Get("/authz/permissions")
+	assert.Equal(t, 200, resp.Code)
+
+	// 写接口应已不存在。
+	assert.Equal(t, 405, api.Post("/authz/permissions", "{}").Code)
+	assert.Equal(t, 404, api.Get("/authz/permissions/1").Code)
+	assert.Equal(t, 404, api.Put("/authz/permissions/1", "{}").Code)
+	assert.Equal(t, 404, api.Delete("/authz/permissions/1").Code)
 }

@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/fitan/fxkit/internal/consuladdr"
 )
 
 const (
@@ -26,7 +28,7 @@ type fetchConsulKVInput struct {
 
 // fetchConsulKV 从 Consul 读取原始 KV 值（GET /v1/kv/{key}?raw）。
 func fetchConsulKV(ctx context.Context, in fetchConsulKVInput) ([]byte, error) {
-	base, err := normalizeConsulHTTPAddr(in.Address)
+	base, err := consuladdr.Normalize(in.Address)
 	if err != nil {
 		return nil, err
 	}
@@ -79,24 +81,6 @@ func fetchConsulKV(ctx context.Context, in fetchConsulKVInput) ([]byte, error) {
 		return nil, fmt.Errorf("consul kv key %q is empty", key)
 	}
 	return body, nil
-}
-
-func normalizeConsulHTTPAddr(addr string) (string, error) {
-	a := strings.TrimSpace(strings.TrimRight(addr, "/"))
-	if a == "" {
-		return "", fmt.Errorf("empty consul address")
-	}
-	if !strings.HasPrefix(a, "http://") && !strings.HasPrefix(a, "https://") {
-		a = "http://" + a
-	}
-	u, err := url.Parse(a)
-	if err != nil {
-		return "", fmt.Errorf("invalid consul address %q: %w", addr, err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("invalid consul address %q: missing host", addr)
-	}
-	return strings.TrimRight(u.String(), "/"), nil
 }
 
 // ConsulHTTPToken 返回 CONSUL_HTTP_TOKEN（已 trim）；未设置则为空。

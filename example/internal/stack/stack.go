@@ -13,6 +13,7 @@ import (
 	"github.com/fitan/fxkit/cli"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/consulx"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/docs"
 	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/hatchetx"
@@ -22,7 +23,6 @@ import (
 	"github.com/fitan/fxkit/outbox"
 	"github.com/fitan/fxkit/reqx"
 	"github.com/fitan/fxkit/server"
-	"github.com/fitan/fxkit/di"
 )
 
 func init() {
@@ -74,7 +74,7 @@ func WithMergedDocs(baseYAML []byte) di.Option {
 
 // assertWiring 在 PreStart 结束前校验关键贡献点非空。
 //
-// 用 PhaseMountHTTP+1：此时 huma registrar 已安装、路由已挂载，
+// 用 PhaseAfterHTTPServer：此时 huma registrar 已安装、路由已挂载，
 // 所有延迟构造函数都已求值，group 内容是最完整的。
 //
 // 只断言**必然存在**的 group。HealthChecker 不在此列 ——
@@ -85,7 +85,7 @@ func assertWiring() di.Option {
 		if err != nil || lc == nil {
 			return
 		}
-		lc.AppendPreStartPhase(di.PhaseMountHTTP+1, di.Hook{
+		lc.AppendPreStartPhase(di.PhaseAfterHTTPServer, di.Hook{
 			OnStart: func(context.Context) error {
 				return di.AssertGroupsNonEmpty(i,
 					di.GroupOf[huma.Registrar](),

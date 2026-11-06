@@ -32,9 +32,5 @@ func AsError(err error) error {
 		return huma.NewError(http.StatusInternalServerError, "internal error", detailErrs...)
 	}
 
-	status := fe.Status
-	if status < 100 || status > 999 {
-		status = fe.Kind.Status()
-	}
-	return huma.NewError(status, fe.Message, detailErrs...)
+	return huma.NewError(fe.Kind.Status(), fe.Message, detailErrs...)
 }

@@ -2,7 +2,6 @@ package hatchetx
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -72,17 +71,17 @@ func TestDeleteReminder_Validation(t *testing.T) {
 	}
 }
 
-// TestIsNoContentErr 锁定「SDK 204 误报」的识别（删除结果另行列表校验）。
-func TestIsNoContentErr(t *testing.T) {
+// TestDeleteReminder_ValidationOnly 确认删除失败时不再依赖 SDK 错误文本。
+//
+// 旧实现靠 isNoContentErr("got status 204") 判定，SDK 文案一变就失效；
+// 现在删除错误一律交给列表回读确认（见 cronState）。
+func TestDeleteReminder_ValidationOnly(t *testing.T) {
 	t.Parallel()
-	if isNoContentErr(nil) {
-		t.Fatal("nil must be false")
+	if err := DeleteReminder(context.Background(), nil, "c1"); err == nil {
+		t.Fatal("nil client must fail")
 	}
-	if !isNoContentErr(errors.New("received non-200 response from server. got status 204 with body ''")) {
-		t.Fatal("204 must be recognized")
-	}
-	if isNoContentErr(errors.New("got status 500")) {
-		t.Fatal("500 must not be treated as 204")
+	if err := DeleteReminder(context.Background(), &Client{}, "  "); err == nil {
+		t.Fatal("blank id must fail")
 	}
 }
 

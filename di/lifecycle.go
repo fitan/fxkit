@@ -16,11 +16,21 @@ const (
 	PhaseResolveContributors = 0
 	// PhaseWireGroup 在装配完成后「固化」容器内容（把 group 装进 huma 等）。
 	PhaseWireGroup = 100
+	// PhaseAfterRegistrars 在 huma registrar 安装完成之后、spec 消费者之前运行。
+	// 典型用途：把 HTTPRoute 登记成 Casbin 策略——它需要完整的 operation 集合。
+	//
+	// 早期调用方写 `PhaseWireGroup+1`；偏移量是隐式契约，改一个值就会错位。
+	PhaseAfterRegistrars = 110
 	// PhasePostWire 在 PhaseWireGroup 之后运行，用于依赖「已安装完成」结果的步骤，
 	// 例如从 live Huma spec 生成 /docs 路由、从 Huma 提取 MCP 工具。
 	PhasePostWire = 150
 	// PhaseMountHTTP 把固化后的路由挂到 http mux。晚于 PhasePostWire。
 	PhaseMountHTTP = 200
+	// PhaseAfterHTTPServer 在路由已挂载、*HTTPServer 已构造之后运行。
+	// 典型用途：服务自注册（必须先绑定端口）。
+	//
+	// 早期调用方写 `PhaseMountHTTP+10` / `PhaseMountHTTP+1`；偏移量不可读且易错。
+	PhaseAfterHTTPServer = 210
 )
 
 // Hook 定义服务的启动和停止钩子。

@@ -63,30 +63,13 @@ func NewMuxMiddleware(cfg MuxMiddlewareConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			if cfg.Enforcer != nil && cfg.Enforcer.Enabled() {
-				allowed, enfErr := cfg.Enforcer.Enforce(r.Context(), EnforceInput{
-					Sub: subj.ID,
-					Obj: path,
-					Act: r.Method,
-				})
-				if enfErr != nil {
-					writeAuthzError(w, http.StatusInternalServerError, "internal error")
-					return
-				}
-				if !allowed {
-					writeAuthzError(w, http.StatusForbidden, "forbidden")
-					return
-				}
-			} else {
-				route, ok := index().find(r.Method, path)
-				if ok && route.Permission != "" && !subj.Has(route.Permission) {
-					writeAuthzError(w, http.StatusForbidden, "forbidden")
-					return
-				}
-				if !ok && cfg.DenyUnregistered {
-					writeAuthzError(w, http.StatusForbidden, "forbidden")
-					return
-				}
+			switch authorize(r.Context(), subj, r.Method, path, path, cfg.Enforcer, index(), cfg.DenyUnregistered) {
+			case decisionInternal:
+				writeAuthzError(w, http.StatusInternalServerError, "internal error")
+				return
+			case decisionForbidden:
+				writeAuthzError(w, http.StatusForbidden, "forbidden")
+				return
 			}
 
 			// 让裸 chi handler 也能通过 authz.SubjectFromContext 拿到身份。
@@ -148,15 +131,12 @@ func writeAuthzError(w http.ResponseWriter, status int, msg string) {
 // 注意：这里在装配期解析 config/validator/enforcer（与 Huma 层在 PreStart 解析等价，
 // 都是启动期一次性成本）；HTTPRoute 则在**首次请求**时读取，确保包含全部
 // 构造函数形式登记的路径。
-func provideMuxMiddleware(inj di.Injector) server.Middleware {
-	cfgPtr, _ := di.Invoke[*Config](inj)
-	validator, _ := di.Invoke[TokenValidator](inj)
-	enforcer, _ := di.Invoke[*Enforcer](inj)
+func provideMuxMiddleware(inj di.Injector) (server.Middleware, error) {
+	cfgPtr := mustResolve[*Config](inj, "*Config")
+	validator := mustResolve[TokenValidator](inj, "TokenValidator")
+	enforcer := mustResolve[*Enforcer](inj, "*Enforcer")
 
-	cfg := Config{}
-	if cfgPtr != nil {
-		cfg = *cfgPtr
-	}
+	cfg := *cfgPtr
 
 	var (
 		once   sync.Once
@@ -178,5 +158,5 @@ func provideMuxMiddleware(inj di.Injector) server.Middleware {
 		Routes:           routes,
 		SubjectFunc:      DefaultDevSubjectFunc,
 		PublicPaths:      cfg.PublicPaths,
-	})
+	}), nil
 }

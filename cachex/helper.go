@@ -8,26 +8,19 @@ import (
 	"time"
 )
 
-// sfGroups 为每个 Cache 实例维护独立的 singleflight group。
-//
-// 早期实现用包级全局 group、且只用业务 key 做 singleflight key，
-// 导致「不同 cache 实例/租户/环境使用同一个 key 时结果互相串」。
-// 现在按 cache 实例隔离（sync.Map 的 key 是 Cache 指针）。
-var sfGroups = newSingleflightRegistry()
-
 // Options 针对单次 GetOrSet 操作的高级配置。
 type Options struct {
-	// TTL 单次缓存过期时间。若 <= 0 则使用 DefaultTTL，而不是「永不过期」。
-	// 如需永不过期，请使用 [WithForever]。
+	// TTL 过期时间。语义只有三种：
+	//   >0  使用该值
+	//   =0  使用模块默认（[defaultOptions] 中 30m）
+	//   <0  永不过期
+	//
+	// 早期这里还有并列的 Forever bool，「永不过期」有两种表达；
+	// 且 TTL<=0 又兼顾「用默认」，语义重叠。现在合并为一个字段。
 	TTL time.Duration
-	// Forever 显式要求永不过期（忽略 TTL）。请使用 [WithForever] 设置。
-	Forever bool
 	// DisableSingleflight 临时禁用该 key 的 singleflight 并发合并。
 	DisableSingleflight bool
-	// CacheNull 是否缓存空值（当 loader 返回「未找到」类错误时）。默认 true。
-	CacheNull bool
-	// NullTTL 空值缓存时间。若 < 0 则使用默认值（1 分钟）；
-	// 显式设为 0 表示不缓存空值（与 [Config.NullTTL] 文档一致）。
+	// NullTTL 空值（「未找到」）缓存时间。>0 生效；<=0 表示不缓存空值。
 	NullTTL time.Duration
 	// JitterMaxPercent 过期时间抖动百分比上限（0-50）。默认 10。
 	JitterMaxPercent int
@@ -38,25 +31,20 @@ type Options struct {
 	LoadTimeout time.Duration
 }
 
+// foreverTTL 是 Options.TTL 的哨兵值：永不过期。
+const foreverTTL time.Duration = -1
+
 // Option 定义 Options 修改器函数。
 type Option func(*Options)
 
-// WithTTL 指定单次缓存过期时间。
-//
-// ttl <= 0 表示「使用默认 TTL」（[defaultOptions] 中为 30 分钟），
-// 而不是永不过期；永不过期请使用 [WithForever]。
+// WithTTL 指定单次缓存过期时间。ttl=0 表示用模块默认。
 func WithTTL(ttl time.Duration) Option {
-	return func(o *Options) {
-		o.TTL = ttl
-		o.Forever = false
-	}
+	return func(o *Options) { o.TTL = ttl }
 }
 
-// WithForever 显式指定缓存永不过期。
+// WithForever 指定缓存永不过期。
 func WithForever() Option {
-	return func(o *Options) {
-		o.Forever = true
-	}
+	return func(o *Options) { o.TTL = foreverTTL }
 }
 
 // WithoutSingleflight 显式禁用 singleflight。
@@ -66,11 +54,9 @@ func WithoutSingleflight() Option {
 	}
 }
 
-// WithoutCacheNull 禁用空值缓存。
+// WithoutCacheNull 禁用空值缓存（等价于 WithNullTTL(0)）。
 func WithoutCacheNull() Option {
-	return func(o *Options) {
-		o.CacheNull = false
-	}
+	return func(o *Options) { o.NullTTL = 0 }
 }
 
 // WithNullTTL 指定空值缓存时间。
@@ -164,22 +150,17 @@ func GetOrSet[T any](
 		}
 		// 反序列化失败或类型不匹配视作脏缓存，继续走 loader 覆盖。
 		recordLookup(ctx, "miss")
-	case errors.Is(err, ErrCacheDisabled):
-		recordLookup(ctx, "disabled")
-		if loader == nil {
-			return zero, errNilLoader
-		}
-		return loader(ctx)
 	case errors.Is(err, ErrCacheMiss):
 		// 正常未命中，继续。
 		recordLookup(ctx, "miss")
+	case errors.Is(err, ErrCacheDisabled):
+		// 缓存未启用：继续回源。仍走下面的 singleflight —— 「没有缓存」
+		// 不应该顺带变成「没有防击穿」。
+		recordLookup(ctx, "disabled")
 	default:
-		// 缓存后端故障（网络等）：降级为直连 loader，不阻断业务。
+		// 缓存后端故障（网络等）：降级为回源，但同样经过 singleflight。
+		// 否则 Redis 抖动时并发压力最大的那一刻，恰好所有请求会同时打到数据源。
 		recordLookup(ctx, "error")
-		if loader == nil {
-			return zero, errNilLoader
-		}
-		return loader(ctx)
 	}
 
 	// 2. 执行 loader 加载（带 Singleflight 防击穿）
@@ -202,7 +183,7 @@ func GetOrSet[T any](
 		data, loadErr := loader(loadCtx)
 		if loadErr != nil {
 			// 如果启用空值缓存且属于「未找到」，写入负缓存防穿透。
-			if opt.CacheNull && opt.NullTTL > 0 && isNotFoundError(loadErr) {
+			if opt.NullTTL > 0 && isNotFoundError(loadErr) {
 				_ = c.Set(loadCtx, key, encodeNegative(loadErr), opt.NullTTL)
 			}
 			return zero, loadErr
@@ -212,7 +193,7 @@ func GetOrSet[T any](
 		encoded, encErr := encodeValue(data)
 		if encErr == nil {
 			ttl := opt.TTL
-			if opt.Forever {
+			if ttl < 0 {
 				ttl = 0 // Cache.Set 约定：ttl <= 0 表示永不过期
 			} else {
 				ttl = JitterTTL(ttl, opt.JitterMaxPercent)
@@ -230,7 +211,8 @@ func GetOrSet[T any](
 	// 使用 WithoutCancel 执行 loader：首个调用者取消不会让其它等待者收到
 	// context canceled，也不会导致结果不落缓存。
 	flightKey := typeFingerprint[T]() + "\x00" + key
-	ch := sfGroups.groupFor(c).DoChan(flightKey, func() (any, error) {
+	group, keyPrefix := singleflightGroup(c)
+	ch := group.DoChan(keyPrefix+flightKey, func() (any, error) {
 		return executeLoader(context.WithoutCancel(ctx))
 	})
 
@@ -250,19 +232,18 @@ func GetOrSet[T any](
 }
 
 // normalizeOptions 统一单次调用选项的边界值。
+//
+// jitter 上限不在这里夹：JitterTTL 自己会夹（它是公开 API，也会被直接调用）。
 func normalizeOptions(opt *Options) {
 	def := defaultOptions()
-	if !opt.Forever && opt.TTL <= 0 {
+	if opt.TTL == 0 {
 		opt.TTL = def.TTL
 	}
 	if opt.NullTTL < 0 {
-		opt.NullTTL = def.NullTTL
+		opt.NullTTL = 0 // 负值一律视为关闭
 	}
 	if opt.JitterMaxPercent < 0 {
 		opt.JitterMaxPercent = 0
-	}
-	if opt.JitterMaxPercent > 50 {
-		opt.JitterMaxPercent = 50
 	}
 }
 
@@ -270,7 +251,6 @@ func normalizeOptions(opt *Options) {
 func defaultOptions() Options {
 	return Options{
 		TTL:              30 * time.Minute,
-		CacheNull:        true,
 		NullTTL:          1 * time.Minute,
 		JitterMaxPercent: 10,
 	}
@@ -284,9 +264,13 @@ func OptionsFromConfig(cfg *Config) Options {
 	if cfg == nil {
 		return opt
 	}
-	// 零值 Config（直接构造/测试）视为「未配置」：否则 NullTTL=0 且
-	// Singleflight=false 会让负缓存与单飞静默失效（与 yaml 路径行为不一致）。
-	if cfg.DefaultTTL == 0 && cfg.NullTTL == 0 && cfg.JitterMaxPercent == 0 && !cfg.Singleflight {
+	// 未经 SetDefaults 的 Config（代码里直接构造的零值/半零值）视为「未配置」：
+	// 否则 NullTTL=0 且 Singleflight=false 会让负缓存与单飞静默失效。
+	//
+	// 早期实现用「四个字段全为零」猜，会误伤显式配置：
+	// `null_ttl: 0` + `singleflight: false` 恰好让四个字段全为零，整段配置被忽略。
+	// 现在由 SetDefaults 打标记，语义明确。
+	if !cfg.defaultsApplied {
 		return opt
 	}
 	if cfg.DefaultTTL > 0 {

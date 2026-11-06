@@ -222,7 +222,13 @@ func to{{.TypeName}}Detail(m {{.TypeName}}) {{.TypeName}}Detail {
 }
 
 var Module = di.Options(
-	fxkit.Service({{quote .Package}}, NewService),
-	fxhuma.ProvideRegistrar(NewHumaRegistrar),
+	fxkit.Service({{quote .Package}},
+		fxkit.Provide(func(i di.Injector) (*Service, error) {
+			return NewService(di.MustInvoke[*gormx.Client](i), di.MustInvoke[*di.Lifecycle](i))
+		}),
+	),
+	fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+		return NewHumaRegistrar(di.MustInvoke[*Service](i)), nil
+	}),
 )
 `

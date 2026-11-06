@@ -55,7 +55,7 @@ authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
 })
 ```
 
-或从 Operation 生成（带 Summary/Tags，写入 `authz_api_permission` 目录）：
+或从 Operation 生成（带 Summary/Tags，用于权限目录展示）：
 
 ```go
 authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {

@@ -35,7 +35,17 @@ var Module = di.Module("fxkit/outbox",
 			}), nil
 		})
 
-		lc, _ := di.Invoke[*di.Lifecycle](i)
+		// 登记 schema 契约：仅当 outbox 启用时才要求这两张表存在。
+		// gormx 不再硬编码它们，只用 gormx 的服务不会因为缺表而启动失败。
+		if cfg, err := di.Invoke[*Config](i); err == nil && cfg != nil && cfg.Enabled {
+			gormx.RegisterSchemaContract("outbox_events",
+				"id", "pubsub", "topic", "payload", "idempotency_key", "status",
+				"attempts", "last_error", "lease_id", "locked_at", "created_at", "published_at",
+			)
+			gormx.RegisterSchemaContract("outbox_inbox_events", "id", "topic", "processed_at")
+		}
+
+		lc := di.MustInvoke[*di.Lifecycle](i)
 		registerLifecycle(lc, i)
 	},
 )
@@ -76,7 +86,7 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 			if r == nil {
 				return nil
 			}
-			if r.publisher == nil {
+			if r.Publisher() == nil {
 				slog.Warn("outbox enabled but no EventPublisher (enable hatchet.outbox_publisher or outbox.ProvidePublisher); relay not started")
 				return nil
 			}

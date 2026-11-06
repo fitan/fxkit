@@ -93,11 +93,11 @@ func openPool(c *Config) (*gorm.DB, error) {
 
 	otelDriverName, err := otelsql.Register(sqlDriver, otelOpts...)
 	if err != nil {
-		slog.Warn("otelsql register failed, falling back to standard driver", "error", err)
-		otelDriverName = sqlDriver
-	} else {
-		slog.Info("otelsql driver registered", "driver", otelDriverName)
+		// 回退到裸驱动会让这条连接完全失去 span/metrics（恰恰是排障时最需要的），
+		// 且线上无法感知。宁可启动失败。
+		return nil, fmt.Errorf("gormx: register otel driver for %s: %w", sqlDriver, err)
 	}
+	slog.Info("otelsql driver registered", "driver", otelDriverName)
 
 	gormCfg := &gorm.Config{
 		Logger:         newSlogAdapter(c.LogLevel, c.SlowThreshold),
@@ -283,11 +283,23 @@ var Module = di.Module("fxkit/gormx",
 		// 必须使用 server.HealthChecker 这个**具名类型**注册 —— 曾在 gormx 内
 		// 声明结构相同的匿名接口别名，导致 do 按接口名字符串区分服务，
 		// group 被拆成多个互不相见的条目（/readyz 里看不到 "db"）。
-		if client, err := di.Invoke[*Client](i); err == nil && client != nil && client.Pool() != nil {
-			di.ProvideGroupItem[server.HealthChecker](i, dbHealthChecker{client: client})
-		} else if err == nil {
-			// 未配置数据库是合法状态，不注册检查项，避免 /readyz 出现空的 "db" 记录。
-			slog.Debug("gormx: database disabled, no health checker registered")
+		//
+		// 注册推迟到 PreStart：在装配期直接 Invoke 会让 di.New 就连接数据库并 Ping，
+		// 于是 `app validate`（文档承诺「不碰任何外部依赖」）、`app openapi`、`app mcp`
+		// 都会去连库，且连接失败被吞掉。
+		if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {
+			lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
+				OnStart: func(context.Context) error {
+					client, err := di.Invoke[*Client](i)
+					if err != nil {
+						return fmt.Errorf("gormx: %w", err)
+					}
+					if client != nil && client.Pool() != nil {
+						di.ProvideGroupItem[server.HealthChecker](i, dbHealthChecker{client: client})
+					}
+					return nil
+				},
+			})
 		}
 
 		// 外部 SQL 平台执行 DDL 后，启动时校验 schema 契约（fail fast）。

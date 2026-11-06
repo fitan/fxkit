@@ -52,6 +52,10 @@ func Register(svc *Service) fxhuma.Registrar {
 }
 
 var Module = di.Options(
-	fxkit.Service("hello", NewService),
-	fxhuma.ProvideRegistrar(Register),
+	fxkit.Service("hello",
+		fxkit.Provide(func(di.Injector) (*Service, error) { return NewService(), nil }),
+	),
+	fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+		return Register(di.MustInvoke[*Service](i)), nil
+	}),
 )

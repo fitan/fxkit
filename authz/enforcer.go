@@ -17,8 +17,10 @@ import (
 )
 
 // defaultRBACModel 是经典 RBAC（sub, obj, act），带角色继承。
-// Dom 预留给未来的多租户 matcher；v1 忽略它。
 // keyMatch2 让 /users/:id 这类模式与请求路径匹配。
+//
+// 注意：模型**不含** domain（多租户）维度。需要按租户隔离时，
+// 要么先把租户写进 sub（例如 "org:42/user:alice"），要么在 handler 里自行校验。
 const defaultRBACModel = `
 [request_definition]
 r = sub, obj, act
@@ -36,10 +38,13 @@ e = some(where (p.eft == allow))
 m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && (r.act == p.act || p.act == "*")
 `
 
-// EnforceInput 是授权请求。Dom 为预留字段（v1 未使用）。
+// EnforceInput 是授权请求。
+//
+// 没有 domain 字段：早期版本有一个 `Dom` 预留字段但被 `_ = in.Dom` 静默忽略，
+// 调用方会误以为已按租户隔离。要按租户隔离，请把租户编进 Sub
+// （例如 "org:42/user:alice"）或改 matcher。
 type EnforceInput struct {
 	Sub string
-	Dom string // 预留给多租户 RBAC
 	Obj string // 例如 "/users/1" 或 "/users"
 	Act string // 例如 "GET"
 }
@@ -106,9 +111,6 @@ func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 		return nil, fmt.Errorf("auth casbin load: %w", err)
 	}
 	if autoMigrate {
-		if err := ensurePermissionCatalog(p.DB.Pool()); err != nil {
-			return nil, fmt.Errorf("auth permission catalog: %w", err)
-		}
 		if err := ensureRoleTable(p.DB.Pool()); err != nil {
 			return nil, fmt.Errorf("auth role table: %w", err)
 		}
@@ -200,7 +202,6 @@ func (e *Enforcer) reloadLoop(ctx context.Context, interval time.Duration) {
 // Enforce 检查 Sub 是否可以对 Obj 执行 Act。
 func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 	_ = ctx
-	_ = in.Dom // 预留
 	if !e.Enabled() {
 		return true, nil
 	}

@@ -175,18 +175,23 @@ fxkit.Run(
 声明业务模块：
 
 ```go
-var Module = fxkit.Service("hello", NewService,
-	fxkit.Routes(newRoutes),
-	fxkit.Provide(NewSomething),
-	fxkit.Invoke(seedOnStart), // 启动时执行副作用（参数自动注入，可返回 error）
+var Module = fxkit.Service("hello",
+	fxkit.Provide(func(i di.Injector) (*Service, error) {
+		return NewService(di.MustInvoke[*gormx.Client](i))
+	}),
+	fxkit.Routes(newRoutes()...),
+	fxkit.ProvideValue(&Something{}),
+	fxkit.Invoke(func(i di.Injector) error { // 启动时执行副作用
+		return di.MustInvoke[*Service](i).Warmup()
+	}),
 )
 ```
 
-> `fxkit.Service` / `fxkit.Provide` / `fxkit.Routes` / `fxkit.Invoke` 支持任意签名的
-> 构造函数：`func(dep...) T`、`func(dep...) (T, error)`、以及 fx 风格的参数结构体
-> `func(p Params)`（字段按类型注入，`Foo []T` 会取 `di.Group[T]`，
-> 字段标记 `optional:"true"` 时缺依赖则留零值）。
-> 无法识别的签名会**立即 panic**，不会静默丢弃。
+> **不再有反射**：`fxkit.Service` 只接受 [ServiceOption]（`fxkit.Provide` /
+> `ProvideValue` / `ProvideConfig` / `Routes` / `RoutesLazy` / `Invoke`），
+> 构造函数统一签名 `func(di.Injector) (T, error)`，依赖用 `di.MustInvoke` 显式获取。
+> 接线错误在**编译期**暴露；早期版本靠反射解析任意签名（`func(dep...) T`、
+> 参数结构体等），代价是错误只能在启动期 panic。
 
 ### 启动阶段
 
@@ -464,7 +469,7 @@ spec := crudx.ListSpec{
 
 - **默认拒绝**：未出现在 `Fields` 的列既不能过滤也不能排序
 - `~` / `!~` 只对 `Likeable: true` 的列开放
-- `DefaultSort` 指向不在 `SortFields` 的字段时，列表查询会忽略该排序
+- `DefaultSort` 指向 `Fields` / `SortFields` 都没有的字段时，列表查询会忽略该排序
 
 > 主键应同时出现在 `Fields` 与 `SortFields`（游标分页需要它做 tie-breaker）。
 
@@ -622,7 +627,13 @@ type OrdersConfig struct {
 	} `yaml:"feature"`
 }
 
-var Module = fxkit.Service("orders", NewService,
+var Module = fxkit.Service("orders",
+	fxkit.Provide(func(i di.Injector) (*Service, error) {
+		return NewService(
+			di.MustInvoke[*OrdersConfig](i),
+			di.MustInvoke[*gormx.Client](i),
+		)
+	}),
 	fxkit.ProvideConfig[OrdersConfig]("orders"),
 )
 
@@ -633,7 +644,7 @@ func NewService(cfg *OrdersConfig, db *gormx.Client) *Service {
 
 Fx 外：`config.Load[OrdersConfig](cfg, "orders")`。
 
-热重载：`cfg.Reload()` 重建底层树后重读 YAML/Consul。`ProvideConfig` 只在启动解一次；要热更新请注入 `*config.Config` 再 `Load`。框架子系统配置在各自包内（`server.Config`、`gormx.Config` 等）。
+热重载：框架不提供自动热更新（`Config` 只在启动时构建）。需要热更新时，在宿主侧自行重建配置：新建 `config.Config` 后重新 `Load`，或重启进程。`ProvideConfig` 注入的 `*T` 不会自动更新。框架子系统配置在各自包内（`server.Config`、`gormx.Config` 等）。
 
 ---
 
@@ -689,7 +700,8 @@ fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 ### 注册单个 operation
 
 ```go
-fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
+fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+	svc := di.MustInvoke[*Service](i)
 	return fxhuma.FuncRegistrar(func(api huma.API) {
 		fxhuma.Register(api, huma.Operation{
 			OperationID: "listUsers",
@@ -795,7 +807,7 @@ auth:
 ```
 
 启动时：每个 `HTTPRoute`（含从已注册 Huma operation 刮取的 OpenAPI 路径，因此 `RegisterResource` 不必再手写 ProvideHTTPRoutes）→ `p, {bootstrap_role}, {path}, {METHOD}`（Method 空则为 `*`），并绑定 `bootstrap_users`。
-同时把 Huma 的 `OperationID` / `Summary` / `Description` / `Tags` 写入表 `authz_api_permission`（便于后台展示「这是干什么的」）。内置 `/huma/openapi*`、`/schemas` 不刮取、不鉴权。
+权限目录（`GET /authz/permissions`）是**运行时派生**的：把 `HTTPRoute` 的 `OperationID`/`Summary`/`Description`/`Tags` 与 Casbin 策略合并展示，不落库。内置 `/huma/openapi*`、`/schemas` 不刮取、不鉴权。
 
 ```go
 authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
@@ -891,7 +903,7 @@ myapp migrate check -c configs/config.yaml        # 连库校验表/列是否存
 |---|---|
 | `outbox_events` / `outbox_inbox_events` | outbox |
 | `casbin_rule` | authz（表名可配） |
-| `authz_api_permission` / `authz_role` | authz |
+| `authz_role` | authz |
 
 DDL 在 [`gormx/migrations`](./gormx/migrations)（postgres / mysql / sqlite，含 `.rollback.sql`），
 已 `//go:embed` 进二进制。业务表不归框架管，用同一套平台流程即可。
@@ -980,7 +992,7 @@ page, err := crudx.List(ctx, crudx.ListInput[User, UserRow]{
   如果关联基数明确是多对一/一对一，建议在 `RelationSpec` 里写 `Cardinality: crudx.RelationToOne`，
   可跳过 `DISTINCT`（也避开 PG 的 `DISTINCT + ORDER BY` 限制）。未声明时保持旧行为。
 - `GetByID` / `FirstByID` / `Preload` / `MapDBError` / `ZeroPrimaryKey`
-- 需要五条 REST 时用可选的 `fxhuma.RegisterResource`（`ResourceOperations` 可导出对应 Huma op）；不要默认上 `NewRepo`
+- 需要五条 REST 时用可选的 `fxhuma.RegisterResource`（`ResourceOperations` 可导出对应 Huma op）
 
 软删：模型加 `gorm.DeletedAt` 即可。需要 total / `nextCursor` 时用 `crudx.List`，不要对 `ApplyList` 的返回值做 `Count`（Limit 已加上）。
 
@@ -1013,7 +1025,7 @@ var userListSpec = crudx.ListSpec{
 > `Indexed` **不**隐含 `Likeable`。数值列即使有索引也不应允许 `~`。
 > TEXT 列确实需要模糊搜索时写 `Likeable: true` 并注明「已知全表扫描」。
 
-未出现在 `Fields` 的列一律拒绝；`SortFields` 决定 `sortBy` 的合法值。
+未出现在 `Fields` 的列一律拒绝过滤；`sortBy` 接受 `SortFields` ∪ `Fields` ∪ `Relations` 路径（点号形式，如 `article.title`）。`SortFields` 用于排序键与过滤键不同名、或需要自定义排序表达式的情况。
 
 ---
 
@@ -1108,11 +1120,12 @@ SDK `Run()` 已会打 producer span（`hatchet.run_workflow`）。`hatchet.otel`
 ### 注册 Worker
 
 ```go
-hatchetx.ProvideRegistrar(func(svc *Svc) hatchetx.Registrar {
+hatchetx.ProvideRegistrarLazy(func(i di.Injector) (hatchetx.Registrar, error) {
+	svc := di.MustInvoke[*Svc](i)
 	return func(c *hatchetx.Client) ([]hatchetx.WorkflowBase, error) {
 		// 注册 workflow / standalone task
 		return workflows, nil
-	}
+	}, nil
 })
 ```
 
@@ -1391,14 +1404,14 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 | `PassingOnly` | `true` | 只取 healthy 实例；传 `ptr(false)` 放宽 |
 | `OTel` | `true` | 是否经 `otelhttp` 包一层（span + client metrics） |
 | `ServerName` | 空 | TLS SNI / 证书校验名（https + IP 端点时有用） |
-| `HostOverride` | 空 | 覆盖 HTTP `Host` 头（虚主机路由） |
 | `BaseTransport` | 空 | 自定义底层 RoundTripper |
+| `MaxFailover` | `5` | 失败时最多尝试的不同端点数量 |
 
 行为要点：
 
 - 默认 `passing=true`（只用 healthy）；传输错误或 502/503/504 时换下一个端点（最多 5 次）。
 - **非幂等方法**也会做状态码故障转移（可能重复副作用）；需要严格一次语义时请自行在业务层加幂等键。
-- `https` + Consul 返回 **IP** 端点时，默认保留逻辑服务名作为 SNI（避免证书校验失败）；需要自定义时设 `ServerName` / `HostOverride`。
+- `https` + Consul 返回 **IP** 端点时，默认保留逻辑服务名作为 SNI（避免证书校验失败）；需要自定义时设 `ServerName`。
 - 请求体 ≤ 4MB 会被缓冲以支持重试；更大的流式请求不重试。
 
 ---
@@ -1713,11 +1726,11 @@ fxkit init myapp --fxkit-path /path/to/fxkit     # 本地 replace
 # 或在构建 CLI 时：-ldflags "-X main.fxkitModuleVersionInjected=v0.3.0"
 ```
 
-### `reqx` 的 https 端点与虚主机
+### `reqx` 的 https 端点
 
-新增 `ClientInput.ServerName`（TLS SNI / 证书校验名）与 `HostOverride`（HTTP Host 头）。
-默认情况下，https + Consul 返回 IP 端点会自动保留逻辑服务名作为 SNI，虚主机路由不再 404；
-需要显式指定时设置这两个字段。
+新增 `ClientInput.ServerName`（TLS SNI / 证书校验名）。
+默认情况下，https + Consul 返回 IP 端点会自动保留逻辑服务名作为 SNI；
+需要显式指定时设置该字段。
 
 ---
 
@@ -1742,15 +1755,18 @@ defer di.Shutdown(root)   // 而不是 defer root.Shutdown()
 **迁移**：关闭后重新 `reqx.NewFactory(...)`。`Client()` 现在会显式返回
 `reqx: factory is closed`。可用 `factory.IsClosed()` 自检。
 
-### 非法 `server.Route` 不再 panic
+### 非法 `server.Route` 让启动失败，而不是 panic 或被跳过
 
-**症状**：以前启动时可能看到 `panic: chi: routing pattern must begin with '/' in ''`。
+**症状**：某模块贡献了空 `Pattern` / 缺前导斜杠 / nil `Handler` / 未知 `Methods` 的 Route。
 
-**原因**：某模块贡献了空 `Pattern` / nil `Handler` / 空 `Methods` 的 Route。
+**原因**：chi 自己只会 `panic: chi: routing pattern must begin with '/' in ''`，堆栈无法定位来源模块；
+而「跳过并告警」会把装配期 bug 变成线上 404（服务正常启动、依赖它的调用方拿到 404）。
 
-**迁移**：现在这类条目会被跳过并记录带 pattern 的 `ERROR route skipped: invalid entry`。
-按日志修正该模块的路由字面量即可。若是 `ProvideRoutes` 的类型 switch 走错了分支，
-现在会直接 panic 并指明调用方（`server.ProvideRoutes: unsupported argument ...`）。
+**迁移**：`server.RegisterRoutes` 现在返回 `error`，在 `PreStart` 里让进程启动失败，
+并一次性列出全部问题条目（`route[2] (methods=[] pattern="/nil-handler"): nil handler ...`）。
+未知 method（如 `GTE`）也在这里被拦住，不再交给 chi panic。
+按错误里的 pattern 修正该模块的路由字面量即可。若是 `ProvideRoutes` 的类型 switch 走错了分支，
+会直接 panic 并指明调用方（`server.ProvideRoutes: unsupported argument ...`）。
 
 ### `/docs` 默认关闭，`Minimal()` 不再包含 docs
 

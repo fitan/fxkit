@@ -64,16 +64,20 @@ fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 ## 业务模块写法
 
 ```go
-var Module = fxkit.Service("hello", NewService,
-	fxkit.Routes(helloRoutes),
-	fxkit.Provide(NewSomething),
+var Module = fxkit.Service("hello",
+	fxkit.Provide(func(i di.Injector) (*Service, error) {
+		return NewService(di.MustInvoke[*gormx.Client](i))
+	}),
+	fxkit.Routes(helloRoutes()...),
+	fxkit.ProvideValue(&Something{}),
 	fxkit.ProvideConfig[HelloConfig]("hello"),
-	fxkit.Invoke(seedOnStart),
+	fxkit.Invoke(func(i di.Injector) error { return di.MustInvoke[*Service](i).Seed() }),
 )
 ```
 
-- `Service(name, ctor, opts...)` → `di.Module` + `Provide(ctor)`。
-- `Routes(fn)` → `fn` 返回 `[]server.Route`。
+- `Service(name, opts...)` → `di.Module`，只接受 [ServiceOption]。
+- 构造函数统一 **`func(di.Injector) (T, error)`**；没有反射，接线错误编译期暴露。
+- 贡献点：`Provide` / `ProvideValue` / `ProvideConfig` / `Routes` / `RoutesLazy` / `Invoke`。
 - 多业务参数用 **struct 入参**（`CreateInput`），`context.Context` 单独放第一参。
 
 ### chi 路由
@@ -144,7 +148,10 @@ type OrdersConfig struct {
 	PageSize int `yaml:"page_size"`
 }
 
-var Module = fxkit.Service("orders", NewService,
+var Module = fxkit.Service("orders",
+	fxkit.Provide(func(i di.Injector) (*Service, error) {
+		return NewService(di.MustInvoke[*OrdersConfig](i)), nil
+	}),
 	fxkit.ProvideConfig[OrdersConfig]("orders"),
 )
 

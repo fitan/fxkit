@@ -24,24 +24,21 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		slog.ErrorContext(ctx, "http handler error",
 			"error", err,
 			"kind", string(out.Kind),
-			"status", out.Status,
+			"status", out.Kind.Status(),
 		)
 		out.Message = "internal error"
 		out.Details = nil
 	}
 
-	status := out.Status
-	if status < 100 || status > 999 {
-		// 非法/零值 Status（例如手写 &Error{Kind: ...} 或从 JSON 反序列化）：
-		// 回退到 kind 的默认码，避免 WriteHeader(0) panic。
-		status = out.Kind.Status()
-		out.Status = status
+	// 自动带上 trace_id，便于日志/响应关联（已有值则不覆盖）。
+	if out.TraceID == "" {
+		if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+			out.TraceID = sc.TraceID().String()
+		}
 	}
 
-	if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
-		out.TraceID = sc.TraceID().String()
-	}
+	// status 由 Kind 派生，不存在非法/零值状态。
 	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
-	w.WriteHeader(status)
+	w.WriteHeader(out.Kind.Status())
 	_ = json.NewEncoder(w).Encode(&out)
 }

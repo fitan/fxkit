@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/fitan/fxkit/internal/consuladdr"
 )
 
 // roundTripFunc 让测试可以注入传输层故障（模拟网络分区）。
@@ -77,7 +79,7 @@ func TestConsulLockFailureModes(t *testing.T) {
 		sessionID := cl.renew.sessionID
 		require.NotEmpty(t, sessionID)
 
-		base, err := normalizeConsulAddr(addr)
+		base, err := consuladdr.Normalize(addr)
 		require.NoError(t, err)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPut,
 			base+"/v1/session/destroy/"+url.PathEscape(sessionID), nil)

@@ -18,20 +18,13 @@ import (
 // 贡献点已求值）时读取，而不是在 PhaseResolveContributors 里预先把 routes 固化进
 // params 结构体——否则业务模块用 func(*Svc) []HTTPRoute 登记的路由会被漏掉，
 // Casbin 关闭时这些 operation 的 Permission 校验会被静默跳过。
-func provideHumaMiddleware(inj di.Injector) fxhuma.MiddlewareRegistrar {
+func provideHumaMiddleware(inj di.Injector) (fxhuma.MiddlewareRegistrar, error) {
 	return fxhuma.MiddlewareFunc(func(api huma.API) fxhuma.Middleware {
-		cfgPtr, err := di.Invoke[*Config](inj)
-		if err != nil {
-			slog.Error("authz: resolve config failed", "error", err)
-			return nil
-		}
-		validator, _ := di.Invoke[TokenValidator](inj)
-		enforcer, _ := di.Invoke[*Enforcer](inj)
+		cfgPtr := mustResolve[*Config](inj, "*Config")
+		validator := mustResolve[TokenValidator](inj, "TokenValidator")
+		enforcer := mustResolve[*Enforcer](inj, "*Enforcer")
 
-		cfg := Config{}
-		if cfgPtr != nil {
-			cfg = *cfgPtr
-		}
+		cfg := *cfgPtr
 		if cfg.Enabled && cfg.DevHeaderUser {
 			slog.Warn("auth.dev_header_user enabled: X-User bypasses JWT — disable in production")
 		}
@@ -53,7 +46,7 @@ func provideHumaMiddleware(inj di.Injector) fxhuma.MiddlewareRegistrar {
 			Routes:            di.GetGroup[HTTPRoute](inj),
 			SubjectFunc:       DefaultDevSubjectFunc,
 		}).Middleware(api)
-	})
+	}), nil
 }
 
 // HumaMiddlewareConfig 配置 [NewHumaMiddleware]。
@@ -100,13 +93,18 @@ func NewHumaMiddleware(cfg HumaMiddlewareConfig) fxhuma.MiddlewareRegistrar {
 		if len(bindSeen) >= maxBindCache {
 			bindSeen = map[string]struct{}{}
 		}
-		bindMu.Unlock()
-
-		maybeAutoBindBootstrap(ctx, enf, subject, cfg.BootstrapRole)
-
-		bindMu.Lock()
+		// 先占位，避免同一 subject 的并发请求重复查库。
 		bindSeen[subject] = struct{}{}
 		bindMu.Unlock()
+
+		// 失败时撤销占位，下次请求重试。
+		// 早期实现无论成败都记为「已处理」，一次 DB 抖动就会让该用户
+		// 在整个进程生命周期内拿不到 bootstrap 角色（重启才好）。
+		if err := maybeAutoBindBootstrap(ctx, enf, subject, cfg.BootstrapRole); err != nil {
+			bindMu.Lock()
+			delete(bindSeen, subject)
+			bindMu.Unlock()
+		}
 	}
 
 	return fxhuma.MiddlewareFunc(func(api huma.API) fxhuma.Middleware {
@@ -135,28 +133,22 @@ func NewHumaMiddleware(cfg HumaMiddlewareConfig) fxhuma.MiddlewareRegistrar {
 				}
 			}
 
-			if enf != nil && enf.Enabled() {
-				if cfg.AutoBindBootstrap {
-					ensureBootstrap(ctx.Context(), subj.ID)
-				}
-				allowed, enfErr := enf.Enforce(ctx.Context(), EnforceInput{
-					Sub: subj.ID,
-					Obj: path,
-					Act: method,
-				})
-				if enfErr != nil {
-					slog.Error("auth casbin enforce failed", "error", enfErr, "sub", subj.ID, "obj", path, "act", method)
-					_ = huma.WriteErr(api, ctx, http.StatusInternalServerError, "internal error")
-					return
-				}
-				if !allowed {
-					_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
-					return
-				}
-			} else if ok && route.Permission != "" && !subj.Has(route.Permission) {
-				_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
+			if cfg.AutoBindBootstrap && enf != nil && enf.Enabled() {
+				ensureBootstrap(ctx.Context(), subj.ID)
+			}
+
+			// Huma 的 operation 模板可能与真实路径不同：objPath 用真实路径（Casbin 判定），
+			// routePath 用路由表匹配到的模板。
+			routePath := path
+			if ok {
+				routePath = route.Path
+			}
+			switch authorize(ctx.Context(), subj, method, path, routePath, enf, idx, cfg.DenyUnregistered) {
+			case decisionInternal:
+				slog.Error("auth casbin enforce failed", "sub", subj.ID, "obj", path, "act", method)
+				_ = huma.WriteErr(api, ctx, http.StatusInternalServerError, "internal error")
 				return
-			} else if !ok && cfg.DenyUnregistered {
+			case decisionForbidden:
 				_ = huma.WriteErr(api, ctx, http.StatusForbidden, "forbidden")
 				return
 			}
@@ -206,25 +198,29 @@ func resolveSubject(ctx huma.Context, cfg HumaMiddlewareConfig, subjectFn Subjec
 }
 
 // maybeAutoBindBootstrap 在主体尚无角色时绑定 主体 → bootstrapRole。
-func maybeAutoBindBootstrap(ctx context.Context, enf *Enforcer, subject, role string) {
+//
+// 返回 error 是为了让调用方在失败时撤销「已处理」标记并重试；
+// 早期返回 void，一次 DB 抖动就会永久跳过该 subject。
+func maybeAutoBindBootstrap(ctx context.Context, enf *Enforcer, subject, role string) error {
 	subject = strings.TrimSpace(subject)
 	role = strings.TrimSpace(role)
 	if subject == "" || role == "" || enf == nil || !enf.Enabled() {
-		return
+		return nil
 	}
 	roles, err := enf.ListSubjectRoles(ctx, subject)
 	if err != nil {
 		slog.Warn("authz auto-bind list roles", "subject", subject, "error", err)
-		return
+		return err
 	}
 	if len(roles) > 0 {
-		return
+		return nil
 	}
 	if err := enf.AddSubjectRole(ctx, AddSubjectRoleInput{Subject: subject, Role: role}); err != nil {
 		slog.Warn("authz auto-bind bootstrap role", "subject", subject, "role", role, "error", err)
-		return
+		return err
 	}
 	slog.Info("authz auto-bound bootstrap role", "subject", subject, "role", role)
+	return nil
 }
 
 type unauthorizedError struct{}

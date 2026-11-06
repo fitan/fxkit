@@ -6,10 +6,8 @@
 package server
 
 import (
-	"context"
-	"fmt"
+	"errors"
 	"net/http"
-	"reflect"
 
 	"github.com/fitan/fxkit/di"
 )
@@ -23,6 +21,12 @@ type Route struct {
 	Pattern string
 	Handler http.Handler
 	Methods []string
+	// MaxBodyBytes 为该路由单独限制请求体大小。
+	//
+	//  0  使用 [Config.MaxBodyBytes]（默认 1 MiB，与 Huma 路由一致）
+	// <0  不限制（例如文件上传路由）
+	// >0  使用该值
+	MaxBodyBytes int64
 }
 
 // Middleware 是标准 net/http 中间件。在 [NewMux] 时按提供顺序挂载。
@@ -38,55 +42,43 @@ type Middleware = func(http.Handler) http.Handler
 //	func(di.Injector) []Route   装配期调用
 //	func(*Service) []Route      延迟到 PreStart 解析依赖后调用
 //
-// 无法识别的签名会 panic。此前的实现会静默塞入 Route{} 空路由，
-// 直接导致 chi 在注册时报 "routing pattern must begin with '/'"。
-func ProvideRoutes(fn any) di.Option {
-	return func(i di.Injector) {
-		if fn == nil {
-			return
+// limitRequestBody 把请求体限制在 max 字节；max <= 0 表示不限制。
+//
+// 超限时 Read 返回 *http.MaxBytesError（用 [IsBodyTooLarge] 判断），
+// 调用方应回 413。
+func limitRequestBody(h http.Handler, max int64) http.Handler {
+	if max <= 0 {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, max)
 		}
-		switch f := fn.(type) {
-		case []Route:
-			di.ProvideGroupItems(i, f...)
-			return
-		case Route:
-			di.ProvideGroupItem(i, f)
-			return
-		case func() []Route:
-			di.ProvideGroupItems(i, f()...)
-			return
-		case func(di.Injector) []Route:
-			di.ProvideGroupItems(i, f(i)...)
-			return
-		}
+		h.ServeHTTP(w, r)
+	})
+}
 
-		// 任意 func(dep...) []Route / func(dep...) ([]Route, error)：延迟装配。
-		val := reflect.ValueOf(fn)
-		if val.Kind() != reflect.Func {
-			panic("server.ProvideRoutes: unsupported argument " + reflect.TypeOf(fn).String() +
-				"; want []Route or a constructor returning it")
+// IsBodyTooLarge 报告 err 是否由请求体超过 [Config.MaxBodyBytes] /
+// [Route.MaxBodyBytes] 引起，供裸 chi handler 回 413。
+func IsBodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
+}
+
+// ProvideRoutes 发布若干 [Route]。需要依赖时用 [ProvideRoutesLazy]。
+func ProvideRoutes(routes ...Route) di.Option {
+	return func(i di.Injector) {
+		if len(routes) == 0 {
+			return
 		}
-		if err := di.ValidateConstructor(val.Type()); err != nil {
-			panic("server.ProvideRoutes: " + err.Error())
-		}
-		lc, err := di.Invoke[*di.Lifecycle](i)
-		if err != nil || lc == nil {
-			panic("server.ProvideRoutes: constructor form requires *di.Lifecycle in the graph")
-		}
-		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-			OnStart: func(context.Context) error {
-				out, callErr := di.CallConstructor(i, fn)
-				if callErr != nil {
-					return fmt.Errorf("server.ProvideRoutes: %w", callErr)
-				}
-				routes, ok := out.([]Route)
-				if !ok {
-					return fmt.Errorf("server.ProvideRoutes: constructor returned %T, want []server.Route", out)
-				}
-				di.ProvideGroupItems(i, routes...)
-				return nil
-			},
-		})
+		di.ProvideGroupItems(i, routes...)
+	}
+}
+
+// ProvideRoutesLazy 在 PreStart 求值（可访问完整依赖图）。
+func ProvideRoutesLazy(fn func(di.Injector) ([]Route, error)) di.Option {
+	return func(i di.Injector) {
+		di.ProvideLazyE[[]Route](i, fn)
 	}
 }
 
@@ -99,50 +91,18 @@ func PrefixRoute(pattern string, h http.Handler) Route {
 	return Route{Pattern: pattern, Handler: h}
 }
 
-// ProvideMiddleware 将 chi 中间件发布到共享链。
-//
-// 支持的形式：Middleware / func() Middleware / func(di.Injector) Middleware /
-// func(*Service) Middleware。无法识别的签名会 panic。
-func ProvideMiddleware(fn any) di.Option {
+// ProvideMiddleware 发布若干 chi 中间件。需要依赖时用 [ProvideMiddlewareLazy]。
+func ProvideMiddleware(mws ...Middleware) di.Option {
 	return func(i di.Injector) {
-		if fn == nil {
-			return
-		}
-		switch f := fn.(type) {
-		case Middleware:
-			di.ProvideGroupItem(i, f)
-			return
-		case func() Middleware:
-			di.ProvideGroupItem(i, f())
-			return
-		case func(di.Injector) Middleware:
-			di.ProvideGroupItem(i, f(i))
-			return
-		}
-		val := reflect.ValueOf(fn)
-		if val.Kind() != reflect.Func {
-			panic("server.ProvideMiddleware: unsupported argument " + reflect.TypeOf(fn).String())
-		}
-		if err := di.ValidateConstructor(val.Type()); err != nil {
-			panic("server.ProvideMiddleware: " + err.Error())
-		}
-		lc, err := di.Invoke[*di.Lifecycle](i)
-		if err != nil || lc == nil {
-			panic("server.ProvideMiddleware: constructor form requires *di.Lifecycle in the graph")
-		}
-		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-			OnStart: func(context.Context) error {
-				out, callErr := di.CallConstructor(i, fn)
-				if callErr != nil {
-					return fmt.Errorf("server.ProvideMiddleware: %w", callErr)
-				}
-				mw, ok := out.(Middleware)
-				if !ok {
-					return fmt.Errorf("server.ProvideMiddleware: constructor returned %T, want server.Middleware", out)
-				}
+		for _, mw := range mws {
+			if mw != nil {
 				di.ProvideGroupItem(i, mw)
-				return nil
-			},
-		})
+			}
+		}
 	}
+}
+
+// ProvideMiddlewareLazy 在 PreStart 求值（可访问完整依赖图）。
+func ProvideMiddlewareLazy(fn func(di.Injector) (Middleware, error)) di.Option {
+	return func(i di.Injector) { di.ProvideLazyE[Middleware](i, fn) }
 }

@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
-	"sync"
 	"syscall"
 	"time"
 
@@ -27,14 +26,16 @@ const (
 )
 
 var (
-	rootName        = "fxkit-app"
-	rootShort       = "fxkit service"
-	rootCmd         *cobra.Command
-	extraCommandsMu sync.Mutex
-	extraCommands   []*cobra.Command
+	rootName      = "fxkit-app"
+	rootShort     = "fxkit service"
+	rootCmd       *cobra.Command
+	extraCommands []*cobra.Command
 )
 
 // SetRootName 自定义 cobra 根命令的 Use 与 Short。
+//
+// 按文档必须在 Run 之前调用（单线程装配期），因此不需要加锁：
+// 早期实现的 sync.Mutex 保护的是一个不存在并发的时间窗口。
 func SetRootName(name, short string) {
 	if name != "" {
 		rootName = name
@@ -44,10 +45,8 @@ func SetRootName(name, short string) {
 	}
 }
 
-// AddCommand 注册额外 cobra 命令。
+// AddCommand 注册额外 cobra 命令（同样必须在 Run 之前调用）。
 func AddCommand(cmds ...*cobra.Command) {
-	extraCommandsMu.Lock()
-	defer extraCommandsMu.Unlock()
 	extraCommands = append(extraCommands, cmds...)
 }
 
@@ -79,11 +78,9 @@ func Run(opts ...di.Option) {
 	rootCmd.AddCommand(buildMigrateCmd(opts))
 	rootCmd.AddCommand(buildVersionCmd())
 
-	extraCommandsMu.Lock()
 	for _, c := range extraCommands {
 		rootCmd.AddCommand(c)
 	}
-	extraCommandsMu.Unlock()
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

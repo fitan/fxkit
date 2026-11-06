@@ -21,14 +21,6 @@ type Message struct {
 	IdempotencyKey string
 }
 
-// JSONMessage 是类型安全的泛型消息容器。
-type JSONMessage[T any] struct {
-	Pubsub         string
-	Topic          string
-	Payload        T
-	IdempotencyKey string
-}
-
 // Store 使用 [gormx.Client.Conn] 写入 outbox 行；存在外层事务时会加入该事务。
 type Store struct {
 	client *gormx.Client
@@ -66,21 +58,6 @@ func (s *Store) Enqueue(ctx context.Context, msg Message) error {
 		return enqueueIdempotent(s.client.Conn(ctx), row)
 	}
 	return s.client.Conn(ctx).Create(&row).Error
-}
-
-// EnqueueJSON 把 T 类型的 payload 序列化为 JSON，并插入 pending outbox 行。
-// 利用 Go 1.27+ 的泛型方法能力，省去手写 json.Marshal 的样板代码。
-func (s *Store) EnqueueJSON[T any](ctx context.Context, msg JSONMessage[T]) error {
-	b, err := json.Marshal(msg.Payload)
-	if err != nil {
-		return fmt.Errorf("outbox: marshal payload: %w", err)
-	}
-	return s.Enqueue(ctx, Message{
-		Pubsub:         msg.Pubsub,
-		Topic:          msg.Topic,
-		Payload:        b,
-		IdempotencyKey: msg.IdempotencyKey,
-	})
 }
 
 // enqueueIdempotent 插入带 key 的行，仅在已存在的行处于 failed 时才重置它。
@@ -127,17 +104,14 @@ type EnqueueTopicInput[T any] struct {
 
 // EnqueueTopicMsg 把 Msg 序列化为 JSON 并入队。需要设置 IdempotencyKey 时优先用它。
 func EnqueueTopicMsg[T any](ctx context.Context, in EnqueueTopicInput[T]) error {
-	topic := strings.TrimSpace(in.Topic)
-	if topic == "" {
-		return fmt.Errorf("outbox: empty topic")
-	}
 	raw, err := json.Marshal(in.Msg)
 	if err != nil {
-		return fmt.Errorf("outbox: marshal topic %q: %w", topic, err)
+		return fmt.Errorf("outbox: marshal topic %q: %w", strings.TrimSpace(in.Topic), err)
 	}
+	// topic / payload 的校验统一交给 Enqueue，避免两套错误文案与两处维护。
 	return in.Store.Enqueue(ctx, Message{
 		Pubsub:         in.PubsubName,
-		Topic:          topic,
+		Topic:          strings.TrimSpace(in.Topic),
 		Payload:        raw,
 		IdempotencyKey: in.IdempotencyKey,
 	})

@@ -37,18 +37,42 @@ func (c *recordingCache) Set(ctx context.Context, key string, val []byte, ttl ti
 	return c.MemoryCache.Set(ctx, key, val, ttl)
 }
 
-func TestGetOrSet_NonPositiveTTLUsesDefault(t *testing.T) {
+// TestGetOrSet_TTLSemantics 锁定单字段的三种语义：
+//
+//	>0 用该值；=0 用模块默认；<0 永不过期。
+//
+// 早期「用默认」与「永不过期」靠 TTL<=0 + 另一个 Forever bool 两个轴表达，
+// 导致 ttl=-1s 到底是「默认」还是「永不过期」需要查实现才知道。
+func TestGetOrSet_TTLSemantics(t *testing.T) {
 	ctx := context.Background()
 	def := defaultOptions().TTL
 
-	for _, ttl := range []time.Duration{0, -time.Second} {
+	t.Run("zero uses default", func(t *testing.T) {
 		c := newRecordingCache()
-		_, err := GetOrSet(ctx, c, fmt.Sprintf("k-%v", ttl), func(context.Context) (string, error) {
+		_, err := GetOrSet(ctx, c, "k-zero", func(context.Context) (string, error) {
 			return "v", nil
-		}, WithTTL(ttl), WithJitter(0))
+		}, WithTTL(0), WithJitter(0))
 		require.NoError(t, err)
-		assert.Equal(t, def, c.setTTL, "ttl=%v must fall back to default TTL, not never-expire", ttl)
-	}
+		assert.Equal(t, def, c.setTTL)
+	})
+
+	t.Run("negative means forever", func(t *testing.T) {
+		c := newRecordingCache()
+		_, err := GetOrSet(ctx, c, "k-neg", func(context.Context) (string, error) {
+			return "v", nil
+		}, WithTTL(-time.Second), WithJitter(0))
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(0), c.setTTL, "negative TTL must mean never expire")
+	})
+
+	t.Run("positive is used as-is", func(t *testing.T) {
+		c := newRecordingCache()
+		_, err := GetOrSet(ctx, c, "k-pos", func(context.Context) (string, error) {
+			return "v", nil
+		}, WithTTL(2*time.Minute), WithJitter(0))
+		require.NoError(t, err)
+		assert.Equal(t, 2*time.Minute, c.setTTL)
+	})
 }
 
 func TestGetOrSet_WithForeverWritesZeroTTL(t *testing.T) {

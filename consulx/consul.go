@@ -14,7 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/internal/consuladdr"
 	"github.com/fitan/fxkit/server"
 )
 
@@ -101,8 +101,16 @@ func registerStartupMeta(lc *di.Lifecycle, disc *Config, app *config.App, srv *s
 			httpClient := &http.Client{Timeout: 8 * time.Second}
 			meta := buildinfo.Meta()
 
+			// 只有自注册（discovery.register）才需要「等注册完成再补元数据」。
+			// 未开启自注册时（例如 sidecar 注册）只做一次尽力尝试，
+			// 否则每次启动都会空等 6 轮（每轮 800ms，共 ~4.8s）。
+			attempts := 1
+			if disc.Register {
+				attempts = 3
+			}
+
 			var lastErr error
-			for i := 0; i < 6; i++ {
+			for i := 0; i < attempts; i++ {
 				if err := patchConsulServiceMeta(ctx, httpClient, consulAddr, appName, targetPort, meta); err == nil {
 					slog.Info("consul meta patched",
 						"service", appName,
@@ -125,8 +133,7 @@ func registerStartupMeta(lc *di.Lifecycle, disc *Config, app *config.App, srv *s
 				}
 			}
 			slog.Warn("consul meta patch skipped",
-				"service", appName, "port", targetPort, "err", lastErr,
-			)
+				"service", appName, "port", targetPort, "err", lastErr)
 			return nil
 		},
 	})
@@ -172,7 +179,7 @@ func patchConsulServiceMeta(
 	targetPort int,
 	extraMeta map[string]string,
 ) error {
-	base, err := normalizeConsulAddr(consulAddr)
+	base, err := consuladdr.Normalize(consulAddr)
 	if err != nil {
 		return err
 	}
@@ -202,21 +209,6 @@ func patchConsulServiceMeta(
 		return fmt.Errorf("no consul agent service matched app=%s port=%d", appName, targetPort)
 	}
 	return nil
-}
-
-func normalizeConsulAddr(addr string) (string, error) {
-	a := strings.TrimSpace(strings.TrimRight(addr, "/"))
-	if a == "" {
-		return "", fmt.Errorf("empty consul address")
-	}
-	if !strings.HasPrefix(a, "http://") && !strings.HasPrefix(a, "https://") {
-		a = "http://" + a
-	}
-	u, err := url.Parse(a)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimRight(u.String(), "/"), nil
 }
 
 func listAgentServices(ctx context.Context, client *http.Client, base string) ([]agentService, error) {
@@ -356,7 +348,7 @@ func registerServiceWithMeta(
 var Module = di.Module("fxkit/consulx",
 	config.Provide[Config]("discovery"),
 	func(i di.Injector) {
-		lc, _ := di.Invoke[*di.Lifecycle](i)
+		lc := di.MustInvoke[*di.Lifecycle](i)
 		disc, _ := di.Invoke[*Config](i)
 		app, _ := di.Invoke[*config.App](i)
 		srv, _ := di.Invoke[*server.Config](i)
@@ -369,7 +361,7 @@ var Module = di.Module("fxkit/consulx",
 		// 这里用更高的 PreStart 优先级：先解析 HTTPServer（把 bind hook 追加到
 		// lc.hooks），再追加 consul 的 OnStart hook，从而保证「先监听再注册」。
 		if lc != nil {
-			lc.AppendPreStartPhase(di.PhaseMountHTTP+10, di.Hook{
+			lc.AppendPreStartPhase(di.PhaseAfterHTTPServer, di.Hook{
 				OnStart: func(context.Context) error {
 					if disc != nil && disc.Register {
 						if _, err := di.Invoke[*server.HTTPServer](i); err != nil {

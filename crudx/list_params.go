@@ -95,27 +95,3 @@ func (spec *ListSpec) Normalize(p *ListParams) {
 		p.Start = 0
 	}
 }
-
-// deriveSortFields 复制 Spec，并在某名称缺失时用 Fields 填充 SortFields。
-// 不会修改调用方的 map。
-func deriveSortFields(spec ListSpec) ListSpec {
-	if len(spec.Fields) == 0 {
-		return spec
-	}
-	out := spec
-	sf := make(map[string]string, len(spec.SortFields)+len(spec.Fields))
-	for k, v := range spec.SortFields {
-		sf[k] = v
-	}
-	for name, f := range spec.Fields {
-		if _, ok := sf[name]; ok {
-			continue
-		}
-		if f.Column == "" {
-			continue
-		}
-		sf[name] = f.Column
-	}
-	out.SortFields = sf
-	return out
-}

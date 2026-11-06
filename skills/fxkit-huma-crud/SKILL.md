@@ -5,8 +5,8 @@ description: >-
   whitelist), ListQueryInput, and optional RegisterResource. Use when the user
   asks for REST list APIs, q= filters, cursor pagination, fxkit gen resource,
   or JSON get/create/update/delete on an fxkit service. Pair with fxkit for
-  module wiring and fxkit-authz for permissions. Do not reach for NewRepo
-  unless the user already uses it.
+  module wiring and fxkit-authz for permissions. Do not introduce a generic
+  repository layer; keep writes explicit in the service.
 ---
 
 # fxkit Huma + crudx
@@ -60,7 +60,8 @@ HTTP 入参嵌入 `fxhuma.ListQueryInput`，再 `ListParamsFromInput`。Huma 级
 ### 单个 list operation 示例
 
 ```go
-fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
+fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+	svc := di.MustInvoke[*Service](i)
 	return fxhuma.FuncRegistrar(func(api huma.API) {
 		fxhuma.Register(api, huma.Operation{
 			OperationID: "listUsers",
@@ -78,7 +79,7 @@ fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
 			}
 			return &ListUsersOutput{Body: out}, nil
 		})
-	})
+	}), nil
 })
 ```
 
@@ -97,7 +98,8 @@ Delete(ctx, id string) error
 ```
 
 ```go
-fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
+fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+	svc := di.MustInvoke[*Service](i)
 	return fxhuma.FuncRegistrar(func(api huma.API) {
 		fxhuma.RegisterResource(api, svc, fxhuma.RegisterResourceInput[UpdateReq]{
 			Path: "/articles",
@@ -107,7 +109,7 @@ fxhuma.ProvideRegistrar(func(svc *Service) fxhuma.Registrar {
 				return body
 			},
 		})
-	})
+	}), nil
 })
 ```
 

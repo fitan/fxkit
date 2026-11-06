@@ -49,18 +49,16 @@ func (r *Resolver) GetOrSet[T any](
 	}
 
 	merged := r.def
-	// 允许调用方覆盖，但 TTL <= 0 视为「沿用配置」，避免把配置值意外清零。
+	// 调用方选项叠加在配置默认之上。TTL 的 0 表示「沿用配置」，
+	// <-0 表示永不过期，两者不再靠另一个 bool 区分。
 	for _, fn := range opts {
 		if fn == nil {
 			continue
 		}
 		override := merged
 		fn(&override)
-		if override.TTL <= 0 && !override.Forever {
+		if override.TTL == 0 {
 			override.TTL = merged.TTL
-		}
-		if override.NullTTL < 0 {
-			override.NullTTL = merged.NullTTL
 		}
 		merged = override
 	}

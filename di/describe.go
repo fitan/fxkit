@@ -54,11 +54,13 @@ func Describe(i Injector) (services []ServiceInfo, groups []GroupInfo) {
 		services[idx].Kind = serviceKind(i, services[idx].Name)
 	}
 
-	for _, elem := range listGroupTypes(i) {
-		groups = append(groups, GroupInfo{
-			ElemType: elem.String(),
-			Count:    groupLen(i, elem),
-		})
+	if gi := groupIndexOf(i); gi != nil {
+		for _, elem := range gi.elemTypes() {
+			groups = append(groups, GroupInfo{
+				ElemType: elem.String(),
+				Count:    groupLen(i, elem),
+			})
+		}
 	}
 	return services, groups
 }
@@ -125,7 +127,11 @@ func serviceKind(Injector, string) string {
 
 // groupLen 返回容器中某元素类型的 group 条目数。
 func groupLen(i Injector, elem reflect.Type) int {
-	items, ok := groupValues(i, elem)
+	gi := groupIndexOf(i)
+	if gi == nil {
+		return 0
+	}
+	items, ok := gi.items(elem)
 	if !ok {
 		return 0
 	}

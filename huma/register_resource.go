@@ -40,10 +40,29 @@ type RegisterResourceInput[UpdateReq any] struct {
 	PascalCaseOperationID bool
 }
 
-// ResourceOperations 返回 [RegisterResource] 挂载的 Huma operation。
-// 若同时要发布 HTTPRoute，可配合 [authz.HTTPRoutesFromOperations] 使用；
-// 启用 auto_register_routes 时，OpenAPI 抓取已覆盖这些路径。
-func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []huma.Operation {
+// resourceOpKind 标识一条资源路由的语义（用于绑定对应 handler）。
+type resourceOpKind int
+
+const (
+	opList resourceOpKind = iota
+	opGet
+	opCreate
+	opUpdate
+	opDelete
+)
+
+// resourceOp 是一条资源路由的元数据 + 语义。
+type resourceOp struct {
+	kind resourceOpKind
+	op   huma.Operation
+}
+
+// buildResourceOps 是 operationId / method / path / summary / tags 的**唯一**构造点。
+//
+// [ResourceOperations]（给 authz 声明权限）与 [RegisterResource]（真正挂载）都从这里取，
+// 避免两份逐字复制：早期实现各写一遍，漏改一侧就会出现「注册的 op 与 authz 声明的 op
+// 不一致」——鉴权放行但接口不存在，或反之。
+func buildResourceOps[UpdateReq any](in RegisterResourceInput[UpdateReq]) []resourceOp {
 	path := in.Path
 	tags := in.Tags
 	listSummary := in.ListSummary
@@ -51,74 +70,72 @@ func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []hu
 		listSummary = "List"
 	}
 	opSuffix := sanitizeOpID(path, in.PascalCaseOperationID)
-
-	var ops []huma.Operation
-	if !in.DisableList {
-		prefix := "list"
+	prefix := func(lower, upper string) string {
 		if in.PascalCaseOperationID {
-			prefix = "List"
+			return upper
 		}
-		ops = append(ops, huma.Operation{
-			OperationID: prefix + opSuffix,
+		return lower
+	}
+
+	var ops []resourceOp
+	if !in.DisableList {
+		ops = append(ops, resourceOp{opList, huma.Operation{
+			OperationID: prefix("list", "List") + opSuffix,
 			Method:      http.MethodGet,
 			Path:        path,
 			Summary:     listSummary,
 			Tags:        tags,
-		})
+		}})
 	}
 	if !in.DisableGet {
-		prefix := "get"
-		if in.PascalCaseOperationID {
-			prefix = "Get"
-		}
-		ops = append(ops, huma.Operation{
-			OperationID: prefix + opSuffix,
+		ops = append(ops, resourceOp{opGet, huma.Operation{
+			OperationID: prefix("get", "Get") + opSuffix,
 			Method:      http.MethodGet,
 			Path:        path + "/{id}",
 			Summary:     "Get",
 			Tags:        tags,
-		})
+		}})
 	}
 	if !in.DisableCreate {
-		prefix := "create"
-		if in.PascalCaseOperationID {
-			prefix = "Create"
-		}
-		ops = append(ops, huma.Operation{
-			OperationID: prefix + opSuffix,
+		ops = append(ops, resourceOp{opCreate, huma.Operation{
+			OperationID: prefix("create", "Create") + opSuffix,
 			Method:      http.MethodPost,
 			Path:        path,
 			Summary:     "Create",
 			Tags:        tags,
-		})
+		}})
 	}
 	if in.BindUpdate != nil && !in.DisableUpdate {
-		prefix := "update"
-		if in.PascalCaseOperationID {
-			prefix = "Update"
-		}
-		ops = append(ops, huma.Operation{
-			OperationID: prefix + opSuffix,
+		ops = append(ops, resourceOp{opUpdate, huma.Operation{
+			OperationID: prefix("update", "Update") + opSuffix,
 			Method:      http.MethodPut,
 			Path:        path + "/{id}",
 			Summary:     "Update",
 			Tags:        tags,
-		})
+		}})
 	}
 	if !in.DisableDelete {
-		prefix := "delete"
-		if in.PascalCaseOperationID {
-			prefix = "Delete"
-		}
-		ops = append(ops, huma.Operation{
-			OperationID: prefix + opSuffix,
+		ops = append(ops, resourceOp{opDelete, huma.Operation{
+			OperationID: prefix("delete", "Delete") + opSuffix,
 			Method:      http.MethodDelete,
 			Path:        path + "/{id}",
 			Summary:     "Delete",
 			Tags:        tags,
-		})
+		}})
 	}
 	return ops
+}
+
+// ResourceOperations 返回 [RegisterResource] 挂载的 Huma operation。
+// 若同时要发布 HTTPRoute，可配合 [authz.HTTPRoutesFromOperations] 使用；
+// 启用 auto_register_routes 时，OpenAPI 抓取已覆盖这些路径。
+func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []huma.Operation {
+	ops := buildResourceOps(in)
+	out := make([]huma.Operation, len(ops))
+	for i, o := range ops {
+		out[i] = o.op
+	}
+	return out
 }
 
 type idPath struct {
@@ -159,118 +176,55 @@ func RegisterResource[ListRow, Detail, CreateReq, UpdateReq any](
 	svc ResourceHandlers[ListRow, Detail, CreateReq, UpdateReq],
 	in RegisterResourceInput[UpdateReq],
 ) {
-	path := in.Path
-	tags := in.Tags
-	listSummary := in.ListSummary
-	if listSummary == "" {
-		listSummary = "List"
-	}
-	opSuffix := sanitizeOpID(path, in.PascalCaseOperationID)
-
-	if !in.DisableList {
-		prefix := "list"
-		if in.PascalCaseOperationID {
-			prefix = "List"
+	for _, ro := range buildResourceOps(in) {
+		switch ro.kind {
+		case opList:
+			Register(api, ro.op, func(ctx context.Context, input *struct {
+				ListQueryInput
+			}) (*listOut[ListRow], error) {
+				params, err := ListParamsFromInput(&input.ListQueryInput)
+				if err != nil {
+					return nil, err
+				}
+				out, err := svc.List(ctx, params)
+				if err != nil {
+					return nil, err
+				}
+				return &listOut[ListRow]{Body: out}, nil
+			})
+		case opGet:
+			Register(api, ro.op, func(ctx context.Context, input *idPath) (*detailOut[Detail], error) {
+				out, err := svc.Get(ctx, input.ID)
+				if err != nil {
+					return nil, err
+				}
+				return &detailOut[Detail]{Body: out}, nil
+			})
+		case opCreate:
+			Register(api, ro.op, func(ctx context.Context, input *createIn[CreateReq]) (*detailOut[Detail], error) {
+				out, err := svc.Create(ctx, input.Body)
+				if err != nil {
+					return nil, err
+				}
+				return &detailOut[Detail]{Body: out}, nil
+			})
+		case opUpdate:
+			Register(api, ro.op, func(ctx context.Context, input *updateIn[UpdateReq]) (*detailOut[Detail], error) {
+				req := in.BindUpdate(input.ID, input.Body)
+				out, err := svc.Update(ctx, req)
+				if err != nil {
+					return nil, err
+				}
+				return &detailOut[Detail]{Body: out}, nil
+			})
+		case opDelete:
+			Register(api, ro.op, func(ctx context.Context, input *idPath) (*emptyOut, error) {
+				if err := svc.Delete(ctx, input.ID); err != nil {
+					return nil, err
+				}
+				return &emptyOut{}, nil
+			})
 		}
-		Register(api, huma.Operation{
-			OperationID: prefix + opSuffix,
-			Method:      http.MethodGet,
-			Path:        path,
-			Summary:     listSummary,
-			Tags:        tags,
-		}, func(ctx context.Context, input *struct {
-			ListQueryInput
-		}) (*listOut[ListRow], error) {
-			params, err := ListParamsFromInput(&input.ListQueryInput)
-			if err != nil {
-				return nil, err
-			}
-			out, err := svc.List(ctx, params)
-			if err != nil {
-				return nil, err
-			}
-			return &listOut[ListRow]{Body: out}, nil
-		})
-	}
-
-	if !in.DisableGet {
-		prefix := "get"
-		if in.PascalCaseOperationID {
-			prefix = "Get"
-		}
-		Register(api, huma.Operation{
-			OperationID: prefix + opSuffix,
-			Method:      http.MethodGet,
-			Path:        path + "/{id}",
-			Summary:     "Get",
-			Tags:        tags,
-		}, func(ctx context.Context, input *idPath) (*detailOut[Detail], error) {
-			out, err := svc.Get(ctx, input.ID)
-			if err != nil {
-				return nil, err
-			}
-			return &detailOut[Detail]{Body: out}, nil
-		})
-	}
-
-	if !in.DisableCreate {
-		prefix := "create"
-		if in.PascalCaseOperationID {
-			prefix = "Create"
-		}
-		Register(api, huma.Operation{
-			OperationID: prefix + opSuffix,
-			Method:      http.MethodPost,
-			Path:        path,
-			Summary:     "Create",
-			Tags:        tags,
-		}, func(ctx context.Context, input *createIn[CreateReq]) (*detailOut[Detail], error) {
-			out, err := svc.Create(ctx, input.Body)
-			if err != nil {
-				return nil, err
-			}
-			return &detailOut[Detail]{Body: out}, nil
-		})
-	}
-
-	if in.BindUpdate != nil && !in.DisableUpdate {
-		prefix := "update"
-		if in.PascalCaseOperationID {
-			prefix = "Update"
-		}
-		Register(api, huma.Operation{
-			OperationID: prefix + opSuffix,
-			Method:      http.MethodPut,
-			Path:        path + "/{id}",
-			Summary:     "Update",
-			Tags:        tags,
-		}, func(ctx context.Context, input *updateIn[UpdateReq]) (*detailOut[Detail], error) {
-			req := in.BindUpdate(input.ID, input.Body)
-			out, err := svc.Update(ctx, req)
-			if err != nil {
-				return nil, err
-			}
-			return &detailOut[Detail]{Body: out}, nil
-		})
-	}
-
-	if !in.DisableDelete {
-		prefix := "delete"
-		if in.PascalCaseOperationID {
-			prefix = "Delete"
-		}
-		Register(api, huma.Operation{
-			OperationID: prefix + opSuffix,
-			Method:      http.MethodDelete,
-			Path:        path + "/{id}",
-			Summary:     "Delete",
-			Tags:        tags,
-		}, func(ctx context.Context, input *idPath) (*emptyOut, error) {
-			if err := svc.Delete(ctx, input.ID); err != nil {
-				return nil, err
-			}
-			return &emptyOut{}, nil
-		})
 	}
 }
 

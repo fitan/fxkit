@@ -81,14 +81,12 @@ func TestRoutesFromModulesRegisteredAfterServer(t *testing.T) {
 		fxkit.Minimal(),
 		fxhuma.Module,
 		// 故意放在 Minimal() 之后，模拟「后装配的业务模块」
-		server.ProvideRoutes(func() []server.Route {
-			return []server.Route{{
-				Pattern: "/late",
-				Methods: []string{http.MethodGet},
-				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					_, _ = w.Write([]byte("late-ok"))
-				}),
-			}}
+		server.ProvideRoutes(server.Route{
+			Pattern: "/late",
+			Methods: []string{http.MethodGet},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("late-ok"))
+			}),
 		}),
 	)
 	defer root.Shutdown()
@@ -123,9 +121,9 @@ func TestServiceCtorIsRegistered(t *testing.T) {
 	root := di.New()
 	defer root.Shutdown()
 
-	svcOption := fxkit.Service("probe", func() (*probeService, error) {
+	svcOption := fxkit.Service("probe", fxkit.Provide(func(di.Injector) (*probeService, error) {
 		return &probeService{Name: "ok"}, nil
-	})
+	}))
 	svcOption(root)
 
 	svc, err := di.Invoke[*probeService](root)
@@ -244,7 +242,7 @@ func TestGracefulShutdownDrainsInFlight(t *testing.T) {
 	root := di.New(
 		func(i di.Injector) { di.ProvideValue(i, config.Options{ConfigFile: cfgPath}) },
 		fxkit.Minimal(),
-		server.ProvideRoutes(func() []server.Route { return []server.Route{slow} }),
+		server.ProvideRoutes(slow),
 	)
 	defer di.Shutdown(root)
 
@@ -402,11 +400,12 @@ func TestHumaRegistrarInstalledAfterAssembly(t *testing.T) {
 		},
 		fxkit.Minimal(),
 		fxhuma.Module,
-		// 依赖服务的 constructor 形式 registrar：必须延迟到 PreStart 求值
-		fxhuma.ProvideRegistrar(func(dep *probeService) fxhuma.Registrar {
+		// 依赖服务的 lazy registrar：延迟到 PreStart 求值
+		fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+			dep := di.MustInvoke[*probeService](i)
 			return fxhuma.FuncRegistrar(func(api huma.API) {
 				registerProbe(api, dep)
-			})
+			}), nil
 		}),
 		di.Module("probe-service", func(i di.Injector) {
 			di.ProvideValue(i, &probeService{Name: "served"})

@@ -21,23 +21,21 @@ func TestCollectOpenAPI_liveSpec(t *testing.T) {
 		server.Module,
 		server.ListenerModule,
 		fxhuma.Module,
-		fxhuma.ProvideRegistrar(func() fxhuma.Registrar {
-			return fxhuma.FuncRegistrar(func(api huma.API) {
-				fxhuma.Register(api, huma.Operation{
-					OperationID: "get-greeting",
-					Method:      http.MethodGet,
-					Path:        "/greeting/{name}",
-				}, func(_ context.Context, in *struct {
-					Name string `path:"name"`
-				}) (*struct {
-					Body struct {
-						Message string `json:"message"`
-					}
-				}, error) {
-					return nil, nil
-				})
+		fxhuma.ProvideRegistrar(fxhuma.FuncRegistrar(func(api huma.API) {
+			fxhuma.Register(api, huma.Operation{
+				OperationID: "get-greeting",
+				Method:      http.MethodGet,
+				Path:        "/greeting/{name}",
+			}, func(_ context.Context, in *struct {
+				Name string `path:"name"`
+			}) (*struct {
+				Body struct {
+					Message string `json:"message"`
+				}
+			}, error) {
+				return nil, nil
 			})
-		}),
+		})),
 	}, config.Options{}, openapi.EncodeInput{Version: openapi.Spec30, Format: openapi.FormatYAML}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -59,17 +57,15 @@ func TestCollectOpenAPI_OfflineWithFailingHook(t *testing.T) {
 		server.Module,
 		server.ListenerModule,
 		fxhuma.Module,
-		fxhuma.ProvideRegistrar(func() fxhuma.Registrar {
-			return fxhuma.FuncRegistrar(func(api huma.API) {
-				fxhuma.Register(api, huma.Operation{
-					OperationID: "offline-endpoint",
-					Method:      http.MethodGet,
-					Path:        "/offline",
-				}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
-					return nil, nil
-				})
+		fxhuma.ProvideRegistrar(fxhuma.FuncRegistrar(func(api huma.API) {
+			fxhuma.Register(api, huma.Operation{
+				OperationID: "offline-endpoint",
+				Method:      http.MethodGet,
+				Path:        "/offline",
+			}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
+				return nil, nil
 			})
-		}),
+		})),
 		func(i di.Injector) {
 			lc, _ := di.Invoke[*di.Lifecycle](i)
 			if lc != nil {

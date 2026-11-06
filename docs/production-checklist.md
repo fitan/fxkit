@@ -98,7 +98,7 @@ HTTP 层超时解决不了这个问题——它只能让客户端早点收到 50
 ④ 滚动发布        新副本启动时 check_schema 会再校验一次
 ```
 
-- 框架只拥有 5 张表：`outbox_events`、`outbox_inbox_events`、`casbin_rule`、`authz_api_permission`、`authz_role`。
+- 框架只拥有 4 张表：`outbox_events`、`outbox_inbox_events`、`casbin_rule`、`authz_role`。
 - 业务表由业务迁移管理，建议与框架表使用**不同的版本表**。
 - 回滚脚本：`gormx/migrations/*/0001_init.rollback.sql`（仅开发/预发使用；生产回滚优先前向修复）。
 

@@ -29,25 +29,55 @@ func claimBatch(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent,
 	}
 }
 
-func newLeaseID() string {
+// newLeaseID 生成租约凭证。
+//
+// 容器不可回退到时间戳：lease_id 是 CAS 的凭证，同纳秒内可重复会让
+// 「续租/标记」认错行。rand 不可用时宁可直接报错。
+func newLeaseID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		return "", fmt.Errorf("outbox: generate lease id: %w", err)
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:]), nil
+}
+
+// claimPredicate 是「可认领」条件：pending，或租约已过期的 processing。
+// PG 与 SQLite 两条路径共用，避免改一处忘另一处。
+const claimPredicate = `(status = ? OR (status = ? AND (locked_at IS NULL OR locked_at < ?)))`
+
+// claimSetValues 是认领时要写入的列。
+func claimSetValues(now time.Time, leaseID string) map[string]any {
+	return map[string]any{
+		"status":    StatusProcessing,
+		"locked_at": now,
+		"lease_id":  leaseID,
+		"attempts":  gorm.Expr("attempts + 1"),
+	}
+}
+
+// markClaimed 把认领结果同步到内存（PG 路径 UPDATE 后不会回填 RETURNING）。
+func markClaimed(claimed []OutboxEvent, now time.Time, leaseID string) {
+	for i := range claimed {
+		claimed[i].Status = StatusProcessing
+		locked := now
+		claimed[i].LockedAt = &locked
+		claimed[i].LeaseID = leaseID
+		claimed[i].Attempts++
+	}
 }
 
 func claimSkipLocked(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent, error) {
 	now := time.Now().UTC()
-	leaseID := newLeaseID()
+	leaseID, err := newLeaseID()
+	if err != nil {
+		return nil, err
+	}
 	var claimed []OutboxEvent
-	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var pending []OutboxEvent
 		if err := tx.Raw(
-			`SELECT * FROM outbox_events
-			 WHERE status = ?
-			    OR (status = ? AND (locked_at IS NULL OR locked_at < ?))
-			 ORDER BY id ASC LIMIT ? FOR UPDATE SKIP LOCKED`,
+			`SELECT * FROM outbox_events WHERE `+claimPredicate+
+				` ORDER BY id ASC LIMIT ? FOR UPDATE SKIP LOCKED`,
 			StatusPending, StatusProcessing, p.StaleBefore, p.Limit,
 		).Scan(&pending).Error; err != nil {
 			return fmt.Errorf("outbox: claim select: %w", err)
@@ -61,22 +91,11 @@ func claimSkipLocked(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxE
 		}
 		if err := tx.Model(&OutboxEvent{}).
 			Where("id IN ?", ids).
-			Updates(map[string]any{
-				"status":    StatusProcessing,
-				"locked_at": now,
-				"lease_id":  leaseID,
-				"attempts":  gorm.Expr("attempts + 1"),
-			}).Error; err != nil {
+			Updates(claimSetValues(now, leaseID)).Error; err != nil {
 			return fmt.Errorf("outbox: claim update: %w", err)
 		}
 		claimed = pending
-		for i := range claimed {
-			claimed[i].Status = StatusProcessing
-			locked := now
-			claimed[i].LockedAt = &locked
-			claimed[i].LeaseID = leaseID
-			claimed[i].Attempts++
-		}
+		markClaimed(claimed, now, leaseID)
 		return nil
 	})
 	return claimed, err
@@ -84,16 +103,17 @@ func claimSkipLocked(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxE
 
 func claimSQLite(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent, error) {
 	now := time.Now().UTC()
-	leaseID := newLeaseID()
+	leaseID, err := newLeaseID()
+	if err != nil {
+		return nil, err
+	}
 	var claimed []OutboxEvent
-	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// SQLite 不支持 SKIP LOCKED；子查询 UPDATE 在事务内是原子的。
 		if err := tx.Raw(
 			`UPDATE outbox_events SET status = ?, locked_at = ?, lease_id = ?, attempts = attempts + 1 WHERE id IN (
-				SELECT id FROM outbox_events
-				WHERE status = ?
-				   OR (status = ? AND (locked_at IS NULL OR locked_at < ?))
-				ORDER BY id ASC LIMIT ?
+				SELECT id FROM outbox_events WHERE `+claimPredicate+
+				` ORDER BY id ASC LIMIT ?
 			) RETURNING *`,
 			StatusProcessing, now, leaseID, StatusPending, StatusProcessing, p.StaleBefore, p.Limit,
 		).Scan(&claimed).Error; err != nil {

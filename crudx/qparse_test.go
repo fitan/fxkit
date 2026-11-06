@@ -364,7 +364,7 @@ func TestParseQConditions_fieldNotExist(t *testing.T) {
 func TestParseQConditions_fieldNotIndexed(t *testing.T) {
 	spec := testSpec()
 	_, err := ParseQConditions(spec, []string{"state~run"})
-	assertInvalid(t, err, ReasonFieldNotIndexed)
+	assertInvalid(t, err, ReasonFieldNotLikeable)
 }
 
 func TestParseQConditions_tooManyInValues(t *testing.T) {

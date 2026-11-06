@@ -50,9 +50,7 @@ func registerRoutesOnStart(p autoRegisterParams) {
 				}); err != nil {
 					return fmt.Errorf("authz ensure bootstrap role: %w", err)
 				}
-				if err := p.Enforcer.SyncRouteCatalog(routes); err != nil {
-					return fmt.Errorf("authz sync route catalog: %w", err)
-				}
+				// 目录是运行时从路由表 + 策略派生的，不再需要启动时写库同步。
 				var bindings []RoleBinding
 				for _, u := range ac.BootstrapUsers {
 					u = strings.TrimSpace(u)

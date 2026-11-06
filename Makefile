@@ -1,6 +1,15 @@
-.PHONY: test test-race bench tidy build
+.PHONY: test test-race bench tidy build ci ci-full
 
 GOPROXY ?= https://goproxy.cn,direct
+
+# 与 CI 提供方无关的检查入口（GitHub / GitLab / Jenkins / 本地通用）。
+# 快检：vet + gofmt + race 测试 + 覆盖率门禁 + example + 生成代码。
+ci:
+	bash scripts/ci.sh
+
+# 追加：方言 / 集成测试 / atlas lint（缺环境变量会跳过并说明）。
+ci-full:
+	bash scripts/ci.sh --full
 
 test:
 	GOPROXY=$(GOPROXY) go test ./...

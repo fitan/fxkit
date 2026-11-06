@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/fitan/fxkit/internal/consuladdr"
 )
 
 func TestApplyConsulToken(t *testing.T) {
@@ -161,7 +163,10 @@ func TestNew_ConsulRequiresKey(t *testing.T) {
 	}
 }
 
-func TestReload_DropsStaleConsulKeys(t *testing.T) {
+// TestNew_DropsStaleConsulKeys 确认每次 New 都重建配置树：
+// 上一轮 KV 里存在、这一轮已删除的键不能残留。
+// （以前由 Config.Reload 覆盖；该 API 已移除，改为验证 New 的等价保证。）
+func TestNew_DropsStaleConsulKeys(t *testing.T) {
 	var body atomic.Value
 	body.Store([]byte("app:\n  name: first\notel:\n  enabled: true\n"))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -187,30 +192,32 @@ func TestReload_DropsStaleConsulKeys(t *testing.T) {
 		t.Fatalf("first load: name=%q otel.enabled=%v", app.Name, otel.Enabled)
 	}
 
+	// KV 变了：重新 New 一棵树，旧键不得残留。
 	body.Store([]byte("app:\n  name: second\n"))
-	if err := cfg.Reload(); err != nil {
+	fresh, err := New(Options{ConsulAddress: srv.URL, ConsulConfigKey: "k"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	app, err = Load[App](cfg, "app")
+	app, err = Load[App](fresh, "app")
 	if err != nil {
 		t.Fatal(err)
 	}
 	otel = struct {
 		Enabled bool `yaml:"enabled"`
 	}{}
-	if err := cfg.UnmarshalKey("otel", &otel); err != nil {
+	if err := fresh.UnmarshalKey("otel", &otel); err != nil {
 		t.Fatal(err)
 	}
 	if app.Name != "second" {
 		t.Fatalf("name=%q", app.Name)
 	}
 	if otel.Enabled {
-		t.Fatal("stale otel.enabled survived reload")
+		t.Fatal("stale otel.enabled survived a fresh load")
 	}
 }
 
 func TestNormalizeConsulHTTPAddr(t *testing.T) {
-	got, err := normalizeConsulHTTPAddr("localhost:8500")
+	got, err := consuladdr.Normalize("localhost:8500")
 	if err != nil {
 		t.Fatal(err)
 	}

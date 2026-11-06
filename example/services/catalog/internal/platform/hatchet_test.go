@@ -33,12 +33,6 @@ func TestHatchet_EscapeHatchAndSubclients(t *testing.T) {
 	assert.Nil(t, client.RateLimits())
 	assert.Nil(t, client.Events())
 	assert.Nil(t, client.Workflows())
-	assert.Nil(t, client.Workers())
-	assert.Nil(t, client.Filters())
-	assert.Nil(t, client.Metrics())
-	assert.Nil(t, client.Logs())
-	assert.Nil(t, client.CEL())
-	assert.Nil(t, client.Webhooks())
 }
 
 func TestHatchet_DeclarativeProvideEventHandler(t *testing.T) {
@@ -95,6 +89,10 @@ func TestHatchet_DAGWorkflowRegistration(t *testing.T) {
 		return nil, nil
 	})
 	opt3(injector)
+
+	// ProvideWorkflow / ProvideWorkflows 走延迟注册（PhaseResolveContributors），
+	// 必须先跑 PreStart 才会进 group。
+	require.NoError(t, di.MustInvoke[*di.Lifecycle](injector).StartPreStartOnly(context.Background()))
 
 	regs := di.GetGroup[hatchetx.Registrar](injector)
 	assert.Len(t, regs, 3)

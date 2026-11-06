@@ -21,7 +21,7 @@ func TestWarmup_CatchesConstructorError(t *testing.T) {
 	defer Shutdown(root)
 
 	boom := errors.New("db connection failed")
-	ToOption(func() (*warmSvc, error) { return nil, boom })(root)
+	Provide(root, func(Injector) (*warmSvc, error) { return nil, boom })
 
 	report := Warmup(root)
 
@@ -41,7 +41,7 @@ func TestWarmup_MissingDepIsOptional(t *testing.T) {
 	defer Shutdown(root)
 
 	// 依赖一个不存在的服务
-	ToOption(func(d *warmDep) *warmSvc { return &warmSvc{D: d} })(root)
+	provideWarmSvc(root)
 
 	report := Warmup(root)
 
@@ -56,7 +56,7 @@ func TestWarmup_HealthyGraphResolvesEverything(t *testing.T) {
 	root := New(func(i Injector) { ProvideValue(i, &warmDep{V: "x"}) })
 	defer Shutdown(root)
 
-	ToOption(func(d *warmDep) *warmSvc { return &warmSvc{D: d} })(root)
+	provideWarmSvc(root)
 
 	report := Warmup(root)
 
@@ -83,7 +83,7 @@ func TestWarmup_NilInjector(t *testing.T) {
 func TestAssertNoUnresolved_StrictOnOptional(t *testing.T) {
 	root := New()
 	defer Shutdown(root)
-	ToOption(func(d *warmDep) *warmSvc { return &warmSvc{D: d} })(root)
+	provideWarmSvc(root)
 
 	err := AssertNoUnresolved(root)
 	require.Error(t, err, "strict mode must flag unresolvable dependencies")
@@ -97,7 +97,7 @@ func TestAssertNoUnresolved_StrictOnOptional(t *testing.T) {
 func TestAssertNoUnresolved_Healthy(t *testing.T) {
 	root := New(func(i Injector) { ProvideValue(i, &warmDep{V: "x"}) })
 	defer Shutdown(root)
-	ToOption(func(d *warmDep) *warmSvc { return &warmSvc{D: d} })(root)
+	provideWarmSvc(root)
 
 	assert.NoError(t, AssertNoUnresolved(root))
 }
@@ -117,4 +117,17 @@ func TestWarmup_Idempotent(t *testing.T) {
 	Warmup(root)
 
 	assert.Equal(t, 1, builds, "service must be constructed once and cached")
+}
+
+// provideWarmSvc 注册一个依赖 *warmDep 的服务。
+// 用 Invoke 取依赖（而不是 MustInvoke），这样「依赖缺失」会作为构造错误上报，
+// 便于测试 Warmup 的 Optional 分类。
+func provideWarmSvc(root Injector) {
+	Provide(root, func(i Injector) (*warmSvc, error) {
+		d, err := Invoke[*warmDep](i)
+		if err != nil {
+			return nil, err
+		}
+		return &warmSvc{D: d}, nil
+	})
 }

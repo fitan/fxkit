@@ -17,6 +17,8 @@ type memoryItem struct {
 
 // MemoryCache 提供基于内存并发安全的 Cache 实现，适用于单机部署、本地测试与 Mock。
 type MemoryCache struct {
+	sfHolder
+
 	mu    sync.RWMutex
 	items map[string]memoryItem
 

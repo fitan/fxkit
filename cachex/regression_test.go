@@ -3,6 +3,7 @@ package cachex
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,6 +111,60 @@ func TestGetOrSet_BackendErrorFallsBackToLoader(t *testing.T) {
 	assert.Equal(t, "live", v)
 }
 
+// TestGetOrSet_BackendErrorStillSingleflights 是回归测试：
+// 降级回源必须仍然经过 singleflight。早期实现直接 `return loader(ctx)`，
+// 于是 Redis 抖动、并发压力最大的那一刻，所有请求同时打到数据源。
+func TestGetOrSet_BackendErrorStillSingleflights(t *testing.T) {
+	ctx := context.Background()
+	c := &brokenPtrCache{}
+
+	var loads int64
+	loader := func(context.Context) (string, error) {
+		atomic.AddInt64(&loads, 1)
+		time.Sleep(100 * time.Millisecond)
+		return "live", nil
+	}
+
+	const n = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			v, err := GetOrSet(ctx, c, "k", loader)
+			assert.NoError(t, err)
+			assert.Equal(t, "live", v)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int64(1), atomic.LoadInt64(&loads),
+		"cache backend failure must still collapse concurrent loads into one")
+}
+
+// TestCacheHealthChecker_ReportsErrorThroughPrefixWrapper 是回归测试：
+// Check 早期对 *RedisCache 做类型断言，而配了 cache.prefix 后缓存会被
+// *prefixedCache 包住，断言失败直接 return nil —— /readyz 的 cache 检查永远健康。
+func TestCacheHealthChecker_ReportsErrorThroughPrefixWrapper(t *testing.T) {
+	inner := &pingableCache{pingErr: errors.New("redis down")}
+	c := wrapPrefix("app:", inner)
+
+	err := cacheHealthChecker{cache: c}.Check(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redis down")
+}
+
+// TestCacheHealthChecker_HealthyThroughPrefixWrapper 包装层不能把健康检查变成永久通过。
+func TestCacheHealthChecker_HealthyThroughPrefixWrapper(t *testing.T) {
+	inner := &pingableCache{}
+	c := wrapPrefix("app:", inner)
+
+	require.NoError(t, cacheHealthChecker{cache: c}.Check(context.Background()))
+}
+
 type brokenCache struct{}
 
 func (brokenCache) Get(context.Context, string) ([]byte, error) {
@@ -121,3 +176,38 @@ func (brokenCache) MGet(context.Context, ...string) (map[string][]byte, error) {
 	return nil, nil
 }
 func (brokenCache) MSet(context.Context, map[string][]byte, time.Duration) error { return nil }
+
+// brokenPtrCache 用指针接收者：singleflight 按实例地址合并，非指针实现不合并。
+type brokenPtrCache struct{ brokenCache }
+
+func (brokenPtrCache) Get(context.Context, string) ([]byte, error) {
+	return nil, errors.New("redis: connection refused")
+}
+
+// pingableCache 模拟支持连通性探测的驱动。
+type pingableCache struct {
+	brokenCache
+	pingErr error
+}
+
+func (p *pingableCache) Ping(context.Context) error { return p.pingErr }
+
+// TestOptionsFromConfig_ExplicitZeroNullTTLHonored 是回归测试：
+//
+// 早期用「四个字段全为零」判断「未配置」，于是 yaml 里
+// `null_ttl: 0` + `singleflight: false`（想关闭负缓存与单飞）会让整段配置被忽略。
+// 现在由 SetDefaults 打标记区分「已加载的配置」与「代码里直接构造的零值」。
+func TestOptionsFromConfig_ExplicitZeroNullTTLHonored(t *testing.T) {
+	cfg := &Config{}
+	cfg.SetDefaults()
+	cfg.NullTTL = 0          // 显式关闭空值缓存
+	cfg.Singleflight = false // 显式关闭单飞
+
+	opt := OptionsFromConfig(cfg)
+	if opt.NullTTL != 0 {
+		t.Fatalf("NullTTL = %v, want 0 (explicitly disabled)", opt.NullTTL)
+	}
+	if !opt.DisableSingleflight {
+		t.Fatal("explicit singleflight: false must be honored")
+	}
+}

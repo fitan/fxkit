@@ -82,7 +82,7 @@ func TestExtractActorID(t *testing.T) {
 		want string
 	}{
 		{"embed", embedInput{ActorRef: ActorRef{ActorID: " a1 "}, Delta: 1}, "a1"},
-		{"method", methodOnlyInput{ID: "m1"}, "m1"},
+		{"method", methodOnlyInput{ID: "m1"}, ""}, // GetActorID 不再参与提取
 		{"field", fieldInput{ActorID: "f1"}, "f1"},
 		{"unexported_embed", unexportedEmbedInput{unexportedInnerRef: unexportedInnerRef{ActorRef: ActorRef{ActorID: "u1"}}, Data: "d"}, "u1"},
 		{"nil_ptr_embed", nilPtrEmbedInput{ActorRef: nil, Data: "d"}, ""},
@@ -92,13 +92,13 @@ func TestExtractActorID(t *testing.T) {
 		{"nil", nil, ""},
 		{"raw_json", json.RawMessage(`{"actorId":"raw-1","x":1}`), "raw-1"},
 		{"bytes_json", []byte(`{"actorId":"bytes-1"}`), "bytes-1"},
-		{"map_any", map[string]any{"actorId": "map-any-1"}, "map-any-1"},
-		{"map_string", map[string]string{"actorId": "map-str-1"}, "map-str-1"},
+		{"map_any", map[string]any{"actorId": "map-any-1"}, ""}, // map 输入已不支持
+		{"map_string", map[string]string{"actorId": "map-str-1"}, ""},
 	}
 	for _, tc := range cases {
 		tt := tc
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractActorID(tt.in)
+			got := actorIDOf(tt.in)
 			if got != tt.want {
 				t.Fatalf("got %q want %q", got, tt.want)
 			}
@@ -109,55 +109,36 @@ func TestExtractActorID(t *testing.T) {
 func TestExtractActorIDDynamic_UnexportedEmbed(t *testing.T) {
 	t.Parallel()
 	in := unexportedEmbedInput{unexportedInnerRef: unexportedInnerRef{ActorRef: ActorRef{ActorID: "dyn-1"}}, Data: "d"}
-	got := extractActorIDDynamic(reflect.ValueOf(in))
+	got := actorIDOf(in)
 	if got != "dyn-1" {
 		t.Fatalf("expected dyn-1, got %q", got)
 	}
 }
 
-func TestActorTypeCache(t *testing.T) {
+func TestTypeHasJSONActorID(t *testing.T) {
 	t.Parallel()
 
-	// 校验 embedInput 缓存
-	c1 := getActorTypeCache(reflect.TypeFor[embedInput]())
-	if !c1.hasActorID || !c1.jsonTagFound || len(c1.fieldIndex) == 0 {
-		t.Fatalf("expected embedInput to have cached actorId field, got: %+v", c1)
+	cases := []struct {
+		name string
+		typ  reflect.Type
+		want bool
+	}{
+		{"embed ActorRef", reflect.TypeFor[embedInput](), true},
+		{"explicit json tag", reflect.TypeFor[fieldInput](), true},
+		{"ptr type", reflect.TypeFor[*fieldInput](), true},
+		// 只有 ActorID 字段、没有 json 标签：能被读出，但不会序列化成 actorId。
+		{"no json tag", reflect.TypeFor[structFieldNoTagInput](), false},
+		// 非匿名嵌入的 ActorRef 不能当作根级 actorId。
+		{"named ref", reflect.TypeFor[namedRefInput](), false},
+		// 自定义 Marshaler 不在静态分析范围内，保守返回 false。
+		{"custom marshaler", reflect.TypeFor[customMarshalInput](), false},
 	}
-
-	// 校验 methodOnlyInput 缓存
-	c2 := getActorTypeCache(reflect.TypeFor[methodOnlyInput]())
-	if c2.getter == nil {
-		t.Fatalf("expected methodOnlyInput to have getter, got: %+v", c2)
-	}
-	if c2.jsonTagFound {
-		t.Fatalf("expected methodOnlyInput to NOT have jsonTagFound, got: %+v", c2)
-	}
-
-	// 校验指针类型缓存
-	c3 := getActorTypeCache(reflect.TypeFor[*fieldInput]())
-	if !c3.isPtr || !c3.hasActorID || len(c3.fieldIndex) == 0 {
-		t.Fatalf("expected *fieldInput to be ptr with fieldIndex, got: %+v", c3)
-	}
-
-	// 校验 structFieldNoTagInput 缓存：hasActorID 为 true，但 jsonTagFound 必须为 false！
-	c4 := getActorTypeCache(reflect.TypeFor[structFieldNoTagInput]())
-	if !c4.hasActorID {
-		t.Fatalf("expected structFieldNoTagInput to have hasActorID=true, got: %+v", c4)
-	}
-	if c4.jsonTagFound {
-		t.Fatalf("expected structFieldNoTagInput to have jsonTagFound=false, got: %+v", c4)
-	}
-
-	// 校验 namedRefInput 缓存：非匿名字段不得当作根级 actorId
-	c5 := getActorTypeCache(reflect.TypeFor[namedRefInput]())
-	if c5.hasActorID || c5.jsonTagFound {
-		t.Fatalf("expected namedRefInput to NOT have hasActorID or jsonTagFound, got: %+v", c5)
-	}
-
-	// 校验 customMarshalInput 缓存：自定义 json.Marshaler 不得令 jsonTagFound=true
-	c6 := getActorTypeCache(reflect.TypeFor[customMarshalInput]())
-	if c6.jsonTagFound {
-		t.Fatalf("expected customMarshalInput to have jsonTagFound=false due to MarshalJSON, got: %+v", c6)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := typeHasJSONActorID(tc.typ); got != tc.want {
+				t.Fatalf("typeHasJSONActorID(%s) = %v, want %v", tc.typ, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -195,14 +176,12 @@ func TestRequireActorID_RejectsStructFieldWithoutJSON(t *testing.T) {
 	}
 }
 
-func TestRequireActorID_RejectsGetActorIDWithoutJSON(t *testing.T) {
+func TestRequireActorID_RejectsNonActorInput(t *testing.T) {
 	t.Parallel()
+	// 只有 GetActorID 方法、没有 json:"actorId" 的类型不能作为 actor 输入。
 	_, err := requireActorID(methodOnlyInput{ID: "m1"})
 	if err == nil {
-		t.Fatal("expected error for GetActorID without json actorId")
-	}
-	if !strings.Contains(err.Error(), "JSON-serialize") {
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatal("expected error for input without json actorId")
 	}
 }
 

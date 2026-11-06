@@ -75,9 +75,6 @@ type ClientInput struct {
 	// OTel 启用 otelhttp 包装（默认 true）。
 	OTel *bool
 
-	// SpanName 覆盖 otel span 名称格式化器的结果（可选）。
-	SpanName string
-
 	// BaseTransport 是可选的底层 RoundTripper（位于 otel 与解析层之前）。
 	//
 	// 为 nil 时，使用 req.Client 自身的传输层作为 base，因此在返回的 client 上
@@ -97,15 +94,6 @@ type ClientInput struct {
 	// 保留 host 模式会直接拨号到选中的端点，因此 client 上配置的 HTTP(S)
 	// 代理对这类请求会被绕过。
 	ServerName string
-
-	// HostOverride 覆盖 HTTP Host 头，同时仍连接到服务发现的端点。
-	// 适用于通过网关进行虚拟主机路由的场景。
-	HostOverride string
-
-	// WatchWait 是 Consul blocking query 的 wait（默认 5m，上限 10m）。
-	// 更长的 wait 不会延迟变更检测；catalog index 一变化 Consul 就会返回。
-	// wait 只是空闲查询最多可以挂起多久。
-	WatchWait time.Duration
 
 	// MaxFailover 是失败时最多尝试的不同端点数量（默认 5）。
 	MaxFailover int
@@ -208,7 +196,6 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 		Name:        name,
 		Seeds:       seeds,
 		PassingOnly: in.PassingOnly,
-		WatchWait:   in.WatchWait,
 	})
 	if err != nil {
 		return nil, err
@@ -220,7 +207,6 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	}
 
 	serverName := normalizeServerName(in.ServerName)
-	hostOverride := strings.TrimSpace(in.HostOverride)
 	explicitServerName := serverName != ""
 	// 显式要求 TLS 名称时保留逻辑 host，或对 https + Consul 发现的命名服务
 	// 保留（端点可能是裸 IP）。
@@ -252,12 +238,10 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 		Base:         base,
 		OwnBase:      ownBase,
 		OTel:         otelOn,
-		SpanName:     strings.TrimSpace(in.SpanName),
 		MaxFailover:  in.MaxFailover,
 		PreserveHost: preserveHost,
 		AutoPreserve: autoPreserve,
 		ServerName:   serverName,
-		HostOverride: hostOverride,
 	})
 	if err != nil {
 		return nil, err
@@ -334,7 +318,6 @@ type ensurePoolInput struct {
 	Name        string
 	Seeds       []string
 	PassingOnly *bool
-	WatchWait   time.Duration
 }
 
 func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
@@ -371,7 +354,6 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 			consulBase:  base,
 			service:     in.Name,
 			passingOnly: passingOnly,
-			wait:        in.WatchWait,
 			httpClient:  &http.Client{Timeout: 10 * time.Second},
 		}
 		if eps, _, err := w.fetch(watchCtx, 0); err != nil {
@@ -394,7 +376,6 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 			consulBase:  base,
 			service:     in.Name,
 			passingOnly: passingOnly,
-			wait:        in.WatchWait,
 		}.run(watchCtx, pool)
 	} else if in.Name != "" && consulAddr == "" && len(in.Seeds) == 0 {
 		watchCancel()

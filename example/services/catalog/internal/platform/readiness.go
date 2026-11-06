@@ -57,10 +57,12 @@ func (c *ReadinessCheck) Check(ctx context.Context) error {
 //	    platform.ProvideReadiness(),
 //	)
 func ProvideReadiness() di.Option {
-	return server.ProvideHealthChecker(func(client *gormx.Client) server.HealthChecker {
-		if client == nil || client.Pool() == nil {
-			return nil // 未配置数据库时不注册检查项
+	return server.ProvideHealthCheckerLazy(func(i di.Injector) (server.HealthChecker, error) {
+		client, err := di.Invoke[*gormx.Client](i)
+		if err != nil || client == nil || client.Pool() == nil {
+			// 未配置数据库时不注册检查项（返回 nil 表示跳过）。
+			return nil, nil
 		}
-		return NewReadinessCheck(client)
+		return NewReadinessCheck(client), nil
 	})
 }

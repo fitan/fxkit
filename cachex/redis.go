@@ -10,6 +10,8 @@ import (
 
 // RedisCache 提供基于 Redis 的分布式 Cache 实现。
 type RedisCache struct {
+	sfHolder
+
 	client redis.UniversalClient
 }
 
@@ -21,6 +23,14 @@ func NewRedisCache(client redis.UniversalClient) *RedisCache {
 // Client 返回底层封装的 redis.UniversalClient，便于高级命令操作。
 func (r *RedisCache) Client() redis.UniversalClient {
 	return r.client
+}
+
+// Ping 探测 Redis 连通性，供 /readyz 健康检查使用。
+func (r *RedisCache) Ping(ctx context.Context) error {
+	if r == nil || r.client == nil {
+		return errors.New("cachex: redis client is nil")
+	}
+	return r.client.Ping(ctx).Err()
 }
 
 // Close 关闭底层 Redis 客户端。

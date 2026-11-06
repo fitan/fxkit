@@ -173,11 +173,13 @@ func TestLoad_CasbinReloadZeroDisables(t *testing.T) {
 }
 
 func TestLoad_RejectsInvalidPort(t *testing.T) {
-	cfg, err := config.New(config.Options{})
-	if err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  port: not-a-port\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.Set("server.port", "not-a-port"); err != nil {
+	cfg, err := config.New(config.Options{ConfigFile: path})
+	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = config.Load[server.Config](cfg, "server")

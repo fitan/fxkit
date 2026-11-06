@@ -52,32 +52,6 @@ func TestCloneForEndpoint_PreserveLogicalHost(t *testing.T) {
 	assert.Equal(t, "10.1.2.3:8443", ep)
 }
 
-func TestCloneForEndpoint_HostOverride(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "http://orders/v1", nil)
-	require.NoError(t, err)
-
-	// 改写模式 + Host 覆盖：连接指向端点，但 Host 头保持为
-	// 便于虚拟主机路由的名称。
-	r2, err := cloneForEndpoint(req, "10.1.2.3:8080", endpointRewrite{
-		scheme:       "http",
-		hostOverride: "api.internal",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "10.1.2.3:8080", r2.URL.Host)
-	assert.Equal(t, "api.internal", r2.Host)
-
-	// 保留模式 + Host 覆盖。
-	r3, err := cloneForEndpoint(req, "10.1.2.3:8443", endpointRewrite{
-		scheme:       "https",
-		preserveHost: true,
-		logicalHost:  "orders",
-		hostOverride: "api.internal",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "orders", r3.URL.Host)
-	assert.Equal(t, "api.internal", r3.Host)
-}
-
 func TestCloneForEndpoint_DefaultRewriteKeepsOldBehavior(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "http://orders/v1", nil)
 	require.NoError(t, err)

@@ -7,13 +7,11 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/fitan/fxkit/di"
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-	"github.com/tidwall/gjson"
 )
 
 // DefaultActorConcurrencyExpr 以 actor 实例 id 作为 Hatchet 并发键。
@@ -39,16 +37,20 @@ type ActorHandler[In, Out any] func(ctx context.Context, in In) (Out, error)
 // 每个 actorId 一个队列，以 MaxRuns=1 和 GROUP_ROUND_ROBIN 处理。
 // 它不提供粘性 worker，也不提供内存内 actor 激活。
 type Actor[In, Out any] struct {
-	name      string
-	handler   ActorHandler[In, Out]
-	opts      actorOptions
-	typeCache *actorTypeCache
+	name    string
+	handler ActorHandler[In, Out]
+	opts    actorOptions
 }
 
 type actorOptions struct {
 	description     string
 	concurrencyExpr string
 	maxRuns         int32
+	// actorIDRequired 为 true 时，Call/CallAsync 强制校验输入里有 actorId。
+	//
+	// 默认：使用内置并发表达式时为 true；用 WithActorConcurrencyExpr 覆盖后为 false
+	// （因为那时并发键可能不是 actorId）。需要保留校验时显式加 WithActorIDRequired()。
+	actorIDRequired bool
 }
 
 // ActorOption 配置 [NewActor]。
@@ -73,6 +75,15 @@ func WithActorMaxRuns(n int32) ActorOption {
 	}
 }
 
+// WithActorIDRequired 要求输入必须携带 actorId（即使自定义了并发表达式）。
+//
+// 早期实现用 strings.Contains(expr, "actorId") 猜：表达式叫
+// "input.tenant_actorId" 会误判为需要，写成 input["actorId"] 又会漏判。
+// 现在改为显式声明。
+func WithActorIDRequired() ActorOption {
+	return func(o *actorOptions) { o.actorIDRequired = true }
+}
+
 // NewActor 定义一个由 Hatchet standalone task 承载的语义 actor 命令。
 //
 // In 必须把 "actorId" JSON 序列化出来，以配合默认的并发 CEL（嵌入
@@ -91,19 +102,29 @@ func NewActor[In, Out any](name string, handler ActorHandler[In, Out], opts ...A
 			opt(&o)
 		}
 	}
+	// 默认并发表达式就是 input.actorId，因此必须校验；
+	// 自定义表达式时默认不校验，除非显式 WithActorIDRequired()。
+	//
+	// 注意：显式选项优先，所以只在用户没加过该选项时才按表达式推导。
+	if !o.actorIDRequired && (o.concurrencyExpr == "" || o.concurrencyExpr == DefaultActorConcurrencyExpr) {
+		o.actorIDRequired = true
+	}
 	if o.description == "" {
 		o.description = fmt.Sprintf("semantic actor %q (concurrency mailbox by actorId)", name)
 	}
 
 	inType := reflect.TypeFor[In]()
-	cache := getActorTypeCache(inType)
-
-	if o.concurrencyExpr == DefaultActorConcurrencyExpr {
+	if o.concurrencyExpr == DefaultActorConcurrencyExpr &&
+		typeHasActorIDField(inType) && !typeHasJSONActorID(inType) {
 		// 初始化时提前告警：输入类型带 actor ID 但缺少 json:"actorId"
-		if cache != nil && !cache.jsonTagFound && (cache.getter != nil || cache.hasActorID) {
-			slog.Warn("hatchetx: NewActor: input type has actor ID but does not JSON-serialize 'actorId' (embed hatchetx.ActorRef or field with json:\"actorId\")",
-				"actor", name, "type", inType.String())
-		}
+		slog.Warn("hatchetx: NewActor: input type has actor ID but does not JSON-serialize 'actorId' (embed hatchetx.ActorRef or field with json:\"actorId\")",
+			"actor", name, "type", inType.String())
+	}
+	// 自定义表达式里看起来引用了 actorId，但没声明 WithActorIDRequired()：
+	// 只告警，不改变行为（早期是自动开启，但字符串推断会误判）。
+	if !o.actorIDRequired && strings.Contains(o.concurrencyExpr, "actorId") {
+		slog.Warn("hatchetx: NewActor: concurrency expression references actorId but actor-ID validation is off; add WithActorIDRequired() if the input must carry it",
+			"actor", name, "expr", o.concurrencyExpr)
 	}
 
 	if handler != nil {
@@ -116,7 +137,7 @@ func NewActor[In, Out any](name string, handler ActorHandler[In, Out], opts ...A
 		}
 	}
 
-	return &Actor[In, Out]{name: name, handler: handler, opts: o, typeCache: cache}
+	return &Actor[In, Out]{name: name, handler: handler, opts: o}
 }
 
 // Name 返回 Hatchet workflow / task 名称。
@@ -169,31 +190,11 @@ func (a *Actor[In, Out]) requiresActorID() bool {
 	if a == nil {
 		return true
 	}
-	expr := strings.TrimSpace(a.opts.concurrencyExpr)
-	return expr == "" || expr == DefaultActorConcurrencyExpr || strings.Contains(expr, "actorId")
+	return a.opts.actorIDRequired
 }
 
 func (a *Actor[In, Out]) extractActorID(in In) string {
-	switch v := any(in).(type) {
-	case json.RawMessage:
-		return strings.TrimSpace(gjson.GetBytes(v, "actorId").String())
-	case []byte:
-		return strings.TrimSpace(gjson.GetBytes(v, "actorId").String())
-	case map[string]any:
-		if id, ok := v["actorId"].(string); ok {
-			return strings.TrimSpace(id)
-		}
-	case map[string]string:
-		if id, ok := v["actorId"]; ok {
-			return strings.TrimSpace(id)
-		}
-	}
-	if a != nil && a.typeCache != nil {
-		if id := extractActorIDFromCache(in, a.typeCache); id != "" {
-			return id
-		}
-	}
-	return extractActorID(in)
+	return actorIDOf(in)
 }
 
 func (a *Actor[In, Out]) validateActorID(in In) error {
@@ -201,10 +202,10 @@ func (a *Actor[In, Out]) validateActorID(in In) error {
 	if id == "" {
 		return fmt.Errorf("hatchetx: actorId is required (embed hatchetx.ActorRef or field with json:\\\"actorId\\\")")
 	}
-	// 快速路径：若该类型静态含有标记为 json:"actorId" 的 actorId struct 字段，
+	// 快速路径：若该类型静态含有标记为 json:"actorId" 的字段，
 	// 且未自定义序列化，则 json.Marshal 必然输出 "actorId": id。
 	// 此时跳过冗余的预序列化，交由 SDK Run 完成唯一的序列化。
-	if a.typeCache != nil && a.typeCache.jsonTagFound && a.typeCache.hasActorID {
+	if typeHasJSONActorID(reflect.TypeFor[In]()) {
 		return nil
 	}
 	return assertActorIDInJSON(in, id)
@@ -272,355 +273,8 @@ func (a *Actor[In, Out]) CallAsync(ctx context.Context, client *Client, in In, o
 // ProvideActor 把该 actor 的 [Registrar] 发布到 hatchet_registrars fx group。
 // 当处理器需要 Fx 依赖时，优先在 registrar 工厂内构造 Actor。
 func ProvideActor[In, Out any](actor *Actor[In, Out]) di.Option {
-	return ProvideRegistrar(func() Registrar {
-		if actor == nil {
-			return func(*Client) ([]WorkflowBase, error) { return nil, nil }
-		}
-		return actor.Registrar()
-	})
-}
-
-// actorTypeCache 保存 actor 输入类型的预计算反射元数据。
-type actorTypeCache struct {
-	hasActorID   bool
-	fieldIndex   []int
-	getter       func(any) string
-	isPtr        bool
-	jsonTagFound bool
-}
-
-var (
-	actorTypeCacheMu  sync.RWMutex
-	actorTypeCacheMap = make(map[reflect.Type]*actorTypeCache)
-)
-
-func getActorTypeCache(t reflect.Type) *actorTypeCache {
-	if t == nil {
+	if actor == nil {
 		return nil
 	}
-	actorTypeCacheMu.RLock()
-	cached, ok := actorTypeCacheMap[t]
-	actorTypeCacheMu.RUnlock()
-	if ok {
-		return cached
-	}
-
-	actorTypeCacheMu.Lock()
-	defer actorTypeCacheMu.Unlock()
-	if cached, ok := actorTypeCacheMap[t]; ok {
-		return cached
-	}
-
-	cached = buildActorTypeCache(t)
-	actorTypeCacheMap[t] = cached
-	return cached
-}
-
-func hasNilEmbeddedPtr(v reflect.Value) bool {
-	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return true
-		}
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return false
-	}
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if f.Anonymous {
-			vf := v.Field(i)
-			if f.Type.Kind() == reflect.Pointer {
-				if vf.IsNil() {
-					return true
-				}
-				if hasNilEmbeddedPtr(vf.Elem()) {
-					return true
-				}
-			} else if f.Type.Kind() == reflect.Struct {
-				if hasNilEmbeddedPtr(vf) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func buildActorTypeCache(origType reflect.Type) *actorTypeCache {
-	info := &actorTypeCache{}
-	t := origType
-
-	for t.Kind() == reflect.Pointer {
-		info.isPtr = true
-		t = t.Elem()
-	}
-
-	if t.Kind() == reflect.Struct {
-		indexPath, jsonFound := findActorIDField(t, nil)
-		if len(indexPath) > 0 {
-			info.fieldIndex = indexPath
-			info.hasActorID = true
-			info.jsonTagFound = jsonFound
-		}
-	}
-
-	// 若类型实现了 json.Marshaler，自定义序列化可能省略或重命名 actorId。
-	// 此时不得绕过 assertActorIDInJSON。
-	var jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
-	if origType.Implements(jsonMarshalerType) || reflect.PointerTo(origType).Implements(jsonMarshalerType) {
-		info.jsonTagFound = false
-	}
-
-	// 检查 origType 或其指针是否实现 interface{ GetActorID() string }
-	checkType := origType
-	if checkType.Kind() != reflect.Pointer {
-		checkType = reflect.PointerTo(checkType)
-	}
-	if checkType.Implements(reflect.TypeFor[interface{ GetActorID() string }]()) {
-		info.getter = func(in any) (id string) {
-			if in == nil {
-				return ""
-			}
-			defer func() {
-				if r := recover(); r != nil {
-					id = ""
-				}
-			}()
-			v := reflect.ValueOf(in)
-			if hasNilEmbeddedPtr(v) {
-				return ""
-			}
-			if h, ok := in.(interface{ GetActorID() string }); ok {
-				return strings.TrimSpace(h.GetActorID())
-			}
-			if v.CanInterface() {
-				if v.Kind() != reflect.Pointer {
-					pv := reflect.New(v.Type())
-					pv.Elem().Set(v)
-					if h, ok := pv.Interface().(interface{ GetActorID() string }); ok {
-						return strings.TrimSpace(h.GetActorID())
-					}
-				}
-			}
-			return ""
-		}
-	}
-
-	return info
-}
-
-func findActorIDField(t reflect.Type, currentPath []int) ([]int, bool) {
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		path := append(append([]int(nil), currentPath...), i)
-
-		jsonTag := f.Tag.Get("json")
-		if jsonTag == "-" {
-			continue
-		}
-
-		isJSONActorID := jsonTag == "actorId" || strings.HasPrefix(jsonTag, "actorId,")
-		isNameActorID := f.Name == "ActorID"
-
-		if (isJSONActorID || isNameActorID) && f.Type.Kind() == reflect.String {
-			return path, isJSONActorID
-		}
-
-		if f.Anonymous {
-			ft := f.Type
-			if ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
-			}
-			if ft.Kind() == reflect.Struct {
-				if subPath, subFound := findActorIDField(ft, path); len(subPath) > 0 {
-					return subPath, subFound
-				}
-			}
-		}
-	}
-	return nil, false
-}
-
-func safeFieldByIndex(v reflect.Value, index []int) reflect.Value {
-	for _, i := range index {
-		for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-			if v.IsNil() {
-				return reflect.Value{}
-			}
-			v = v.Elem()
-		}
-		if v.Kind() != reflect.Struct || i >= v.NumField() {
-			return reflect.Value{}
-		}
-		v = v.Field(i)
-	}
-	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return reflect.Value{}
-		}
-		v = v.Elem()
-	}
-	return v
-}
-
-func extractActorIDFromCache(in any, cache *actorTypeCache) (id string) {
-	if in == nil || cache == nil {
-		return ""
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			id = ""
-		}
-	}()
-	if len(cache.fieldIndex) > 0 {
-		v := reflect.ValueOf(in)
-		for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-			if v.IsNil() {
-				return ""
-			}
-			v = v.Elem()
-		}
-		f := safeFieldByIndex(v, cache.fieldIndex)
-		if f.IsValid() && f.Kind() == reflect.String {
-			if id := strings.TrimSpace(f.String()); id != "" {
-				return id
-			}
-		}
-	}
-	if cache.getter != nil {
-		if id := cache.getter(in); id != "" {
-			return id
-		}
-	}
-	return ""
-}
-
-func requireActorID(in any) (string, error) {
-	id := extractActorID(in)
-	if id == "" {
-		return "", fmt.Errorf("hatchetx: actorId is required (embed hatchetx.ActorRef or field with json:\\\"actorId\\\")")
-	}
-	if err := assertActorIDInJSON(in, id); err != nil {
-		return "", err
-	}
-	return id, nil
-}
-
-// assertActorIDInJSON 确保 Hatchet CEL input.actorId 看到的 id 与 Call 校验的一致。
-// 使用 gjson 从原始 JSON 字节中高性能、零分配地提取。
-func assertActorIDInJSON(in any, want string) error {
-	var raw []byte
-	switch v := in.(type) {
-	case []byte:
-		raw = v
-	case json.RawMessage:
-		raw = v
-	default:
-		var err error
-		raw, err = json.Marshal(in)
-		if err != nil {
-			return fmt.Errorf("hatchetx: marshal actor input: %w", err)
-		}
-	}
-
-	res := gjson.GetBytes(raw, "actorId")
-	if !res.Exists() {
-		return fmt.Errorf("hatchetx: input must JSON-serialize \\\"actorId\\\" for concurrency (embed hatchetx.ActorRef or json:\\\"actorId\\\"); GetActorID alone is not enough")
-	}
-	got := strings.TrimSpace(res.String())
-	if got == "" {
-		return fmt.Errorf("hatchetx: input must JSON-serialize \\\"actorId\\\" for concurrency (embed hatchetx.ActorRef or json:\\\"actorId\\\"); GetActorID alone is not enough")
-	}
-	if got != want {
-		return fmt.Errorf("hatchetx: json actorId %q disagrees with GetActorID/ActorID %q", got, want)
-	}
-	return nil
-}
-
-func extractActorID(in any) string {
-	if in == nil {
-		return ""
-	}
-	switch v := in.(type) {
-	case json.RawMessage:
-		return strings.TrimSpace(gjson.GetBytes(v, "actorId").String())
-	case []byte:
-		return strings.TrimSpace(gjson.GetBytes(v, "actorId").String())
-	case map[string]any:
-		if id, ok := v["actorId"].(string); ok {
-			return strings.TrimSpace(id)
-		}
-	case map[string]string:
-		if id, ok := v["actorId"]; ok {
-			return strings.TrimSpace(id)
-		}
-	}
-	cache := getActorTypeCache(reflect.TypeOf(in))
-	if id := extractActorIDFromCache(in, cache); id != "" {
-		return id
-	}
-	v := reflect.ValueOf(in)
-	return extractActorIDDynamic(v)
-}
-
-func extractActorIDDynamic(v reflect.Value) (id string) {
-	defer func() {
-		if r := recover(); r != nil {
-			id = ""
-		}
-	}()
-	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return ""
-		}
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return ""
-	}
-	if !hasNilEmbeddedPtr(v) && v.CanInterface() {
-		if v.CanAddr() {
-			if h, ok := v.Addr().Interface().(interface{ GetActorID() string }); ok {
-				if id := strings.TrimSpace(h.GetActorID()); id != "" {
-					return id
-				}
-			}
-		} else {
-			pv := reflect.New(v.Type())
-			pv.Elem().Set(v)
-			if h, ok := pv.Interface().(interface{ GetActorID() string }); ok {
-				if id := strings.TrimSpace(h.GetActorID()); id != "" {
-					return id
-				}
-			}
-		}
-	}
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		vf := v.Field(i)
-		if f.Anonymous {
-			if id := extractActorIDDynamic(vf); id != "" {
-				return id
-			}
-		}
-		if f.Tag.Get("json") == "-" {
-			continue
-		}
-		isJSONActorID := f.Tag.Get("json") == "actorId" || strings.HasPrefix(f.Tag.Get("json"), "actorId,")
-		if f.Name == "ActorID" || isJSONActorID {
-			for vf.Kind() == reflect.Pointer || vf.Kind() == reflect.Interface {
-				if vf.IsNil() {
-					break
-				}
-				vf = vf.Elem()
-			}
-			if vf.IsValid() && vf.Kind() == reflect.String {
-				return strings.TrimSpace(vf.String())
-			}
-		}
-	}
-	return ""
+	return ProvideRegistrar(actor.Registrar())
 }

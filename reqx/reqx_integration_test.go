@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,11 +74,12 @@ func TestDiscoveryIntegration(t *testing.T) {
 		}
 	})
 
-	cfg, err := config.New(config.Options{})
-	if err != nil {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("discovery:\n  consul_address: "+base+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.Set("discovery.consul_address", base); err != nil {
+	cfg, err := config.New(config.Options{ConfigFile: cfgPath})
+	if err != nil {
 		t.Fatal(err)
 	}
 

@@ -193,10 +193,12 @@ func DeleteReminderByName(ctx context.Context, client *Client, workflowName, cro
 //
 // 已知 SDK 问题：Hatchet 服务端对 DELETE 返回 204 No Content，而 Go SDK（截至
 // v0.116.x）的 CronsClient.Delete 只接受 200，会把成功当失败返回。
-// 这里不依赖错误文本判断成功，而是**回读确认**：
-//   - Get 成功   → 仍然存在 → 返回原始错误
-//   - Get 404    → 已删除   → 视为成功
-//   - Get 其他错 → 无法确认 → 返回原始错误
+//
+// 这里**不解析错误文本**（"got status 204" 是 SDK 内部字符串，升级即失效），
+// 而是回读确认：
+//   - 列表中已不存在 → 删除成功
+//   - 列表中仍存在 → 返回原始错误
+//   - 列表被截断/查询失败 → 无法确认 → 返回错误（不假装成功）
 func DeleteReminder(ctx context.Context, client *Client, cronID string) error {
 	if client == nil || !client.Enabled() || client.Crons() == nil {
 		return fmt.Errorf("hatchetx: client disabled")
@@ -205,54 +207,73 @@ func DeleteReminder(ctx context.Context, client *Client, cronID string) error {
 	if cronID == "" {
 		return fmt.Errorf("hatchetx: cron id is required")
 	}
-	if err := client.Crons().Delete(ctx, cronID); err != nil {
-		if !isNoContentErr(err) {
-			return fmt.Errorf("hatchetx: delete reminder: %w", err)
+
+	delErr := client.Crons().Delete(ctx, cronID)
+	if delErr == nil {
+		return nil
+	}
+
+	// 删除返回错误：可能是 SDK 对 204 的误报，也可能真的失败。回读确认。
+	for attempt := 0; attempt < deleteVerifyAttempts; attempt++ {
+		state, verifyErr := cronState(ctx, client, cronID)
+		switch state {
+		case cronAbsent:
+			return nil
+		case cronPresent:
+			return fmt.Errorf("hatchetx: delete reminder: %w", delErr)
 		}
-		// SDK 把 204 当错误；以「列表里是否还有这个 id」为准（最终一致，轮询）。
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			absent, verifyErr := cronAbsent(ctx, client, cronID)
-			if verifyErr != nil {
-				return fmt.Errorf("hatchetx: delete reminder: %w (verify: %w)", err, verifyErr)
-			}
-			if absent {
-				return nil
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("hatchetx: delete reminder: %w (cron still listed after 10s)", err)
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(200 * time.Millisecond):
-			}
+		if verifyErr != nil {
+			return fmt.Errorf("hatchetx: delete reminder: %w (verify: %w)", delErr, verifyErr)
+		}
+		if attempt == deleteVerifyAttempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(deleteVerifyInterval):
 		}
 	}
-	return nil
+	return fmt.Errorf("hatchetx: delete reminder: %w (could not verify deletion)", delErr)
 }
 
-// cronAbsent 通过列表确认 cron 是否已不存在（Get 对已删除的记录仍可能返回 200）。
-func cronAbsent(ctx context.Context, client *Client, cronID string) (bool, error) {
+const (
+	deleteVerifyAttempts = 5
+	deleteVerifyInterval = 200 * time.Millisecond
+)
+
+type cronPresence int
+
+const (
+	cronUnknown cronPresence = iota
+	cronAbsent
+	cronPresent
+)
+
+// cronState 通过列表确认 cron 是否存在。
+//
+// 用 List 而不是 Get：SDK 的 Get 对已删除的记录仍可能返回 200。
+// 列表被 Limit 截断时，「没找到」不能当作「已删除」——否则 cron 总数超过
+// Limit 时会假成功（真正没删掉却报告成功）。
+func cronState(ctx context.Context, client *Client, cronID string) (cronPresence, error) {
 	limit := int64(200)
 	res, err := client.Crons().List(ctx, rest.CronWorkflowListParams{Limit: &limit})
 	if err != nil {
-		return false, err
+		return cronUnknown, err
 	}
 	if res == nil || res.Rows == nil {
-		return true, nil
+		return cronUnknown, nil
 	}
-	for _, row := range *res.Rows {
+	rows := *res.Rows
+	for _, row := range rows {
 		if row.Metadata.Id == cronID {
-			return false, nil
+			return cronPresent, nil
 		}
 	}
-	return true, nil
-}
-
-// isNoContentErr 识别 SDK 对 204 的误报（它没有导出状态码类型）。
-func isNoContentErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "got status 204")
+	if int64(len(rows)) >= limit {
+		return cronUnknown, nil
+	}
+	return cronAbsent, nil
 }
 
 func toInputMap(v any) (map[string]any, error) {

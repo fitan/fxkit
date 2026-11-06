@@ -36,9 +36,10 @@ func buildMCPCmd(opts []di.Option) *cobra.Command {
 			root := di.New(all...)
 			defer root.Shutdown()
 
-			srv, _ := di.Invoke[*mcpx.Server](root)
-
-			lc, _ := di.Invoke[*di.Lifecycle](root)
+			lc, err := di.Invoke[*di.Lifecycle](root)
+			if err != nil {
+				return fmt.Errorf("mcp: resolve lifecycle: %w", err)
+			}
 			if lc != nil {
 				startCtx, cancel := context.WithTimeout(context.Background(), defaultStartTimeout)
 				defer cancel()
@@ -52,8 +53,11 @@ func buildMCPCmd(opts []di.Option) *cobra.Command {
 				}()
 			}
 
-			if srv == nil {
-				srv, _ = di.Invoke[*mcpx.Server](root)
+			// 只在 PreStart 完成后解析一次：早期实现在启动前后各 Invoke 一次且都吞掉
+			// 错误，真实原因（配置/构造失败）被折叠成「no *mcpx.Server found」。
+			srv, err := di.Invoke[*mcpx.Server](root)
+			if err != nil {
+				return fmt.Errorf("mcp: resolve *mcpx.Server: %w", err)
 			}
 			if srv == nil {
 				return fmt.Errorf("mcp: no *mcpx.Server found in di graph; ensure mcpx.Module is included in Run")

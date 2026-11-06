@@ -108,7 +108,7 @@ var Module = di.Module("mcpx",
 
 		// 工具同步与 SSE 路由挂载都依赖「装配完成后的完整 group」，
 		// 因此统一放到 Lifecycle.PreStart。
-		lc, _ := di.Invoke[*di.Lifecycle](i)
+		lc := di.MustInvoke[*di.Lifecycle](i)
 		if lc != nil {
 			lc.AppendPreStartPhase(di.PhasePostWire, di.Hook{
 				OnStart: func(context.Context) error {
@@ -128,7 +128,7 @@ var Module = di.Module("mcpx",
 						return fmt.Errorf("mcpx: resolve config: %w", err)
 					}
 					if srv != nil {
-						server.ProvideRoutes(provideRoutes(srv, c))(i)
+						server.ProvideRoutes(provideRoutes(srv, c)...)(i)
 					}
 					return nil
 				},

@@ -41,6 +41,10 @@ type Relay struct {
 	publisher EventPublisher
 	cfg       Config
 
+	// pubMu 只保护 publisher。与下面生命周期用的 mu 分开：
+	// 前者是低频读写，后者保护 start/stop 竞态。
+	pubMu sync.RWMutex
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -82,21 +86,28 @@ func pickPublisher(pubs []EventPublisher) EventPublisher {
 	return pub
 }
 
-// SetPublisher 替换 publisher（用于测试）。
+// SetPublisher 替换 publisher。仅用于测试/装配完成之前；
+// 运行中修改会让当前批次与后续批次用不同的 publisher。
 func (r *Relay) SetPublisher(pub EventPublisher) {
 	if r == nil {
 		return
 	}
-	r.mu.Lock()
+	r.pubMu.Lock()
 	r.publisher = pub
-	r.mu.Unlock()
+	r.pubMu.Unlock()
 }
 
-func (r *Relay) getPublisher() EventPublisher {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// Publisher 返回当前 publisher（可能为 nil）。
+func (r *Relay) Publisher() EventPublisher {
+	if r == nil {
+		return nil
+	}
+	r.pubMu.RLock()
+	defer r.pubMu.RUnlock()
 	return r.publisher
 }
+
+func (r *Relay) getPublisher() EventPublisher { return r.Publisher() }
 
 // Notify 立即唤醒 relay 轮询循环处理新事件，不必等待 ticker。
 func (r *Relay) Notify() {
@@ -176,6 +187,7 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 	}
 
 	if concurrency == 1 {
+		var markErrs []error
 		for _, ev := range events {
 			o := r.publishOne(ctx, pub, ev, maxRetries)
 			if o.published {
@@ -184,8 +196,11 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 			if o.failed {
 				out.Failed++
 			}
+			if o.markErr != nil {
+				markErrs = append(markErrs, o.markErr)
+			}
 		}
-		return out, nil
+		return out, errors.Join(markErrs...)
 	}
 
 	// 可选并发：默认 1 保持旧行为；>1 时不保证同一批内的投递顺序。
@@ -202,6 +217,7 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 		}(i)
 	}
 	wg.Wait()
+	var markErrs []error
 	for _, o := range outcomes {
 		if o.published {
 			out.Published++
@@ -209,13 +225,18 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 		if o.failed {
 			out.Failed++
 		}
+		if o.markErr != nil {
+			markErrs = append(markErrs, o.markErr)
+		}
 	}
-	return out, nil
+	return out, errors.Join(markErrs...)
 }
 
 type publishOutcome struct {
 	published bool
 	failed    bool
+	// markErr 非 nil 表示消息已投递、但状态未能标记成功（会在租约过期后重投）。
+	markErr error
 }
 
 // publishOne 投递单条事件并更新它的状态（失败则按重试策略回到 pending / failed）。
@@ -254,9 +275,13 @@ func (r *Relay) publishOne(ctx context.Context, pub EventPublisher, ev OutboxEve
 	}
 	n, err := r.markPublished(ctx, ev)
 	if err != nil {
+		// 已投递但未能标记：租约过期后会被重新认领并再次投递。
+		// 早期实现在这里只记日志并返回成功，调用方看到的是「批次成功、
+		// published 少一条」，监控上无法区分。现在向上传递。
 		slog.ErrorContext(ctx, "outbox: markPublished failed (may republish after claim timeout)",
 			"id", ev.ID, "error", err,
 		)
+		out.markErr = fmt.Errorf("outbox: mark published %d: %w", ev.ID, err)
 		return out
 	}
 	if n == 0 {

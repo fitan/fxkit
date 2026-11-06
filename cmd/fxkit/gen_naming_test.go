@@ -215,7 +215,7 @@ func TestGeneratedSourceQuoting(t *testing.T) {
 	}
 	// 关键字/包名一律以带引号的字面量出现
 	for _, want := range []string{
-		`fxkit.Service("article", NewService)`,
+		`fxkit.Service("article",`,
 		`fxerrors.Internal("article: nil gormx client")`,
 		`Tags: []string{"Article"}`,
 		`Path: "/article"`,

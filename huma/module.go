@@ -3,9 +3,7 @@ package huma
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"reflect"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -89,101 +87,40 @@ func NewAPI(mux *chi.Mux, app *config.App) huma.API {
 //	func(*Service) Registrar   延迟到 PreStart 解析依赖后调用（最常见写法）
 //
 // 无法识别的签名会 panic —— 静默丢弃会导致「registrar 写好了但请求仍 404」。
-func ProvideRegistrar(fn any) di.Option {
-	return provideLazyGroupItem[Registrar](
-		"huma.ProvideRegistrar: ",
-		fn,
-		func(v any) (Registrar, bool) {
-			switch f := v.(type) {
-			case Registrar:
-				return f, true
-			case func(api huma.API):
-				return FuncRegistrar(f), true
-			}
-			return nil, false
-		},
-	)
+// ProvideRegistrar 发布一个已构造好的 [Registrar]。
+//
+// 需要依赖时用 [ProvideRegistrarLazy]：构造函数显式接收 di.Injector，
+// 不再依赖反射解析任意函数签名。
+func ProvideRegistrar(reg Registrar) di.Option {
+	return func(i di.Injector) {
+		if reg == nil {
+			return
+		}
+		di.ProvideGroupItem(i, reg)
+	}
+}
+
+// ProvideRegistrarLazy 在 PreStart（PhaseResolveContributors）求值后可访问完整依赖图。
+func ProvideRegistrarLazy(fn func(di.Injector) (Registrar, error)) di.Option {
+	return func(i di.Injector) { di.ProvideLazyE[Registrar](i, fn) }
 }
 
 // ProvideMiddleware 将一个 [MiddlewareRegistrar] 发布到容器 group。
 // 支持的签名与 [ProvideRegistrar] 相同（含 func(*Service) MiddlewareRegistrar）。
-func ProvideMiddleware(fn any) di.Option {
-	return provideLazyGroupItem[MiddlewareRegistrar](
-		"huma.ProvideMiddleware: ",
-		fn,
-		func(v any) (MiddlewareRegistrar, bool) {
-			switch f := v.(type) {
-			case MiddlewareRegistrar:
-				return f, true
-			case func(api huma.API) Middleware:
-				return MiddlewareFunc(f), true
-			}
-			return nil, false
-		},
-	)
+// ProvideMiddleware 发布一个已构造好的 [MiddlewareRegistrar]。
+// 需要依赖时用 [ProvideMiddlewareLazy]。
+func ProvideMiddleware(mw MiddlewareRegistrar) di.Option {
+	return func(i di.Injector) {
+		if mw == nil {
+			return
+		}
+		di.ProvideGroupItem(i, mw)
+	}
 }
 
-// provideLazyGroupItem 是 Provide* 系列的统一实现。
-//
-// 形如 func(*Service) T 的构造函数在装配期无法调用（依赖尚未装配完），
-// 因此包成「PreStart 时解析依赖再调用」的延迟项。无法识别的签名一律 panic，
-// 以免出现「模块看似装配成功、运行期却缺注册项」的静默失败。
-func provideLazyGroupItem[T any](
-	caller string,
-	fn any,
-	convert func(any) (T, bool),
-) di.Option {
-	return func(i di.Injector) {
-		if fn == nil {
-			return
-		}
-		if v, ok := convert(fn); ok {
-			di.ProvideGroupItem(i, v)
-			return
-		}
-		switch f := fn.(type) {
-		case func() T:
-			di.ProvideGroupItem(i, f())
-			return
-		case func(di.Injector) T:
-			di.ProvideGroupItem(i, f(i))
-			return
-		}
-
-		// 任意 func(dep...) T / func(dep...) (T, error)：延迟到 PreStart 装配。
-		val := reflect.ValueOf(fn)
-		if val.Kind() != reflect.Func {
-			panic(caller + "unsupported argument " + reflect.TypeOf(fn).String() +
-				"; want a registrar value or a constructor returning one")
-		}
-		if err := di.ValidateConstructor(val.Type()); err != nil {
-			panic(caller + err.Error())
-		}
-
-		lc, err := di.Invoke[*di.Lifecycle](i)
-		if err != nil || lc == nil {
-			panic(caller + "constructor form requires *di.Lifecycle in the graph")
-		}
-		// 必须早于 huma 的安装阶段（PhaseWireGroup）：安装时要读完整的 group。
-		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-			OnStart: func(context.Context) error {
-				out, callErr := di.CallConstructor(i, fn)
-				if callErr != nil {
-					return fmt.Errorf("%s%w", caller, callErr)
-				}
-				// 可能返回 T 本身，也可能返回可转换的形式（如 func(api huma.API)）。
-				if v, ok := out.(T); ok {
-					di.ProvideGroupItem(i, v)
-					return nil
-				}
-				if v, ok := convert(out); ok {
-					di.ProvideGroupItem(i, v)
-					return nil
-				}
-				return fmt.Errorf("%sconstructor returned %T, want %T", caller, out, out)
-			},
-		})
-	}
+// ProvideMiddlewareLazy 在 PreStart 求值（可访问完整依赖图）。
+func ProvideMiddlewareLazy(fn func(di.Injector) (MiddlewareRegistrar, error)) di.Option {
+	return func(i di.Injector) { di.ProvideLazyE[MiddlewareRegistrar](i, fn) }
 }
 
 // Module 提供共享 [huma.API]，挂载所有 [MiddlewareRegistrar]，并执行所有 [Registrar] hook。

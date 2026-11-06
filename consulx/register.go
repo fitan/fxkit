@@ -16,6 +16,7 @@ import (
 	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
+	"github.com/fitan/fxkit/internal/consuladdr"
 	"github.com/fitan/fxkit/server"
 )
 
@@ -152,7 +153,7 @@ func registerSelfWithClient(ctx context.Context, client *http.Client, disc *Conf
 	if err != nil {
 		return "", err
 	}
-	agentBase, err := normalizeConsulAddr(baseAddr)
+	agentBase, err := consuladdr.Normalize(baseAddr)
 	if err != nil {
 		return "", err
 	}
@@ -221,7 +222,7 @@ func ttlPassLoopWithClient(
 	if baseAddr == "" || serviceID == "" {
 		return
 	}
-	agentBase, err := normalizeConsulAddr(baseAddr)
+	agentBase, err := consuladdr.Normalize(baseAddr)
 	if err != nil {
 		return
 	}
@@ -311,7 +312,7 @@ func deregisterSelf(ctx context.Context, disc *Config, serviceID string) error {
 	if baseAddr == "" || serviceID == "" {
 		return nil
 	}
-	agentBase, err := normalizeConsulAddr(baseAddr)
+	agentBase, err := consuladdr.Normalize(baseAddr)
 	if err != nil {
 		return err
 	}

@@ -33,24 +33,6 @@ func TestClient_DisabledAccessors(t *testing.T) {
 	if c.Workflows() != nil {
 		t.Fatal("expected nil Workflows client when disabled")
 	}
-	if c.Workers() != nil {
-		t.Fatal("expected nil Workers client when disabled")
-	}
-	if c.Filters() != nil {
-		t.Fatal("expected nil Filters client when disabled")
-	}
-	if c.Metrics() != nil {
-		t.Fatal("expected nil Metrics client when disabled")
-	}
-	if c.Logs() != nil {
-		t.Fatal("expected nil Logs client when disabled")
-	}
-	if c.CEL() != nil {
-		t.Fatal("expected nil CEL client when disabled")
-	}
-	if c.Webhooks() != nil {
-		t.Fatal("expected nil Webhooks client when disabled")
-	}
 	if c.NewWorkflow("wf") != nil {
 		t.Fatal("expected nil NewWorkflow when disabled")
 	}
@@ -89,10 +71,8 @@ func TestProvideWorkflow_Registration(t *testing.T) {
 	})
 	opt3(injector)
 
-	// 4. ProvideRegistrar 接收单个 WorkflowBase 构造函数
-	opt4 := ProvideRegistrar(func(*Client) (WorkflowBase, error) {
-		return nil, nil
-	})
+	// 4. ProvideRegistrar 接受一个 Registrar（单 workflow 用 ProvideWorkflow 表达）
+	opt4 := ProvideRegistrar(func(*Client) ([]WorkflowBase, error) { return nil, nil })
 	opt4(injector)
 
 	// 5. ProvideEventHandler
@@ -102,6 +82,12 @@ func TestProvideWorkflow_Registration(t *testing.T) {
 	// 6. ProvideTask
 	opt6 := ProvideTask("test-task", func() {})
 	opt6(injector)
+
+	// ProvideWorkflow / ProvideWorkflows 走的是延迟注册（PhaseResolveContributors），
+	// 必须先跑 PreStart 才会进 group。
+	if err := di.MustInvoke[*di.Lifecycle](injector).StartPreStartOnly(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	regs := di.GetGroup[Registrar](injector)
 	if len(regs) != 6 {

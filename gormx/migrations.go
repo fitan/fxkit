@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"sync"
 
 	"gorm.io/gorm"
 )
@@ -23,7 +24,6 @@ var migrationsFS embed.FS
 
 // MigrationDialects 返回内置 DDL 支持的方言。
 func MigrationDialects() []string { return []string{"postgres", "mysql", "sqlite"} }
-
 func normalizeDialect(d string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(d)) {
 	case "postgres", "postgresql", "pg":
@@ -90,39 +90,78 @@ func PrintMigrations(dialect, version string) (string, error) {
 type SchemaCheckOptions struct {
 	// CasbinTable 默认 "casbin_rule"；与 auth.casbin.table_name 保持一致。
 	CasbinTable string
+	// Tables 限定只校验这些表；为空表示校验所有已登记的表。
+	Tables []string
 }
 
-// schemaContract 是框架代码依赖的最小 schema（表 → 必需列）。
+// schemaContractRegistry 是「框架表 → 必需列」的登记表。
 //
-// 平台执行 DDL 后，用 CheckSchema 在启动时 fail fast，避免发布顺序错误
+// 由各子系统在装配时调用 [RegisterSchemaContract] 登记（例如 outbox、authz），
+// gormx 不再反向硬编码它们的表结构 —— 否则只用 gormx 的服务开启
+// `db.check_schema: true` 时，会因为「缺 outbox_events 表」而启动失败。
+var (
+	schemaContractMu       sync.RWMutex
+	schemaContractRegistry = map[string][]string{}
+)
+
+// RegisterSchemaContract 登记一张框架表的必需列（重复登记以最后一次为准）。
+//
+// 平台执行 DDL 后，[CheckSchema] 在启动时 fail fast，避免发布顺序错误
 // （代码先上、DDL 未执行）时在请求路径上才报 unknown column。
-var schemaContract = map[string][]string{
-	"outbox_events": {
-		"id", "pubsub", "topic", "payload", "idempotency_key", "status",
-		"attempts", "last_error", "lease_id", "locked_at", "created_at", "published_at",
-	},
-	"outbox_inbox_events": {"id", "topic", "processed_at"},
-	"casbin_rule":         {"id", "ptype", "v0", "v1", "v2", "v3", "v4", "v5"},
-	"authz_api_permission": {
-		"id", "method", "path", "pattern", "operation_id", "summary",
-		"description", "tags", "updated_at",
-	},
-	"authz_role": {"name", "display_name", "description", "created_at", "updated_at"},
+func RegisterSchemaContract(table string, columns ...string) {
+	table = strings.TrimSpace(table)
+	if table == "" || len(columns) == 0 {
+		return
+	}
+	schemaContractMu.Lock()
+	defer schemaContractMu.Unlock()
+	schemaContractRegistry[table] = append([]string(nil), columns...)
 }
 
-// CheckSchema 校验框架表与列是否存在，返回聚合错误（nil 表示满足契约）。
+func snapshotSchemaContracts() map[string][]string {
+	schemaContractMu.RLock()
+	defer schemaContractMu.RUnlock()
+	out := make(map[string][]string, len(schemaContractRegistry))
+	for t, cols := range schemaContractRegistry {
+		out[t] = append([]string(nil), cols...)
+	}
+	return out
+}
+
+// CheckSchema 校验已登记的框架表与列是否存在，返回聚合错误（nil 表示满足契约）。
+//
+// 没有任何子系统登记契约时直接返回 nil（gormx 单独使用时的正常情况）。
 func CheckSchema(ctx context.Context, db *gorm.DB, opts ...SchemaCheckOptions) error {
 	if db == nil {
 		return fmt.Errorf("gormx: CheckSchema: nil db")
 	}
 	o := SchemaCheckOptions{CasbinTable: "casbin_rule"}
-	if len(opts) > 0 && strings.TrimSpace(opts[0].CasbinTable) != "" {
-		o.CasbinTable = strings.TrimSpace(opts[0].CasbinTable)
+	if len(opts) > 0 {
+		if t := strings.TrimSpace(opts[0].CasbinTable); t != "" {
+			o.CasbinTable = t
+		}
+		o.Tables = opts[0].Tables
+	}
+
+	contracts := snapshotSchemaContracts()
+	if len(o.Tables) > 0 {
+		want := make(map[string]struct{}, len(o.Tables))
+		for _, t := range o.Tables {
+			want[strings.TrimSpace(t)] = struct{}{}
+		}
+		for t := range contracts {
+			if _, ok := want[t]; !ok {
+				delete(contracts, t)
+			}
+		}
+	}
+	if len(contracts) == 0 {
+		return nil
 	}
 
 	m := db.WithContext(ctx).Migrator()
-	tables := make([]string, 0, len(schemaContract))
-	for t := range schemaContract {
+	tables := make([]string, 0, len(contracts))
+	for t := range contracts {
 		tables = append(tables, t)
 	}
 	sort.Strings(tables)
@@ -137,7 +176,7 @@ func CheckSchema(ctx context.Context, db *gorm.DB, opts ...SchemaCheckOptions) e
 			errs = append(errs, fmt.Errorf("missing table %s", name))
 			continue
 		}
-		for _, col := range schemaContract[t] {
+		for _, col := range contracts[t] {
 			if !m.HasColumn(name, col) {
 				errs = append(errs, fmt.Errorf("missing column %s.%s", name, col))
 			}

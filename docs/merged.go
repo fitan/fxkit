@@ -26,6 +26,14 @@ type mergedSpec struct {
 func (m *mergedSpec) bytes() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.mergedLocked()
+}
+
+// mergedLocked 返回合并后的 YAML，调用方必须持有 m.mu。
+//
+// 抽出来是为了让 YAML 与 JSON 两个入口共用同一份合并与缓存逻辑
+// （早期 jsonBytes 把三个分支又写了一遍）。
+func (m *mergedSpec) mergedLocked() ([]byte, error) {
 	if m.yaml != nil {
 		return m.yaml, nil
 	}
@@ -42,25 +50,16 @@ func (m *mergedSpec) bytes() ([]byte, error) {
 	return b, nil
 }
 
-// jsonBytes 返回合并后的 JSON 表示（启动后首次请求时转换并缓存）。
+// jsonBytes 返回合并后的 JSON 表示（首次请求时转换并缓存）。
 func (m *mergedSpec) jsonBytes() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.json != nil {
 		return m.json, nil
 	}
-	yamlBytes := m.yaml
-	if yamlBytes == nil {
-		if m.api == nil {
-			yamlBytes = m.baseYAML
-		} else {
-			b, err := openapi.MergeBaseHuma(m.baseYAML, m.api)
-			if err != nil {
-				return nil, err
-			}
-			yamlBytes = b
-			m.yaml = b
-		}
+	yamlBytes, err := m.mergedLocked()
+	if err != nil {
+		return nil, err
 	}
 	var doc any
 	if err := yaml.Unmarshal(yamlBytes, &doc); err != nil {
@@ -133,12 +132,12 @@ func registerMerged(i di.Injector, baseYAML []byte) {
 		lc.AppendPreStartPhase(di.PhasePostWire, di.Hook{
 			OnStart: func(context.Context) error {
 				api, _ := di.Invoke[huma.API](i)
-				server.ProvideRoutes(MergedRoutes(baseYAML, api))(i)
+				server.ProvideRoutes(MergedRoutes(baseYAML, api)...)(i)
 				return nil
 			},
 		})
 		return
 	}
 	api, _ := di.Invoke[huma.API](i)
-	server.ProvideRoutes(MergedRoutes(baseYAML, api))(i)
+	server.ProvideRoutes(MergedRoutes(baseYAML, api)...)(i)
 }

@@ -43,15 +43,16 @@ func TestHTTPEnabled(t *testing.T) {
 
 func TestOtlpUsesHTTP(t *testing.T) {
 	base := Config{Protocol: "grpc", Endpoint: "localhost:4317"}
-	if otlpUsesHTTP(base, "otlp") {
+	if otlpUsesHTTP(base) {
 		t.Fatal("grpc protocol should not use http")
 	}
 	httpCfg := Config{Protocol: "http", Endpoint: "localhost:4318"}
-	if !otlpUsesHTTP(httpCfg, "otlp") {
+	if !otlpUsesHTTP(httpCfg) {
 		t.Fatal("http protocol should use http exporter")
 	}
-	if !otlpUsesHTTP(base, "otlp_http") {
-		t.Fatal("otlp_http exporter should use http")
+	// 传输层只由 protocol 决定：exporter 别名（otlp_http 等）已移除。
+	if err := base.Validate(); err != nil {
+		t.Fatalf("grpc protocol must be valid: %v", err)
 	}
 }
 

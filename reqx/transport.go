@@ -41,7 +41,6 @@ type resolveTransport struct {
 	preserveHost     bool
 	autoPreserveHost bool
 	logicalHost      string
-	hostOverride     string
 }
 
 func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -53,12 +52,11 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return nil, fmt.Errorf("reqx(%s): no healthy endpoints", t.name)
 	}
 
+	// attempts 尊重调用方配置：早期实现先按端点数量取小、再无条件夹到 5，
+	// 导致 MaxFailover=20 静默变成 5（既不报错也不告警）。
 	attempts := n
 	if t.maxFailover > 0 && t.maxFailover < attempts {
 		attempts = t.maxFailover
-	}
-	if attempts > defaultMaxFailover {
-		attempts = defaultMaxFailover
 	}
 
 	scheme := t.scheme
@@ -89,7 +87,6 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			scheme:       scheme,
 			preserveHost: t.shouldPreserveHost(ep),
 			logicalHost:  t.logicalHost,
-			hostOverride: t.hostOverride,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("reqx(%s): %w", t.name, err)
@@ -150,7 +147,6 @@ type endpointRewrite struct {
 	scheme       string
 	preserveHost bool
 	logicalHost  string
-	hostOverride string
 }
 
 func cloneForEndpoint(req *http.Request, ep string, o endpointRewrite) (*http.Request, error) {
@@ -172,11 +168,7 @@ func cloneForEndpoint(req *http.Request, ep string, o endpointRewrite) (*http.Re
 
 	r2.URL.Scheme = o.scheme
 	r2.URL.Host = host
-	if o.hostOverride != "" {
-		r2.Host = o.hostOverride
-	} else {
-		r2.Host = host
-	}
+	r2.Host = host
 
 	// 为故障转移重试回卷 body。
 	if req.GetBody != nil {
@@ -329,17 +321,18 @@ func isFailoverError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// 连接层错误：net.Error（含 *url.Error、*net.OpError、*net.DNSError）
+	// 已覆盖超时、DNS 解析失败、connection refused/reset 等。
 	var ne net.Error
 	if errors.As(err, &ne) {
 		return true
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "TLS handshake timeout") ||
-		strings.Contains(msg, "EOF")
+	// 对端在读响应前关闭连接，表现为 io.EOF / io.ErrUnexpectedEOF。
+	//
+	// 这里只用 errors.Is：早期实现用 strings.Contains(err.Error(), "EOF")，
+	// 会把任何文案里带 EOF 的业务错误也判为可重试，于是非幂等请求会被
+	// 静默发到第二个实例。
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
@@ -362,9 +355,6 @@ func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
 			otelhttp.WithTracerProvider(otel.GetTracerProvider()),
 			otelhttp.WithPropagators(otel.GetTextMapPropagator()),
 			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-				if in.SpanName != "" {
-					return in.SpanName
-				}
 				return "HTTP " + r.Method
 			}),
 		}
@@ -385,7 +375,6 @@ func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
 		preserveHost:     in.PreserveHost,
 		autoPreserveHost: in.AutoPreserve,
 		logicalHost:      in.LogicalHost,
-		hostOverride:     in.HostOverride,
 	}, nil
 }
 
@@ -422,12 +411,10 @@ type buildTransportInput struct {
 	Base         http.RoundTripper
 	OwnBase      bool
 	OTel         bool
-	SpanName     string
 	MaxFailover  int
 	PreserveHost bool
 	// AutoPreserve 表示 PreserveHost 是推断出来的（https + 命名服务，
 	// 未显式设置 ServerName），应只对 IP 端点生效。
 	AutoPreserve bool
 	ServerName   string
-	HostOverride string
 }

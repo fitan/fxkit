@@ -66,13 +66,16 @@ type cacheHealthChecker struct {
 // Name 返回检查项名称。
 func (cacheHealthChecker) Name() string { return "cache" }
 
-// Check 执行一次轻量写读，验证 Redis 可用。
+// Check 对 Redis 做一次 PING。
+//
+// 按能力（Ping）而不是具体类型（*RedisCache）判定：配了 cache.prefix 时
+// 缓存会被 *prefixedCache 包一层，类型断言会失败并让探测永远通过。
 func (c cacheHealthChecker) Check(ctx context.Context) error {
-	rc, ok := c.cache.(*RedisCache)
+	p, ok := c.cache.(interface{ Ping(context.Context) error })
 	if !ok {
-		return nil
+		return fmt.Errorf("cache: driver %T does not support ping", c.cache)
 	}
-	if err := rc.Client().Ping(ctx).Err(); err != nil {
+	if err := p.Ping(ctx); err != nil {
 		return fmt.Errorf("redis ping: %w", err)
 	}
 	return nil

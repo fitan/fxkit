@@ -51,6 +51,16 @@ type Config struct {
 	// AccessLog 为 true 时输出结构化访问日志（method/route/status/duration/bytes）。
 	// route 用 chi 路由模板（避免高基数），默认关闭。
 	AccessLog bool `yaml:"access_log"`
+	// SSEPathPrefixes 是流式端点的路径前缀，默认 ["/sse/"]。
+	// 命中前缀的请求会清掉 WriteTimeout、跳过 OTel 与 body 日志。
+	// 也支持 Accept/Content-Type: text/event-stream 的请求。
+	SSEPathPrefixes []string `yaml:"sse_path_prefixes"`
+	// MaxBodyBytes 是裸 chi 路由（[Route]）的请求体上限，默认 1 MiB。
+	//
+	// Huma 路由有各自的 [huma.Operation.MaxBodyBytes]（默认也是 1 MiB）；
+	// 此值只作用于通过 [ProvideRoutes] 挂载的裸 handler。
+	// 0 = 不限制；单条路由可用 [Route.MaxBodyBytes] 覆盖（<0 也不限制）。
+	MaxBodyBytes int64 `yaml:"max_body_bytes"`
 }
 
 // RateLimitConfig 按客户端 IP 限流（令牌桶）。
@@ -77,6 +87,8 @@ func (c *Config) SetDefaults() {
 	c.RateLimit.RPS = 20
 	c.RateLimit.Burst = 40
 	c.AccessLog = false
+	c.SSEPathPrefixes = []string{"/sse/"}
+	c.MaxBodyBytes = 1 << 20 // 1 MiB，与 Huma 默认一致
 }
 
 // Validate 检查端口与超时。非法值启动失败。

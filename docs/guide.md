@@ -69,17 +69,21 @@ FXKIT_STRICT_WIRING=1 go test ./...    # 或 di.SetStrictWiring(true)
 ### 2.3 DI 与 group
 
 ```go
-fxkit.Service("orders", NewService,        // 主构造函数（依赖自动注入）
-    fxkit.Provide(NewRepo),                // 额外服务
-    fxkit.Routes(newRoutes),               // 贡献 []server.Route
-    fxkit.Invoke(seedOnStart),             // OnStart 副作用，返回 error 会中止启动
+fxkit.Service("orders",
+    fxkit.Provide(func(i di.Injector) (*Service, error) {   // 主构造函数
+        return NewService(di.MustInvoke[*OrdersConfig](i))
+    }),
+    fxkit.ProvideValue(&Repo{}),                            // 额外服务
+    fxkit.Routes(newRoutes()...),                          // 贡献 []server.Route
+    fxkit.Invoke(func(i di.Injector) error {               // OnStart 副作用
+        return di.MustInvoke[*Service](i).Seed()
+    }),
     fxkit.ProvideConfig[OrdersConfig]("orders"),
 )
 ```
 
-支持的构造函数签名：`func(dep...) T`、`func(dep...) (T, error)`、参数结构体 `func(P)`
-（字段按类型注入，`Foo []T` 会取 group，`optional:"true"` 缺失则留零值）。
-**无法识别的签名直接 panic**，不会静默丢弃。
+构造函数统一签名 **`func(di.Injector) (T, error)`**，依赖用 `di.MustInvoke` 显式取。
+早期版本靠反射解析 `func(dep...) T` / 参数结构体，现在全部取消：接线错误在**编译期**暴露。
 
 ### 2.4 配置模型
 
@@ -132,7 +136,10 @@ curl localhost:8080/version
 
 ```go
 // internal/hello/hello.go
-var Module = fxkit.Service("hello", NewService, fxkit.Routes(newRoutes))
+var Module = fxkit.Service("hello",
+    fxkit.Provide(func(di.Injector) (*Service, error) { return NewService() }),
+    fxkit.Routes(newRoutes()...),
+)
 
 type Service struct{}
 
@@ -353,7 +360,8 @@ return s.db.Transaction(ctx, func(txCtx context.Context) error {
 **消费端**（Hatchet task）：
 
 ```go
-hatchetx.ProvideRegistrar(func(svc *Svc) hatchetx.Registrar {
+hatchetx.ProvideRegistrarLazy(func(i di.Injector) (hatchetx.Registrar, error) {
+    svc := di.MustInvoke[*Svc](i)
     return func(c *hatchetx.Client) ([]hatchetx.WorkflowBase, error) {
         task := c.SDK.NewStandaloneTask(
             "order-created",

@@ -15,11 +15,10 @@ import (
 
 // ServerConfig 定义 MCP Server 的配置参数。
 type ServerConfig struct {
-	Name       string            // 服务名称 (例如 "catalog-service")
-	Version    string            // 服务版本 (例如 "1.0.0")
-	Handler    http.Handler      // 进程内直接分发请求的 HTTP Handler (如 chi.Mux，0 网络开销原生直通 Huma)
-	Headers    map[string]string // 转发请求时附带的请求头 (如 Authorization, X-API-Key 等)
-	Dispatcher Dispatcher        // 自定义调度器 (若未指定则自动基于 Handler 构造 InProcessDispatcher)
+	Name    string            // 服务名称 (例如 "catalog-service")
+	Version string            // 服务版本 (例如 "1.0.0")
+	Handler http.Handler      // 进程内直接分发请求的 HTTP Handler (如 chi.Mux，0 网络开销原生直通 Huma)
+	Headers map[string]string // 转发请求时附带的请求头 (如 Authorization, X-API-Key 等)
 	// MaxResponseBytes 限制单次 tool 调用返回的字符数（避免撑爆模型上下文）。
 	// 0 = 默认 1 MiB；负数 = 不限制。
 	MaxResponseBytes int
@@ -27,13 +26,12 @@ type ServerConfig struct {
 
 // Server 是基于 github.com/mark3labs/mcp-go 标准库构建的 Model Context Protocol 服务器。
 type Server struct {
-	cfg        ServerConfig
-	dispMu     sync.RWMutex
-	dispatcher Dispatcher
-	mcpServer  *mcpserver.MCPServer
-	toolsMu    sync.RWMutex
-	tools      map[string]Tool
-	maxResp    int
+	cfg       ServerConfig
+	disp      *InProcessDispatcher
+	mcpServer *mcpserver.MCPServer
+	toolsMu   sync.RWMutex
+	tools     map[string]Tool
+	maxResp   int
 }
 
 // NewServer 创建并初始化一个 MCP Server 实例。
@@ -51,19 +49,17 @@ func NewServer(cfg ServerConfig, tools []Tool) *Server {
 		mcpserver.WithToolCapabilities(true),
 	)
 
-	var disp Dispatcher
-	if cfg.Dispatcher != nil {
-		disp = cfg.Dispatcher
-	} else if cfg.Handler != nil {
+	var disp *InProcessDispatcher
+	if cfg.Handler != nil {
 		disp = NewInProcessDispatcher(cfg.Handler, cfg.Headers)
 	}
 
 	s := &Server{
-		cfg:        cfg,
-		dispatcher: disp,
-		mcpServer:  rawServer,
-		tools:      make(map[string]Tool, len(tools)),
-		maxResp:    cfg.MaxResponseBytes,
+		cfg:       cfg,
+		disp:      disp,
+		mcpServer: rawServer,
+		tools:     make(map[string]Tool, len(tools)),
+		maxResp:   cfg.MaxResponseBytes,
 	}
 	if s.maxResp == 0 {
 		s.maxResp = 1 << 20 // 1 MiB
@@ -74,29 +70,6 @@ func NewServer(cfg ServerConfig, tools []Tool) *Server {
 	}
 
 	return s
-}
-
-// NewInProcessServer 构造一个纯内存直通的 MCP Server (0 网络开销，原生调用当前进程的 chi.Mux / Huma 路由)。
-func NewInProcessServer(name string, handler http.Handler, tools []Tool) *Server {
-	return NewServer(ServerConfig{
-		Name:    name,
-		Handler: handler,
-	}, tools)
-}
-
-// SetDispatcher 动态替换或设置请求分发执行器（并发安全）。
-func (s *Server) SetDispatcher(d Dispatcher) {
-	s.dispMu.Lock()
-	s.dispatcher = d
-	s.dispMu.Unlock()
-}
-
-// SetHandler 动态绑定进程内 HTTP Handler 并自动配置 InProcessDispatcher（并发安全）。
-func (s *Server) SetHandler(h http.Handler) {
-	s.dispMu.Lock()
-	s.cfg.Handler = h
-	s.dispatcher = NewInProcessDispatcher(h, s.cfg.Headers)
-	s.dispMu.Unlock()
 }
 
 // RegisterTool 动态注册或更新工具，并将其挂载到底层 MCP Server。
@@ -150,24 +123,16 @@ func (s *Server) MCPServer() *mcpserver.MCPServer {
 	return s.mcpServer
 }
 
-// Dispatcher 返回当前配置的执行调度器。
-func (s *Server) Dispatcher() Dispatcher {
-	s.dispMu.RLock()
-	defer s.dispMu.RUnlock()
-	return s.dispatcher
-}
-
-// executeToolCall 将 Tool 调用委托给底层的 InProcessDispatcher。
+// executeToolCall 将 Tool 调用委托给进程内直通执行器。
 func (s *Server) executeToolCall(ctx context.Context, tool Tool, args map[string]any) (string, bool) {
-	disp := s.Dispatcher()
-	if disp == nil {
+	if s.disp == nil {
 		recordToolCall(ctx, tool.Name, 0, true)
-		return "No in-process dispatcher configured for MCP server", true
+		return "mcpx: no HTTP handler configured for the MCP server", true
 	}
 
 	start := time.Now()
 	ctx, span := startToolSpan(ctx, tool)
-	result, err := disp.Dispatch(ctx, tool, args)
+	result, err := s.disp.Dispatch(ctx, tool, args)
 	recordToolCall(ctx, tool.Name, time.Since(start), err != nil)
 	endToolSpan(span, err)
 	if err != nil {

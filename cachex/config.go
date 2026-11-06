@@ -28,6 +28,13 @@ type Config struct {
 
 	// Redis 当 Driver 为 "redis" 时的连接配置。
 	Redis RedisConfig `yaml:"redis"`
+
+	// defaultsApplied 标记 [SetDefaults] 已执行。
+	//
+	// 用于区分「经 config.Load 加载的配置」（默认值已填，显式 null_ttl=0 必须被尊重）
+	// 与「代码里直接构造的零值/半零值 Config」（应回落到内置默认，
+	// 否则会静默关掉负缓存与 singleflight）。
+	defaultsApplied bool
 }
 
 // RedisConfig Redis 详细连接配置。
@@ -52,6 +59,7 @@ type RedisConfig struct {
 
 // SetDefaults 设置配置项默认值。
 func (c *Config) SetDefaults() {
+	c.defaultsApplied = true
 	c.DefaultTTL = 30 * time.Minute
 	c.NullTTL = 1 * time.Minute
 	c.Singleflight = true

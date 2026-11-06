@@ -2,12 +2,15 @@ package cachex
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
 
 // prefixedCache 为所有 Cache 操作透明添加 Key 前缀。
 type prefixedCache struct {
+	sfHolder
+
 	prefix string
 	cache  Cache
 }
@@ -78,4 +81,15 @@ func (p *prefixedCache) Close() error {
 		return c.Close()
 	}
 	return nil
+}
+
+// Ping 转发底层缓存的连通性探测。
+//
+// 必须显式转发：健康检查按能力（Ping）而不是按具体类型（*RedisCache）判定，
+// 否则配置了 cache.prefix 后包装层会让探测永远通过。
+func (p *prefixedCache) Ping(ctx context.Context) error {
+	if q, ok := p.cache.(interface{ Ping(context.Context) error }); ok {
+		return q.Ping(ctx)
+	}
+	return fmt.Errorf("cache: underlying driver %T does not support ping", p.cache)
 }

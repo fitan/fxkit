@@ -37,13 +37,22 @@ func SetupDefault() {
 	slog.SetDefault(slog.New(NewConsoleHandler(os.Stderr, nil)))
 }
 
-// isStdlibDefault 判断 handler 是否为 log/slog 的默认 handler。
-// 标准库把默认 handler 实现为未导出的 *defaultHandler。
+// initDefaultHandler 是包初始化时的 slog 默认 handler。
+//
+// 标准库把默认 handler 实现为未导出的 *defaultHandler，没有导出的类型判断方式；
+// 单靠 %T 字符串匹配会把「别的包 init 里安装的自定义 handler」误判成默认值。
+// 先做指针比较（只有「从未被替换过」才相等），再用类型名做二次确认。
+var initDefaultHandler = slog.Default().Handler()
+
+// isStdlibDefault 判断 handler 是否仍为 log/slog 的默认 handler。
 func isStdlibDefault(h slog.Handler) bool {
 	if h == nil {
 		return true
 	}
-	return strings.HasSuffix(fmt.Sprintf("%T", h), "slog.defaultHandler")
+	if h != initDefaultHandler {
+		return false
+	}
+	return strings.HasSuffix(fmt.Sprintf("%T", h), "defaultHandler")
 }
 
 // step 记录一次 WithAttrs / WithGroup 调用，用于在最终 handler 上按原顺序重放。

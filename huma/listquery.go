@@ -1,7 +1,7 @@
 package huma
 
 import (
-	"net/http"
+	"strings"
 
 	"github.com/fitan/fxkit/crudx"
 )
@@ -19,66 +19,30 @@ type ListQueryInput struct {
 }
 
 // ListParamsFromInput 将 Huma 绑定的查询参数映射为 [crudx.ListParams]。
-// Q 值通过 [crudx.ParseHTTPQValues] 做 URL 解码。
+//
+// 注意：Huma 的 query 绑定底层是 net/url，值已经解码过，这里**不能**再解码。
+// 早期实现调了 crudx.ParseHTTPQValues，导致客户端搜索字面量 "%20" 被
+// 二次解码成空格，过滤条件被静默改写。
 func ListParamsFromInput(in *ListQueryInput) (crudx.ListParams, error) {
-	q, err := crudx.ParseHTTPQValues(in.Q)
-	if err != nil {
-		return crudx.ListParams{}, err
-	}
 	return crudx.ListParams{
 		Limit:          in.Limit,
 		Start:          in.Start,
 		SortBy:         in.SortBy,
 		SortDirection:  in.SortDirection,
 		ReplyWithCount: in.ReplyWithCount,
-		Q:              q,
+		Q:              normalizeQValues(in.Q),
 		Cursor:         in.Cursor,
 		UseCursor:      in.UseCursor,
 	}, nil
 }
 
-// ParseHTTPListParams 从 http.Request 读取列表参数（供非 Huma handler 使用）。
-func ParseHTTPListParams(r *http.Request) (crudx.ListParams, error) {
-	q := r.URL.Query()["q"]
-	decoded, err := crudx.ParseHTTPQValues(q)
-	if err != nil {
-		return crudx.ListParams{}, err
-	}
-	limit := parseIntDefault(r.URL.Query().Get("limit"), 100)
-	if limit > 1000 {
-		limit = 1000
-	}
-	start := parseIntDefault(r.URL.Query().Get("start"), 0)
-	reply := r.URL.Query().Get("replyWithCount") == "true"
-	useCursor := r.URL.Query().Get("useCursor") == "true"
-	return crudx.ListParams{
-		Limit:          limit,
-		Start:          start,
-		SortBy:         r.URL.Query().Get("sortBy"),
-		SortDirection:  r.URL.Query().Get("sortDirection"),
-		ReplyWithCount: reply,
-		Q:              decoded,
-		Cursor:         r.URL.Query().Get("cursor"),
-		UseCursor:      useCursor,
-	}, nil
-}
-
-func parseIntDefault(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return def
-		}
-		n = n*10 + int(c-'0')
-		if n > 1_000_000 {
-			return def
+// normalizeQValues 去掉空条件并修剪首尾空白，但不做 URL 解码。
+func normalizeQValues(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
 		}
 	}
-	if n <= 0 && s != "0" {
-		return def
-	}
-	return n
+	return out
 }

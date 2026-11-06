@@ -8,17 +8,23 @@ package buildinfo
 
 import (
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/fitan/fxkit/di"
 )
 
 // mus 保护下面这些由 -ldflags 注入的包级变量。
 //
-// 它们只在构建时写入，但 Normalize 会把规范化后的值回写，而 /version 是
-// 每次请求都会调用 Get() 的——不加锁会触发数据竞争（go test -race 可复现）。
+// 它们只在构建时写入，但 Normalize 会把规范化后的值回写。
+// 读路径不直接加锁：Get/Meta 读的是 [snapshot]（原子指针），
+// 避免 /version 每个请求都抢全局写锁并重新 normalize。
 var mus sync.RWMutex
+
+// snapshot 是规范化后的不可变快照，由 Normalize / 首次读取填充。
+var snapshot atomic.Pointer[Info]
 
 // 以下变量在构建时通过 -ldflags 注入。
 var (
@@ -48,8 +54,37 @@ type Info struct {
 // 会从 debug.BuildInfo 的 vcs 设置回填。可安全多次调用（并发安全）。
 func Normalize() {
 	mus.Lock()
+	normalizeLocked()
+	info := buildInfoLocked()
+	mus.Unlock()
+	snapshot.Store(&info)
+}
+
+// current 返回当前快照；首次调用（或 Normalize 被外部重置后）会就地构建。
+func current() Info {
+	if p := snapshot.Load(); p != nil {
+		return *p
+	}
+	mus.Lock()
 	defer mus.Unlock()
 	normalizeLocked()
+	info := buildInfoLocked()
+	snapshot.Store(&info)
+	return info
+}
+
+// buildInfoLocked 从包级变量构造快照，调用方必须持有 mus。
+func buildInfoLocked() Info {
+	return Info{
+		Version:   Version,
+		Commit:    Commit,
+		GitRemote: GitRemote,
+		GitBranch: GitBranch,
+		Dirty:     parseDirty(Dirty),
+		GoVersion: GoVersion,
+		BuildTime: BuildTime,
+		BuiltBy:   BuiltBy,
+	}
 }
 
 func normalizeLocked() {
@@ -132,9 +167,10 @@ func shortRevision(rev string) string {
 	return rev
 }
 
+// parseDirty 解析构建注入的 GIT_DIRTY（git 只产出 true/false，兼容 1/0）。
 func parseDirty(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "1", "true", "yes", "y", "dirty":
+	case "1", "true":
 		return true
 	default:
 		return false
@@ -143,18 +179,16 @@ func parseDirty(s string) bool {
 
 // Meta 返回可写入 Consul 等目录的构建字段。空值省略。
 func Meta() map[string]string {
-	mus.Lock()
-	defer mus.Unlock()
-	normalizeLocked()
+	info := current()
 	pairs := []struct{ k, v string }{
-		{"version", Version},
-		{"build_commit", Commit},
-		{"build_time", BuildTime},
-		{"build_built_by", BuiltBy},
-		{"git_remote", GitRemote},
-		{"git_branch", GitBranch},
-		{"git_dirty", Dirty},
-		{"go_version", GoVersion},
+		{"version", info.Version},
+		{"build_commit", info.Commit},
+		{"build_time", info.BuildTime},
+		{"build_built_by", info.BuiltBy},
+		{"git_remote", info.GitRemote},
+		{"git_branch", info.GitBranch},
+		{"git_dirty", strconv.FormatBool(info.Dirty)},
+		{"go_version", info.GoVersion},
 	}
 	out := make(map[string]string, len(pairs))
 	for _, p := range pairs {
@@ -168,19 +202,7 @@ func Meta() map[string]string {
 
 // Get 返回当前（已 Normalize）构建信息的快照。并发安全。
 func Get() Info {
-	mus.Lock()
-	defer mus.Unlock()
-	normalizeLocked()
-	return Info{
-		Version:   Version,
-		Commit:    Commit,
-		GitRemote: GitRemote,
-		GitBranch: GitBranch,
-		Dirty:     parseDirty(Dirty),
-		GoVersion: GoVersion,
-		BuildTime: BuildTime,
-		BuiltBy:   BuiltBy,
-	}
+	return current()
 }
 
 // Module 使 [Info] 可用于 di 注入，并在启动时记录元数据。
@@ -190,7 +212,7 @@ var Module = di.Module("fxkit/buildinfo",
 		di.Provide(i, func(i di.Injector) (Info, error) {
 			return Get(), nil
 		})
-		lc, _ := di.Invoke[*di.Lifecycle](i)
+		lc := di.MustInvoke[*di.Lifecycle](i)
 		registerStartupLog(lc)
 	},
 )

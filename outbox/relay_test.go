@@ -254,3 +254,44 @@ type callbackPublisher struct {
 func (c *callbackPublisher) PublishEvent(_ context.Context, _, _ string, _ []byte, _ map[string]string) error {
 	return c.fn()
 }
+
+// closingPublisher 在「投递成功」后立即关闭数据库，模拟 markPublished 失败。
+type closingPublisher struct {
+	close func()
+}
+
+func (p closingPublisher) PublishEvent(context.Context, string, string, []byte, map[string]string) error {
+	p.close()
+	return nil
+}
+
+// TestRelay_MarkPublishedFailureIsVisible 是回归测试：
+//
+// 早期 markPublished 失败只记日志、ProcessBatch 仍返回 nil，
+// 调用方看到「成功但 published 少一条」，而该行会在租约过期后被再次投递。
+func TestRelay_MarkPublishedFailureIsVisible(t *testing.T) {
+	client := testDB(t)
+	ctx := context.Background()
+
+	row := outbox.OutboxEvent{
+		Pubsub:  "pubsub",
+		Topic:   "user-created",
+		Payload: []byte(`{"user_id":"7"}`),
+		Status:  outbox.StatusPending,
+	}
+	if err := client.Conn(ctx).Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	relay := outbox.NewRelay(outbox.NewRelayParams{Client: client, Outbox: mustOutboxCfg(t)})
+	sqlDB, err := client.Pool().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay.SetPublisher(closingPublisher{close: func() { _ = sqlDB.Close() }})
+
+	n, err := relay.ProcessBatch(ctx)
+	if err == nil {
+		t.Fatalf("markPublished failure must surface as an error (published=%d)", n)
+	}
+}

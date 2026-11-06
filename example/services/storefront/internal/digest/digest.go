@@ -8,10 +8,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit"
 	"github.com/fitan/fxkit/authz"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/fxerrors"
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/reqx"
-	"github.com/fitan/fxkit/di"
 
 	catalogclient "github.com/fitan/fxkit-example/services/storefront/internal/clients/catalog"
 )
@@ -147,9 +147,17 @@ func digestHTTPRoutes() []authz.HTTPRoute {
 }
 
 var Module = di.Options(
-	fxkit.Service("digest", NewService,
+	fxkit.Service("digest",
+		fxkit.Provide(func(i di.Injector) (*Service, error) {
+			return NewService(
+				di.MustInvoke[*reqx.Factory](i),
+				di.MustInvoke[*Config](i),
+			)
+		}),
 		fxkit.ProvideConfig[Config]("storefront"),
 	),
-	fxhuma.ProvideRegistrar(Register),
-	authz.ProvideHTTPRoutes(digestHTTPRoutes),
+	fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+		return Register(di.MustInvoke[*Service](i)), nil
+	}),
+	authz.ProvideHTTPRoutes(digestHTTPRoutes()...),
 )

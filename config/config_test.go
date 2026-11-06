@@ -209,69 +209,6 @@ func TestNew_PortFlagWins(t *testing.T) {
 	}
 }
 
-func TestSet_UpdatesTree(t *testing.T) {
-	cfg, err := New(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set("server.port", "9090"); err != nil {
-		t.Fatal(err)
-	}
-	var srv yamlServer
-	if err := cfg.UnmarshalKey("server", &srv); err != nil {
-		t.Fatal(err)
-	}
-	if srv.Port != "9090" {
-		t.Fatalf("port=%q", srv.Port)
-	}
-}
-
-func TestSet_DoesNotValidate(t *testing.T) {
-	cfg, err := New(Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Set("server.port", "not-a-port"); err != nil {
-		t.Fatal(err)
-	}
-	var srv yamlServer
-	if err := cfg.UnmarshalKey("server", &srv); err != nil {
-		t.Fatal(err)
-	}
-	if srv.Port != "not-a-port" {
-		t.Fatalf("Set should keep invalid value, got %q", srv.Port)
-	}
-}
-
-func TestReload_RereadsFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("server:\n  port: \"8081\"\napp:\n  name: first\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := New(Options{ConfigFile: path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("server:\n  port: \"9099\"\napp:\n  name: second\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Reload(); err != nil {
-		t.Fatal(err)
-	}
-	var srv yamlServer
-	if err := cfg.UnmarshalKey("server", &srv); err != nil {
-		t.Fatal(err)
-	}
-	app, err := Load[App](cfg, "app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if srv.Port != "9099" || app.Name != "second" {
-		t.Fatalf("after reload: %+v / %+v", srv, app)
-	}
-}
-
 func TestUnmarshalKey_UsesYAMLTags(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -360,6 +297,7 @@ orders:
 }
 
 func TestLoad_SetDefaultsAndValidate(t *testing.T) {
+	// 默认值：空配置时 n=7。
 	cfg, err := New(Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -371,10 +309,18 @@ func TestLoad_SetDefaultsAndValidate(t *testing.T) {
 	if got.N != 7 {
 		t.Fatalf("defaults: n=%d", got.N)
 	}
-	if err := cfg.Set("hooks.n", -1); err != nil {
+
+	// 非法值：通过真实 YAML 注入，验证 Validate 会拒绝。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("hooks:\n  n: -1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Load[hookCfg](cfg, "hooks")
+	bad, err := New(Options{ConfigFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load[hookCfg](bad, "hooks")
 	if err == nil || !strings.Contains(err.Error(), "n negative") {
 		t.Fatalf("want validate error, got %v", err)
 	}

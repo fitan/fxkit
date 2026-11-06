@@ -53,31 +53,6 @@ func (c *Config) UnmarshalKey(key string, out any) error {
 	return unmarshalYAML(c.k, key, out)
 }
 
-// Set 写入单个键。失败时原树不变。主要用于测试。不做类型校验——非法值在随后的 [Load] 失败。
-func (c *Config) Set(key string, val any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	next := c.k.Copy()
-	if err := next.Set(key, val); err != nil {
-		return err
-	}
-	c.k = next
-	return nil
-}
-
-// Reload 重新读取本地 YAML（若有）与 Consul KV（若有）。每次重建底层树，避免旧 KV 残留。
-// 失败时原树不变。[Provide] 注入的 *T 不会更新；要热更新请注入 *Config 再 [Load]。
-func (c *Config) Reload() error {
-	k, err := loadKoanf(context.Background(), c.opts)
-	if err != nil {
-		return fmt.Errorf("config reload: %w", err)
-	}
-	c.mu.Lock()
-	c.k = k
-	c.mu.Unlock()
-	return nil
-}
-
 // New 构建 [Config]，遵循 CLI > consul/file 优先级。默认值由各段 [Load] 的 SetDefaults 填入。
 func New(opts Options) (*Config, error) {
 	k, err := loadKoanf(context.Background(), opts)
@@ -147,8 +122,14 @@ func isConfigFileNotFound(err error) bool {
 var Module = di.Module("fxkit/config",
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (*Config, error) {
+			// Options 由 cli 注入；未使用 cli 的宿主没有它属于合法情况，
+			// 此时按「无覆盖项」处理。但其它错误（构造失败）必须中止，
+			// 否则会静默得到一棵空配置树。
 			opts, err := di.Invoke[Options](i)
 			if err != nil {
+				if !di.IsNotFound(err) {
+					return nil, fmt.Errorf("config: resolve Options: %w", err)
+				}
 				opts = Options{}
 			}
 			return New(opts)

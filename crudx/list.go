@@ -8,6 +8,7 @@ import (
 
 	"github.com/fitan/fxkit/fxerrors"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 // ListResult 是标准的列表响应封装。
@@ -279,6 +280,15 @@ func readSortValue[M any](entity *M, sortBy string, spec ListSpec, meta *ModelMe
 		base = col[i+1:]
 	}
 	v := reflect.ValueOf(entity).Elem()
+	// 优先用 GORM schema 的「列名 → 字段索引」映射：它尊重自定义 NamingStrategy，
+	// 而手写驼峰转换在 camelCase / 表前缀等配置下会推错列名。
+	if meta != nil {
+		if idx, ok := meta.ColumnIndex[base]; ok {
+			if fv, ok := fieldByIndex(v, idx); ok {
+				return fv.Interface(), nil
+			}
+		}
+	}
 	if val, ok := findFieldValueByColumn(v, base); ok {
 		return val, nil
 	}
@@ -291,6 +301,26 @@ func readSortValue[M any](entity *M, sortBy string, spec ListSpec, meta *ModelMe
 	return nil, fxerrors.BadRequest("cursor: cannot read sort field %s", sortBy)
 }
 
+// fieldByIndex 按索引路径取值，途中遇到 nil 嵌入指针则返回 false。
+func fieldByIndex(v reflect.Value, index []int) (reflect.Value, bool) {
+	for _, i := range index {
+		for v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return reflect.Value{}, false
+			}
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct || i < 0 || i >= v.NumField() {
+			return reflect.Value{}, false
+		}
+		v = v.Field(i)
+	}
+	if !v.IsValid() || !v.CanInterface() {
+		return reflect.Value{}, false
+	}
+	return v, true
+}
+
 func gormColumnName(fieldName, gormTag string) string {
 	if gormTag != "" {
 		for _, p := range strings.Split(gormTag, ";") {
@@ -299,30 +329,6 @@ func gormColumnName(fieldName, gormTag string) string {
 			}
 		}
 	}
-	return toSnakeColumn(fieldName)
-}
-
-func toSnakeColumn(s string) string {
-	if s == "" {
-		return s
-	}
-	var b strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		isUpper := r >= 'A' && r <= 'Z'
-		if isUpper {
-			if i > 0 {
-				prev := runes[i-1]
-				prevLower := prev >= 'a' && prev <= 'z' || prev >= '0' && prev <= '9'
-				nextLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
-				if prevLower || nextLower {
-					b.WriteByte('_')
-				}
-			}
-			b.WriteRune(r - 'A' + 'a')
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	// 兜底：用 GORM 自己的默认命名策略，而不是手写驼峰转换。
+	return schema.NamingStrategy{}.ColumnName("", fieldName)
 }

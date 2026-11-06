@@ -40,7 +40,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 
@@ -79,7 +78,7 @@ var Module = di.Module("fxkit/hatchetx",
 		})
 		provideOutboxPublisherOption()(i)
 
-		lc, _ := di.Invoke[*di.Lifecycle](i)
+		lc := di.MustInvoke[*di.Lifecycle](i)
 		registerLifecycle(lifecycleParams{
 			LC:       lc,
 			Injector: i,
@@ -89,56 +88,20 @@ var Module = di.Module("fxkit/hatchetx",
 
 // ProvideRegistrar 把 [Registrar] 发布到 hatchet_registrars group。
 //
-// 支持：Registrar / func(*Client) ([]WorkflowBase, error) /
-// func(*Client) (WorkflowBase, error) / func() Registrar / func(di.Injector) Registrar，
-// 以及任意 func(dep...) Registrar、func(dep...) (Registrar, error)。
-// 后者延迟到 PreStart 解析依赖后调用；无法识别的签名直接 panic——
-// 静默丢弃会导致「workflow 写了但 worker 从不执行」。
-func ProvideRegistrar(fn any) di.Option {
+// 需要依赖时用 [ProvideRegistrarLazy]（显式接收 di.Injector），
+// 不再靠反射猜测函数签名。
+func ProvideRegistrar(reg Registrar) di.Option {
 	return func(i di.Injector) {
-		if fn == nil {
+		if reg == nil {
 			return
 		}
-		if reg, ok := asRegistrar(fn); ok {
-			di.ProvideGroupItem[Registrar](i, reg)
-			return
-		}
-		switch f := fn.(type) {
-		case func() Registrar:
-			di.ProvideGroupItem[Registrar](i, f())
-			return
-		case func(di.Injector) Registrar:
-			di.ProvideGroupItem[Registrar](i, f(i))
-			return
-		}
-
-		val := reflect.ValueOf(fn)
-		if val.Kind() != reflect.Func {
-			panic("hatchetx.ProvideRegistrar: unsupported argument " + reflect.TypeOf(fn).String() +
-				"; want a Registrar, a WorkflowBase constructor, or a constructor returning Registrar")
-		}
-		if err := di.ValidateConstructor(val.Type()); err != nil {
-			panic("hatchetx.ProvideRegistrar: " + err.Error())
-		}
-		lc, err := di.Invoke[*di.Lifecycle](i)
-		if err != nil || lc == nil {
-			panic("hatchetx.ProvideRegistrar: constructor form requires *di.Lifecycle in the graph")
-		}
-		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-			OnStart: func(context.Context) error {
-				out, callErr := di.CallConstructor(i, fn)
-				if callErr != nil {
-					return fmt.Errorf("hatchetx.ProvideRegistrar: %w", callErr)
-				}
-				reg, ok := asRegistrar(out)
-				if !ok {
-					return fmt.Errorf("hatchetx.ProvideRegistrar: constructor returned %T, want hatchetx.Registrar", out)
-				}
-				di.ProvideGroupItem[Registrar](i, reg)
-				return nil
-			},
-		})
+		di.ProvideGroupItem(i, reg)
 	}
+}
+
+// ProvideRegistrarLazy 在 PreStart 求值（可访问完整依赖图）。
+func ProvideRegistrarLazy(fn func(di.Injector) (Registrar, error)) di.Option {
+	return func(i di.Injector) { di.ProvideLazyE[Registrar](i, fn) }
 }
 
 // asRegistrar 把受支持的 Registrar 形态归一为 [Registrar]。
@@ -165,24 +128,26 @@ func asRegistrar(v any) (Registrar, bool) {
 
 // ProvideWorkflow 把单个原生 Hatchet workflow 直接注册到 worker。
 func ProvideWorkflow(wf WorkflowBase) di.Option {
-	return ProvideRegistrar(func(*Client) ([]WorkflowBase, error) {
+	return ProvideRegistrarLazy(func(i di.Injector) (Registrar, error) {
 		if wf == nil {
-			return nil, nil
+			return func(*Client) ([]WorkflowBase, error) { return nil, nil }, nil
 		}
-		return []WorkflowBase{wf}, nil
+		return func(*Client) ([]WorkflowBase, error) { return []WorkflowBase{wf}, nil }, nil
 	})
 }
 
 // ProvideWorkflows 把多个原生 Hatchet workflow 直接注册到 worker。
 func ProvideWorkflows(wfs ...WorkflowBase) di.Option {
-	return ProvideRegistrar(func(*Client) ([]WorkflowBase, error) {
-		var res []WorkflowBase
-		for _, w := range wfs {
-			if w != nil {
-				res = append(res, w)
+	return ProvideRegistrarLazy(func(i di.Injector) (Registrar, error) {
+		return func(*Client) ([]WorkflowBase, error) {
+			var res []WorkflowBase
+			for _, w := range wfs {
+				if w != nil {
+					res = append(res, w)
+				}
 			}
-		}
-		return res, nil
+			return res, nil
+		}, nil
 	})
 }
 
@@ -415,54 +380,6 @@ func (c *Client) Workflows() *features.WorkflowsClient {
 		return nil
 	}
 	return c.SDK.Workflows()
-}
-
-// Workers 返回 Hatchet worker client，禁用时为 nil。
-func (c *Client) Workers() *features.WorkersClient {
-	if !c.Enabled() {
-		return nil
-	}
-	return c.SDK.Workers()
-}
-
-// Filters 返回 Hatchet filter client，禁用时为 nil。
-func (c *Client) Filters() *features.FiltersClient {
-	if !c.Enabled() {
-		return nil
-	}
-	return c.SDK.Filters()
-}
-
-// Metrics 返回 Hatchet 指标 client，禁用时为 nil。
-func (c *Client) Metrics() *features.MetricsClient {
-	if !c.Enabled() {
-		return nil
-	}
-	return c.SDK.Metrics()
-}
-
-// Logs 返回 Hatchet 日志 client，禁用时为 nil。
-func (c *Client) Logs() *features.LogsClient {
-	if !c.Enabled() {
-		return nil
-	}
-	return c.SDK.Logs()
-}
-
-// CEL 返回 Hatchet CEL 表达式 client，禁用时为 nil。
-func (c *Client) CEL() *features.CELClient {
-	if !c.Enabled() {
-		return nil
-	}
-	return c.SDK.CEL()
-}
-
-// Webhooks 返回 Hatchet webhook client，禁用时为 nil。
-func (c *Client) Webhooks() *features.WebhooksClient {
-	if !c.Enabled() {
-		return nil
-	}
-	return c.SDK.Webhooks()
 }
 
 type lifecycleParams struct {

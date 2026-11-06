@@ -36,6 +36,43 @@ func TestPrintMigrations(t *testing.T) {
 	}
 }
 
+func resetSchemaContracts() {
+	schemaContractMu.Lock()
+	schemaContractRegistry = map[string][]string{}
+	schemaContractMu.Unlock()
+}
+
+// registerFrameworkContracts 模拟 outbox / authz 模块在装配时登记 schema 契约。
+func registerFrameworkContracts() {
+	RegisterSchemaContract("outbox_events",
+		"id", "pubsub", "topic", "payload", "idempotency_key", "status",
+		"attempts", "last_error", "lease_id", "locked_at", "created_at", "published_at",
+	)
+	RegisterSchemaContract("outbox_inbox_events", "id", "topic", "processed_at")
+	RegisterSchemaContract("casbin_rule", "id", "ptype", "v0", "v1", "v2", "v3", "v4", "v5")
+	RegisterSchemaContract("authz_role", "name", "display_name", "description", "created_at", "updated_at")
+}
+
+// TestCheckSchema_noContractsIsNoop 是回归测试：
+//
+// schemaContract 曾经把 outbox/authz 的表硬编码在 gormx 里，于是只用 gormx
+// 的服务开启 db.check_schema 时会因为「缺 outbox_events 表」启动失败。
+// 现在没有子系统登记契约时 CheckSchema 直接返回 nil。
+func TestCheckSchema_noContractsIsNoop(t *testing.T) {
+	resetSchemaContracts()
+	t.Cleanup(resetSchemaContracts)
+
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "empty.db")), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSchema(context.Background(), db); err != nil {
+		t.Fatalf("no registered contract must be a no-op, got %v", err)
+	}
+}
+
 // execStatements 逐条执行 DDL（方言驱动对多语句支持不一致）。
 func execStatements(db *gorm.DB, script string) error {
 	for _, stmt := range strings.Split(script, ";") {
@@ -85,6 +122,7 @@ func TestMigrationsPostgres(t *testing.T) {
 //
 // 需要 FXKIT_TEST_MYSQL_DSN（CI 的 dialect job 会注入）。
 func TestMigrationsMySQL(t *testing.T) {
+	registerFrameworkContracts()
 	dsn := os.Getenv("FXKIT_TEST_MYSQL_DSN")
 	if dsn == "" {
 		t.Skip("set FXKIT_TEST_MYSQL_DSN to run")
@@ -120,6 +158,7 @@ func TestMigrationsMySQL(t *testing.T) {
 }
 
 func TestCheckSchemaSQLite(t *testing.T) {
+	registerFrameworkContracts()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "schema.db")), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})

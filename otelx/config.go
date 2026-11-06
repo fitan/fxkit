@@ -2,7 +2,6 @@ package otelx
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -89,35 +88,16 @@ func (c Config) Validate() error {
 
 func validateExporter(path, v string) error {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", "otlp", "stdout", "otlp_http", "http", "grpc", "otlp_grpc":
+	case "", "otlp", "stdout":
 		return nil
 	default:
-		return fmt.Errorf("%s %q is not otlp or stdout", path, v)
+		return fmt.Errorf("%s %q is not otlp or stdout (use protocol: http|grpc to pick the OTLP transport)", path, v)
 	}
 }
 
+// validateSampling 复用 [parseSampler]，避免「配置校验」与「实际解析」
+// 各维护一套字符串规则（新增策略时一侧漏改就会 validate 通过、启动报错）。
 func validateSampling(s string) error {
-	s = strings.TrimSpace(s)
-	switch s {
-	case "", "always_on", "always_off", "parent_based_always_on", "parent_based_always_off":
-		return nil
-	}
-	const (
-		ratio       = "trace_id_ratio:"
-		parentRatio = "parent_based_trace_id_ratio:"
-	)
-	var rest string
-	switch {
-	case strings.HasPrefix(s, ratio):
-		rest = strings.TrimPrefix(s, ratio)
-	case strings.HasPrefix(s, parentRatio):
-		rest = strings.TrimPrefix(s, parentRatio)
-	default:
-		return fmt.Errorf("otel.sampling: unknown %q", s)
-	}
-	n, err := strconv.ParseFloat(rest, 64)
-	if err != nil || n < 0 || n > 1 {
-		return fmt.Errorf("otel.sampling: invalid ratio in %q", s)
-	}
-	return nil
+	_, err := parseSampler(strings.TrimSpace(s))
+	return err
 }

@@ -31,6 +31,11 @@ var opTokens = []opToken{
 }
 
 // ParseHTTPQValues 安全地解码原始 q 查询值。
+//
+// 只用于拿到**未解码**的原始查询字符串（例如自己解析 RawQuery）。
+// 如果值来自 net/url 或 Huma 的 query 绑定，它已经是解码后的，
+// 再调本函数会二次解码（"a%20b" 变成 "a b"）。
+//
 // 若元素包含百分号编码的转义序列，则对其反转义；
 // 若元素已是未转义的纯文本，则保留原始字符串。
 func ParseHTTPQValues(raw []string) ([]string, error) {
@@ -80,7 +85,11 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 	totalConds := 0
 	likeCount := 0
 
-	addCond := func(c Condition, or bool) error {
+	// checkLimits 累计并校验条件数量上限（AND 与 or(...) 共用一套规则）。
+	//
+	// 早期实现把这段限额逻辑在 or(...) 分支里又写了一遍，
+	// 新增限额时漏改一侧就会让 or() 组成为绕过防护的后门。
+	checkLimits := func(c Condition) error {
 		if err := validateCondition(spec, lim, &c); err != nil {
 			return err
 		}
@@ -94,15 +103,6 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 				return InvalidQueryCondition("", ReasonTooManyLikeConditions)
 			}
 		}
-		if or {
-			if len(groups) > 0 && groups[len(groups)-1].Or {
-				groups[len(groups)-1].Conds = append(groups[len(groups)-1].Conds, c)
-				return nil
-			}
-			groups = append(groups, ConditionGroup{Or: true, Conds: []Condition{c}})
-			return nil
-		}
-		groups = append(groups, ConditionGroup{Or: false, Conds: []Condition{c}})
 		return nil
 	}
 
@@ -123,18 +123,8 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 				if err != nil {
 					return nil, err
 				}
-				if err := validateCondition(spec, lim, &c); err != nil {
+				if err := checkLimits(c); err != nil {
 					return nil, err
-				}
-				totalConds++
-				if totalConds > lim.MaxConditions {
-					return nil, InvalidQueryCondition("", ReasonTooManyConditions)
-				}
-				if c.Op == OpLike || c.Op == OpNotLike {
-					likeCount++
-					if likeCount > lim.MaxLikeConds {
-						return nil, InvalidQueryCondition("", ReasonTooManyLikeConditions)
-					}
 				}
 				orConds = append(orConds, c)
 			}
@@ -145,9 +135,10 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := addCond(c, false); err != nil {
+		if err := checkLimits(c); err != nil {
 			return nil, err
 		}
+		groups = append(groups, ConditionGroup{Or: false, Conds: []Condition{c}})
 	}
 	return groups, nil
 }
@@ -341,7 +332,7 @@ func validateCondition(spec ListSpec, lim Limits, c *Condition) error {
 		return InvalidQueryCondition(c.RawQ, ReasonInvalidValueType)
 	}
 	if (c.Op == OpLike || c.Op == OpNotLike) && !fs.allowLike() {
-		return InvalidQueryCondition(c.RawQ, ReasonFieldNotIndexed)
+		return InvalidQueryCondition(c.RawQ, ReasonFieldNotLikeable)
 	}
 	maxIn := lim.MaxInValues
 	if c.Op == OpEqual && len(c.Values) > 1 {

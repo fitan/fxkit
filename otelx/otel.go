@@ -246,20 +246,17 @@ func newLoggerProvider(ctx context.Context, c Config, res *resource.Resource) (*
 	return sdklog.NewLoggerProvider(lpOpts...), nil
 }
 
-func otlpUsesHTTP(c Config, exporter string) bool {
-	switch exporter {
-	case "otlp_http", "http":
-		return true
-	case "otlp", "grpc", "":
-		return strings.EqualFold(c.Protocol, "http")
-	default:
-		return strings.EqualFold(c.Protocol, "http")
-	}
+// otlpUsesHTTP 报告 OTLP 导出是否走 HTTP（否则走 gRPC）。
+//
+// 由 protocol 字段单独决定：早期接受 otlp_http/http/grpc/otlp_grpc 等 6 个
+// exporter 别名，且 `grpc` 会被 `protocol: http` 覆盖——配置看起来生效、实际不生效。
+func otlpUsesHTTP(c Config) bool {
+	return strings.EqualFold(c.Protocol, "http")
 }
 
 func newTraceExporter(ctx context.Context, c Config) (sdktrace.SpanExporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
-	if otlpUsesHTTP(c, c.Traces.Exporter) {
+	if otlpUsesHTTP(c) {
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(ep)}
 		if c.Insecure {
 			opts = append(opts, otlptracehttp.WithInsecure())
@@ -275,7 +272,7 @@ func newTraceExporter(ctx context.Context, c Config) (sdktrace.SpanExporter, err
 
 func newMetricExporter(ctx context.Context, c Config) (sdkmetric.Exporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
-	if otlpUsesHTTP(c, c.Metrics.Exporter) {
+	if otlpUsesHTTP(c) {
 		opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpoint(ep)}
 		if c.Insecure {
 			opts = append(opts, otlpmetrichttp.WithInsecure())
@@ -291,7 +288,7 @@ func newMetricExporter(ctx context.Context, c Config) (sdkmetric.Exporter, error
 
 func newLogExporter(ctx context.Context, c Config) (sdklog.Exporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
-	if otlpUsesHTTP(c, c.Logs.Exporter) {
+	if otlpUsesHTTP(c) {
 		opts := []otlploghttp.Option{otlploghttp.WithEndpoint(ep)}
 		if c.Insecure {
 			opts = append(opts, otlploghttp.WithInsecure())
@@ -370,7 +367,7 @@ func parseRatio(s string) (float64, error) {
 var Module = di.Module("fxkit/otelx",
 	config.Provide[Config]("otel"),
 	func(i di.Injector) {
-		lc, _ := di.Invoke[*di.Lifecycle](i)
+		lc := di.MustInvoke[*di.Lifecycle](i)
 		if lc == nil {
 			cfg, err := di.Invoke[*Config](i)
 			if err != nil {

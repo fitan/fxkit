@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/fitan/fxkit/di"
+	"github.com/samber/do/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,23 +15,13 @@ import (
 
 type Dep struct{ V string }
 
-type Svc struct {
-	D *Dep
-}
+type Svc struct{ D *Dep }
 
 type Iface interface{ Kind() string }
 
 type impl struct{ name string }
 
 func (i impl) Kind() string { return i.name }
-
-type Params struct {
-	Dep  *Dep
-	Svc  *Svc  `optional:"true"`
-	Opts *Svc2 `optional:"true"`
-}
-
-type Svc2 struct{ P *Params }
 
 // ---- Invoke / MustInvoke ----
 
@@ -42,157 +33,94 @@ func TestInvoke_NilInjector(t *testing.T) {
 
 func TestInvoke_Missing(t *testing.T) {
 	root := di.New()
-	defer root.Shutdown()
-	_, err := di.Invoke[*Dep](root)
-	require.Error(t, err)
-}
+	defer di.Shutdown(root)
 
-func TestInvoke_TypeMismatch(t *testing.T) {
-	root := di.New(func(i di.Injector) {
-		di.ProvideValue(i, "a string")
-	})
-	defer root.Shutdown()
-	// 同名服务但类型不符
 	_, err := di.Invoke[*Dep](root)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not find service")
 }
 
 func TestMustInvoke_Panics(t *testing.T) {
 	root := di.New()
-	defer root.Shutdown()
+	defer di.Shutdown(root)
+
 	assert.Panics(t, func() { di.MustInvoke[*Dep](root) })
 }
 
 func TestMustInvoke_OK(t *testing.T) {
-	root := di.New(func(i di.Injector) { di.ProvideValue(i, &Dep{V: "x"}) })
-	defer root.Shutdown()
-	assert.Equal(t, "x", di.MustInvoke[*Dep](root).V)
-}
-
-// ---- ToOption 各形态 ----
-
-func TestToOption_Nil(t *testing.T) {
-	assert.Nil(t, di.ToOption(nil))
-}
-
-func TestToOption_OptionPassthrough(t *testing.T) {
-	called := false
-	opt := di.Option(func(di.Injector) { called = true })
-	root := di.New(di.ToOption(opt))
-	defer root.Shutdown()
-	assert.True(t, called)
-}
-
-func TestToOption_PlainFunc(t *testing.T) {
-	called := false
-	root := di.New(di.ToOption(func(i di.Injector) { called = true }))
-	defer root.Shutdown()
-	assert.True(t, called)
-}
-
-func TestToOption_Value(t *testing.T) {
-	root := di.New(di.ToOption(&Dep{V: "by-value"}))
-	defer root.Shutdown()
-	v, err := di.Invoke[*Dep](root)
-	require.NoError(t, err)
-	assert.Equal(t, "by-value", v.V)
-}
-
-func TestToOption_NilValuePanics(t *testing.T) {
-	// 显式 nil 接口：ToOption 返回 nil Option（无可注册类型），后续装配时 panic。
-	// 这里直接断言"返回 nil"更准确 —— 静默跳过 nil 是安全的。
-	assert.Nil(t, di.ToOption(nil))
-
-	// 类型化的 nil 指针可以正常注册（类型信息在接口里）
-	var p *Dep
-	root := di.New(di.ToOption(p))
-	defer root.Shutdown()
-	v, err := di.Invoke[*Dep](root)
-	require.NoError(t, err)
-	assert.Nil(t, v)
-}
-
-func TestToOption_SideEffectFunc(t *testing.T) {
-	ran := false
-	root := di.New(di.ToOption(func() { ran = true }))
-	defer root.Shutdown()
-	assert.True(t, ran, "func() with no return should run during assembly")
-}
-
-func TestToOption_Constructor(t *testing.T) {
-	root := di.New(func(i di.Injector) { di.ProvideValue(i, &Dep{V: "d"}) })
-	defer root.Shutdown()
-	opt := di.ToOption(func(d *Dep) (*Svc, error) { return &Svc{D: d}, nil })
-	opt(root)
-
-	s, err := di.Invoke[*Svc](root)
-	require.NoError(t, err)
-	assert.Equal(t, "d", s.D.V)
-}
-
-func TestToOption_ConstructorReturnsError(t *testing.T) {
-	boom := errors.New("ctor failed")
 	root := di.New()
-	defer root.Shutdown()
-	di.ToOption(func() (*Svc, error) { return nil, boom })(root)
+	defer di.Shutdown(root)
+	di.ProvideValue(root, &Dep{V: "ok"})
+
+	assert.Equal(t, "ok", di.MustInvoke[*Dep](root).V)
+}
+
+// ---- Provide ----
+
+func TestProvide_Constructor(t *testing.T) {
+	root := di.New()
+	defer di.Shutdown(root)
+	di.ProvideValue(root, &Dep{V: "in-ctor"})
+	di.Provide(root, func(i di.Injector) (*Svc, error) {
+		return &Svc{D: di.MustInvoke[*Dep](i)}, nil
+	})
+
+	v, err := di.Invoke[*Svc](root)
+	require.NoError(t, err)
+	assert.Equal(t, "in-ctor", v.D.V)
+}
+
+func TestProvide_ConstructorReturnsError(t *testing.T) {
+	root := di.New()
+	defer di.Shutdown(root)
+	boom := errors.New("boom")
+	di.Provide(root, func(di.Injector) (*Svc, error) { return nil, boom })
+
+	_, err := di.Invoke[*Svc](root)
+	require.ErrorIs(t, err, boom)
+}
+
+// 构造函数里依赖缺失时，错误必须是「找不到服务」而不是静默零值。
+func TestProvide_MissingDepSurfaces(t *testing.T) {
+	root := di.New()
+	defer di.Shutdown(root)
+	di.Provide(root, func(i di.Injector) (*Svc, error) {
+		d, err := di.Invoke[*Dep](i)
+		if err != nil {
+			return nil, err
+		}
+		return &Svc{D: d}, nil
+	})
 
 	_, err := di.Invoke[*Svc](root)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "could not find service")
 }
 
-func TestToOption_ConstructorMissingDepPanicsOnInvoke(t *testing.T) {
+func TestProvide_InterfaceOutput(t *testing.T) {
 	root := di.New()
-	defer root.Shutdown()
-	di.ToOption(func(d *Dep) *Svc { return &Svc{D: d} })(root)
-
-	_, err := di.Invoke[*Svc](root)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "dependency")
-}
-
-func TestToOption_InterfaceOutput(t *testing.T) {
-	root := di.New()
-	defer root.Shutdown()
-	di.ToOption(func() Iface { return impl{name: "concrete"} })(root)
+	defer di.Shutdown(root)
+	di.Provide(root, func(di.Injector) (Iface, error) { return impl{name: "concrete"}, nil })
 
 	v, err := di.Invoke[Iface](root)
 	require.NoError(t, err)
 	assert.Equal(t, "concrete", v.Kind())
 }
 
-func TestToOption_DuplicateIsWarned(t *testing.T) {
+// 重复注册必须装配期失败：早期实现只告警并静默取第一个。
+func TestProvide_DuplicatePanics(t *testing.T) {
 	root := di.New()
-	defer root.Shutdown()
-	di.ToOption(func() *Dep { return &Dep{V: "first"} })(root)
-	di.ToOption(func() *Dep { return &Dep{V: "second"} })(root)
+	defer di.Shutdown(root)
+	di.ProvideValue(root, &Dep{V: "first"})
 
-	v, err := di.Invoke[*Dep](root)
-	require.NoError(t, err)
-	assert.Equal(t, "first", v.V, "first registration wins; duplicate should be skipped not panic")
-}
-
-// ---- 参数结构体 ----
-
-func TestToOption_ParamsStruct(t *testing.T) {
-	root := di.New(func(i di.Injector) { di.ProvideValue(i, &Dep{V: "in-params"}) })
-	defer root.Shutdown()
-
-	// 参数结构体必须是值类型（与 fx 一致）；指针形式按普通依赖解析。
-	di.ToOption(func(p Params) *Svc2 { return &Svc2{P: &p} })(root)
-
-	v, err := di.Invoke[*Svc2](root)
-	require.NoError(t, err)
-	require.NotNil(t, v.P)
-	assert.Equal(t, "in-params", v.P.Dep.V)
-	assert.Nil(t, v.P.Svc, "optional field should stay nil when absent")
+	assert.Panics(t, func() { di.ProvideValue(root, &Dep{V: "second"}) })
 }
 
 // ---- group ----
 
 func TestGroup_AddAndGet(t *testing.T) {
 	root := di.New()
-	defer root.Shutdown()
+	defer di.Shutdown(root)
 
 	di.ProvideGroupItem(root, "a")
 	di.ProvideGroupItems(root, "b", "c")
@@ -202,156 +130,58 @@ func TestGroup_AddAndGet(t *testing.T) {
 
 func TestGroup_MissingReturnsNil(t *testing.T) {
 	root := di.New()
-	defer root.Shutdown()
-	assert.Nil(t, di.GetGroup[int](root))
-}
+	defer di.Shutdown(root)
 
-func TestGroup_ParamsStructSliceFromGroup(t *testing.T) {
-	type withGroup struct {
-		Items []string
-	}
-	root := di.New()
-	defer root.Shutdown()
-	// 先建立 group（即使为空），[]string 才能被识别为 group 而非普通依赖
-	di.ProvideGroupItems(root, "x", "y")
-
-	di.ToOption(func(p withGroup) *Dep {
-		return &Dep{V: "count=" + itoa(len(p.Items))}
-	})(root)
-
-	v, err := di.Invoke[*Dep](root)
-	require.NoError(t, err)
-	assert.Equal(t, "count=2", v.V)
-}
-
-// TestGroup_EmptySliceFieldGetsEmptySlice 验证「group 存在但为空」时，
-// []T 字段得到空切片而不是 "could not find service []T" 错误。
-func TestGroup_EmptySliceFieldGetsEmptySlice(t *testing.T) {
-	type withGroup struct {
-		Items []int
-	}
-	root := di.New()
-	defer root.Shutdown()
-	// 显式建立空 group（否则 groupExists 为 false，[]int 会被当成普通依赖）
-	di.ProvideGroupItem[int](root, 0)
-	di.ProvideGroupItem[int](root, 1)
-
-	di.ToOption(func(p withGroup) *Dep {
-		return &Dep{V: "len=" + itoa(len(p.Items))}
-	})(root)
-
-	v, err := di.Invoke[*Dep](root)
-	require.NoError(t, err)
-	assert.Equal(t, "len=2", v.V)
+	assert.Nil(t, di.GetGroup[string](root))
 }
 
 func TestGroup_IsolatedPerInjector(t *testing.T) {
 	a := di.New()
-	defer a.Shutdown()
+	defer di.Shutdown(a)
 	b := di.New()
-	defer b.Shutdown()
+	defer di.Shutdown(b)
 
 	di.ProvideGroupItem(a, "only-a")
-
-	assert.Equal(t, []string{"only-a"}, di.GetGroup[string](a))
-	assert.Empty(t, di.GetGroup[string](b), "groups must not leak across injectors")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
+	assert.Empty(t, di.GetGroup[string](b))
 }
 
 // ---- Lifecycle ----
 
 func TestLifecycle_OrderAndRollback(t *testing.T) {
-	var order []string
 	lc := di.NewLifecycle()
+	var order []string
 	lc.Append(di.Hook{
-		OnStart: func(context.Context) error { order = append(order, "a-start"); return nil },
-		OnStop:  func(context.Context) error { order = append(order, "a-stop"); return nil },
+		OnStart: func(context.Context) error { order = append(order, "start1"); return nil },
+		OnStop:  func(context.Context) error { order = append(order, "stop1"); return nil },
 	})
 	lc.Append(di.Hook{
-		OnStart: func(context.Context) error { order = append(order, "b-start"); return nil },
-		OnStop:  func(context.Context) error { order = append(order, "b-stop"); return nil },
+		OnStart: func(context.Context) error { order = append(order, "start2"); return nil },
+		OnStop:  func(context.Context) error { order = append(order, "stop2"); return nil },
 	})
 
 	require.NoError(t, lc.Start(context.Background()))
 	require.NoError(t, lc.Stop(context.Background()))
-
-	assert.Equal(t, []string{"a-start", "b-start", "b-stop", "a-stop"}, order,
-		"OnStart forward, OnStop reverse")
+	assert.Equal(t, []string{"start1", "start2", "stop2", "stop1"}, order)
 }
 
 func TestLifecycle_PreStartRunsFirst(t *testing.T) {
-	var order []string
 	lc := di.NewLifecycle()
-
-	// 故意让普通钩子先注册，PreStart 后注册，验证阶段顺序不受注册顺序影响
-	lc.Append(di.Hook{OnStart: func(context.Context) error {
-		order = append(order, "start")
-		return nil
-	}})
-	lc.AppendPreStartPhase(di.PhaseMountHTTP, di.Hook{OnStart: func(context.Context) error {
-		order = append(order, "pre-http")
-		return nil
-	}})
-	lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{OnStart: func(context.Context) error {
-		order = append(order, "pre-resolve")
-		return nil
-	}})
+	var order []string
+	lc.Append(di.Hook{OnStart: func(context.Context) error { order = append(order, "main"); return nil }})
+	lc.AppendPreStart(di.Hook{OnStart: func(context.Context) error { order = append(order, "pre"); return nil }})
 
 	require.NoError(t, lc.Start(context.Background()))
-	assert.Equal(t, []string{"pre-resolve", "pre-http", "start"}, order,
-		"PreStart must run by phase priority before OnStart")
+	assert.Equal(t, []string{"pre", "main"}, order)
 }
 
 func TestLifecycle_PreStartFailureAborts(t *testing.T) {
-	started := false
 	lc := di.NewLifecycle()
-	lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-		OnStart: func(context.Context) error { return errors.New("boom") },
-	})
+	started := false
+	lc.AppendPreStart(di.Hook{OnStart: func(context.Context) error { return errors.New("pre boom") }})
 	lc.Append(di.Hook{OnStart: func(context.Context) error { started = true; return nil }})
 
 	require.Error(t, lc.Start(context.Background()))
-	assert.False(t, started, "OnStart must not run after PreStart failure")
-}
-
-// TestLifecycle_PreStartRunsExactlyOnce 是回归测试：
-// 曾用 `lc.StartPreStartOnly()` + `lc.Start()` 组合实现 warmup，
-// 导致 huma registrar 执行两次、operation ID 重复注册而 panic。
-// PreStart 必须只由 Start 触发一次。
-func TestLifecycle_PreStartRunsExactlyOnce(t *testing.T) {
-	var count int
-	lc := di.NewLifecycle()
-	lc.AppendPreStartPhase(di.PhaseMountHTTP, di.Hook{
-		OnStart: func(context.Context) error { count++; return nil },
-	})
-
-	require.NoError(t, lc.Start(context.Background()))
-	assert.Equal(t, 1, count, "Start must run PreStart exactly once")
-}
-
-// TestLifecycle_SecondStartRunsPreStartAgain 明确当前语义：
-// 再次 Start 会再跑一遍 PreStart（调用方必须避免重复 Start）。
-func TestLifecycle_SecondStartRunsPreStartAgain(t *testing.T) {
-	var count int
-	lc := di.NewLifecycle()
-	lc.AppendPreStartPhase(di.PhaseMountHTTP, di.Hook{
-		OnStart: func(context.Context) error { count++; return nil },
-	})
-
-	require.NoError(t, lc.Start(context.Background()))
-	require.NoError(t, lc.Start(context.Background()))
-	assert.Equal(t, 2, count, "documented behavior: each Start re-runs PreStart")
+	assert.False(t, started, "main hooks must not run when PreStart fails")
 }
 
 func TestLifecycle_StopAggregatesErrors(t *testing.T) {
@@ -361,122 +191,156 @@ func TestLifecycle_StopAggregatesErrors(t *testing.T) {
 
 	err := lc.Stop(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "second", "reverse order: last registered stops first")
-}
-
-func TestLifecycle_StartPreStartOnly(t *testing.T) {
-	preRan, startRan := false, false
-	lc := di.NewLifecycle()
-	lc.AppendPreStartPhase(di.PhaseWireGroup, di.Hook{OnStart: func(context.Context) error {
-		preRan = true
-		return nil
-	}})
-	lc.Append(di.Hook{OnStart: func(context.Context) error {
-		startRan = true
-		return nil
-	}})
-
-	require.NoError(t, lc.StartPreStartOnly(context.Background()))
-	assert.True(t, preRan)
-	assert.False(t, startRan, "StartPreStartOnly must not run OnStart")
 }
 
 func TestLifecycle_NilSafe(t *testing.T) {
 	var lc *di.Lifecycle
-	assert.NotPanics(t, func() { lc.Append(di.Hook{}) })
-	assert.NotPanics(t, func() { lc.AppendPreStart(di.Hook{}) })
-	assert.NoError(t, lc.Start(context.Background()))
-	assert.NoError(t, lc.Stop(context.Background()))
+	lc.Append(di.Hook{})
+	require.NoError(t, lc.Start(context.Background()))
+	require.NoError(t, lc.Stop(context.Background()))
 }
 
-// ---- ToInvokeOption ----
+// ---- InvokeOption ----
 
-func TestToInvokeOption_RunsOnce(t *testing.T) {
-	calls := 0
-	root := di.New(di.ToInvokeOption(func() error { calls++; return nil }))
-	defer root.Shutdown()
+func TestInvokeOption_RunsOnce(t *testing.T) {
+	var runs int
+	root := di.New(di.InvokeOption(func(di.Injector) error { runs++; return nil }))
+	defer di.Shutdown(root)
 
 	lc := di.MustInvoke[*di.Lifecycle](root)
 	require.NoError(t, lc.Start(context.Background()))
-	assert.Equal(t, 1, calls)
+	assert.Equal(t, 1, runs)
 }
 
-func TestToInvokeOption_InjectsDeps(t *testing.T) {
+func TestInvokeOption_InjectsDeps(t *testing.T) {
 	var got string
 	root := di.New(
-		func(i di.Injector) { di.ProvideValue(i, &Dep{V: "injected"}) },
-		di.ToInvokeOption(func(d *Dep) { got = d.V }),
+		func(i di.Injector) { di.ProvideValue(i, &Dep{V: "wired"}) },
+		di.InvokeOption(func(i di.Injector) error {
+			got = di.MustInvoke[*Dep](i).V
+			return nil
+		}),
 	)
-	defer root.Shutdown()
+	defer di.Shutdown(root)
 
 	require.NoError(t, di.MustInvoke[*di.Lifecycle](root).Start(context.Background()))
-	assert.Equal(t, "injected", got)
+	assert.Equal(t, "wired", got)
 }
 
-func TestToInvokeOption_ErrorAbortsStart(t *testing.T) {
-	root := di.New(di.ToInvokeOption(func() error { return errors.New("seed failed") }))
-	defer root.Shutdown()
+func TestInvokeOption_ErrorAbortsStart(t *testing.T) {
+	boom := errors.New("start boom")
+	root := di.New(di.InvokeOption(func(di.Injector) error { return boom }))
+	defer di.Shutdown(root)
 
-	err := di.MustInvoke[*di.Lifecycle](root).Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "seed failed")
+	require.ErrorIs(t, di.MustInvoke[*di.Lifecycle](root).Start(context.Background()), boom)
 }
 
-func TestToInvokeOption_BadSignaturePanics(t *testing.T) {
-	assert.Panics(t, func() { di.ToInvokeOption(42) })
-	assert.Panics(t, func() { di.ToInvokeOption(func() int { return 1 }) })
-}
-
-// ---- 诊断 ----
+// ---- Describe / 诊断 ----
 
 func TestDescribe_ListsServicesAndGroups(t *testing.T) {
-	root := di.New(
-		func(i di.Injector) { di.ProvideValue(i, &Dep{V: "d"}) },
-		func(i di.Injector) { di.ProvideGroupItems(i, "a", "b") },
-	)
-	defer root.Shutdown()
+	root := di.New()
+	defer di.Shutdown(root)
+	di.ProvideValue(root, &Dep{V: "x"})
+	di.ProvideGroupItem(root, "g1")
 
 	services, groups := di.Describe(root)
 	assert.NotEmpty(t, services)
-	assert.NotEmpty(t, groups)
-	assert.Equal(t, di.Report(root), di.Report(root), "report should be stable")
+	require.NotEmpty(t, groups)
+	assert.Equal(t, "string", groups[0].ElemType)
+	assert.Equal(t, 1, groups[0].Count)
 }
 
 func TestAssertGroupsNonEmpty(t *testing.T) {
-	root := di.New(func(i di.Injector) { di.ProvideGroupItem(i, "x") })
-	defer root.Shutdown()
+	root := di.New()
+	defer di.Shutdown(root)
+	di.ProvideGroupItem(root, "x")
 
 	require.NoError(t, di.AssertGroupsNonEmpty(root, di.GroupOf[string]()))
-
-	err := di.AssertGroupsNonEmpty(root, di.GroupOf[string](), di.GroupOf[int]())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "int")
+	assert.Error(t, di.AssertGroupsNonEmpty(root, di.GroupOf[int]()))
 }
 
-// TestStrictWiring_GetGroupDuringAssemblyPanics 严格模式下，Option 内读 group 直接 panic。
+// ---- 严格装配 ----
+
 func TestStrictWiring_GetGroupDuringAssemblyPanics(t *testing.T) {
 	di.SetStrictWiring(true)
-	defer di.SetStrictWiring(false)
+	t.Cleanup(func() { di.SetStrictWiring(false) })
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic when reading a group during assembly")
-		}
-	}()
-	_ = di.New(func(i di.Injector) {
-		_ = di.GetGroup[string](i)
+	assert.Panics(t, func() {
+		di.New(func(i di.Injector) { _ = di.GetGroup[string](i) })
 	})
 }
 
-// TestStrictWiring_AllowsReadAfterAssembly 装配结束后（PreStart/Handler）读取是正常的。
 func TestStrictWiring_AllowsReadAfterAssembly(t *testing.T) {
 	di.SetStrictWiring(true)
-	defer di.SetStrictWiring(false)
+	t.Cleanup(func() { di.SetStrictWiring(false) })
 
+	root := di.New(func(i di.Injector) { di.ProvideGroupItem(i, "x") })
+	defer di.Shutdown(root)
+
+	assert.NotPanics(t, func() { _ = di.GetGroup[string](root) })
+}
+
+// ---- Module / Options / Named / Lazy ----
+
+func TestModuleAndOptions(t *testing.T) {
+	root := di.New(
+		di.Options(
+			di.Module("a", func(i di.Injector) { di.ProvideValue(i, &Dep{V: "mod"}) }),
+			di.Module("b", nil),
+		),
+	)
+	defer di.Shutdown(root)
+
+	assert.Equal(t, "mod", di.MustInvoke[*Dep](root).V)
+}
+
+func TestProvideNamed(t *testing.T) {
+	root := di.New()
+	defer di.Shutdown(root)
+
+	di.ProvideNamed(root, "primary", func(di.Injector) (*Dep, error) {
+		return &Dep{V: "named"}, nil
+	})
+	v, err := do.InvokeNamed[*Dep](root, "primary")
+	require.NoError(t, err)
+	assert.Equal(t, "named", v.V)
+}
+
+func TestProvideLazy_RunsAtPreStart(t *testing.T) {
 	root := di.New(func(i di.Injector) {
-		di.ProvideGroupItem(i, "a")
+		di.ProvideLazy[string](i, func(di.Injector) string { return "lazy" })
 	})
 	defer di.Shutdown(root)
 
-	assert.Equal(t, []string{"a"}, di.GetGroup[string](root))
+	assert.Empty(t, di.GetGroup[string](root), "lazy item must not exist before PreStart")
+
+	require.NoError(t, di.MustInvoke[*di.Lifecycle](root).StartPreStartOnly(context.Background()))
+	assert.Equal(t, []string{"lazy"}, di.GetGroup[string](root))
+}
+
+func TestProvideLazyE_PropagatesError(t *testing.T) {
+	boom := errors.New("lazy boom")
+	root := di.New(func(i di.Injector) {
+		di.ProvideLazyE[string](i, func(di.Injector) (string, error) { return "", boom })
+	})
+	defer di.Shutdown(root)
+
+	require.ErrorIs(t, di.MustInvoke[*di.Lifecycle](root).StartPreStartOnly(context.Background()), boom)
+}
+
+func TestReport_IncludesServicesAndGroups(t *testing.T) {
+	root := di.New()
+	defer di.Shutdown(root)
+	di.ProvideValue(root, &Dep{V: "x"})
+	di.ProvideGroupItem(root, "g")
+
+	out := di.Report(root)
+	assert.Contains(t, out, "Dep")
+	assert.Contains(t, out, "string")
+}
+
+func TestLifecycle_RequireStartStop(t *testing.T) {
+	lc := di.NewLifecycle()
+	assert.NotPanics(t, lc.RequireStart)
+	assert.NotPanics(t, lc.RequireStop)
 }

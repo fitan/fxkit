@@ -1,12 +1,10 @@
 package authz
 
 import (
-	"context"
-	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit/di"
 )
 
@@ -50,10 +48,6 @@ func splitPath(p string) []string {
 		return nil
 	}
 	return strings.Split(p, "/")
-}
-
-func findRoute(routes []HTTPRoute, method, path string) (HTTPRoute, bool) {
-	return indexRoutes(routes).find(method, path)
 }
 
 // skipAuthzPath 对 Huma 内置的 spec/docs/schema 路由返回 true（始终公开）。
@@ -225,49 +219,19 @@ func (idx routeIndex) find(method, path string) (HTTPRoute, bool) {
 //	})
 //
 // 也支持 func(*Service) []HTTPRoute（延迟到 PreStart 装配）与 []HTTPRoute 直接发布。
-// 无法识别的签名会 panic。
-func ProvideHTTPRoutes(fn any) di.Option {
+// ProvideHTTPRoutes 发布若干 [HTTPRoute]。需要依赖时用 [ProvideHTTPRoutesLazy]。
+func ProvideHTTPRoutes(routes ...HTTPRoute) di.Option {
 	return func(i di.Injector) {
-		if fn == nil {
+		if len(routes) == 0 {
 			return
 		}
-		switch f := fn.(type) {
-		case []HTTPRoute:
-			di.ProvideGroupItems(i, f...)
-			return
-		case func() []HTTPRoute:
-			di.ProvideGroupItems(i, f()...)
-			return
-		case func(di.Injector) []HTTPRoute:
-			di.ProvideGroupItems(i, f(i)...)
-			return
-		}
-		val := reflect.ValueOf(fn)
-		if val.Kind() != reflect.Func {
-			panic("authz.ProvideHTTPRoutes: unsupported argument " + reflect.TypeOf(fn).String())
-		}
-		if err := di.ValidateConstructor(val.Type()); err != nil {
-			panic("authz.ProvideHTTPRoutes: " + err.Error())
-		}
-		lc, err := di.Invoke[*di.Lifecycle](i)
-		if err != nil || lc == nil {
-			panic("authz.ProvideHTTPRoutes: constructor form requires *di.Lifecycle in the graph")
-		}
-		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-			OnStart: func(context.Context) error {
-				out, callErr := di.CallConstructor(i, fn)
-				if callErr != nil {
-					return fmt.Errorf("authz.ProvideHTTPRoutes: %w", callErr)
-				}
-				routes, ok := out.([]HTTPRoute)
-				if !ok {
-					return fmt.Errorf("authz.ProvideHTTPRoutes: constructor returned %T, want []authz.HTTPRoute", out)
-				}
-				di.ProvideGroupItems(i, routes...)
-				return nil
-			},
-		})
+		di.ProvideGroupItems(i, routes...)
 	}
+}
+
+// ProvideHTTPRoutesLazy 在 PreStart 求值（可访问完整依赖图）。
+func ProvideHTTPRoutesLazy(fn func(di.Injector) ([]HTTPRoute, error)) di.Option {
+	return func(i di.Injector) { di.ProvideLazyE[[]HTTPRoute](i, fn) }
 }
 
 // 路由表使用的 Method 常量。
@@ -278,3 +242,96 @@ const (
 	MethodPatch  = http.MethodPatch
 	MethodDelete = http.MethodDelete
 )
+
+// HTTPRouteFromOperation 把 Huma operation 的身份字段复制到 [HTTPRoute]。
+func HTTPRouteFromOperation(op huma.Operation) HTTPRoute {
+	tags := append([]string(nil), op.Tags...)
+	return HTTPRoute{
+		Method:      op.Method,
+		Path:        op.Path,
+		OperationID: op.OperationID,
+		Summary:     op.Summary,
+		Description: op.Description,
+		Tags:        tags,
+	}
+}
+
+// HTTPRoutesFromOperations 把 Huma operation 转换为 authz 路由（跳过空 Path）。
+func HTTPRoutesFromOperations(ops ...huma.Operation) []HTTPRoute {
+	out := make([]HTTPRoute, 0, len(ops))
+	for _, op := range ops {
+		if strings.TrimSpace(op.Path) == "" {
+			continue
+		}
+		out = append(out, HTTPRouteFromOperation(op))
+	}
+	return out
+}
+
+// HTTPRoutesFromOpenAPI 把当前生效的 Huma operation 复制成 HTTPRoute 行，
+// 使未走 ProvideHTTPRoutes 的 RegisterResource / Register 也能获得 Casbin 策略。
+func HTTPRoutesFromOpenAPI(api huma.API) []HTTPRoute {
+	if api == nil {
+		return nil
+	}
+	doc := api.OpenAPI()
+	if doc == nil || doc.Paths == nil {
+		return nil
+	}
+	var ops []huma.Operation
+	for path, item := range doc.Paths {
+		if item == nil {
+			continue
+		}
+		add := func(method string, op *huma.Operation) {
+			if op == nil {
+				return
+			}
+			cp := *op
+			if strings.TrimSpace(cp.Method) == "" {
+				cp.Method = method
+			}
+			if strings.TrimSpace(cp.Path) == "" {
+				cp.Path = path
+			}
+			if skipAuthzPath(cp.Path) || isPublicOperation(&cp) {
+				return
+			}
+			ops = append(ops, cp)
+		}
+		add(http.MethodGet, item.Get)
+		add(http.MethodPost, item.Post)
+		add(http.MethodPut, item.Put)
+		add(http.MethodPatch, item.Patch)
+		add(http.MethodDelete, item.Delete)
+		add(http.MethodHead, item.Head)
+		add(http.MethodOptions, item.Options)
+		add(http.MethodTrace, item.Trace)
+	}
+	return HTTPRoutesFromOperations(ops...)
+}
+
+func mergeHTTPRoutes(base, extra []HTTPRoute) []HTTPRoute {
+	key := func(r HTTPRoute) string {
+		return strings.ToUpper(strings.TrimSpace(r.Method)) + "\x00" + strings.TrimSpace(r.Path)
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]HTTPRoute, 0, len(base)+len(extra))
+	for _, r := range base {
+		k := key(r)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	for _, r := range extra {
+		k := key(r)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}

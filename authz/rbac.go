@@ -70,7 +70,6 @@ func (e *Enforcer) requireEnabled() error {
 
 // EnsureRole 以 upsert 方式写入角色元数据（引导流程与 CreateRole 都会用到）。
 func (e *Enforcer) EnsureRole(ctx context.Context, in CreateRoleInput) (*RoleRecord, error) {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return nil, err
 	}
@@ -92,7 +91,7 @@ func (e *Enforcer) EnsureRole(ctx context.Context, in CreateRoleInput) (*RoleRec
 	if row.DisplayName == "" {
 		row.DisplayName = name
 	}
-	err := e.db.Clauses(clause.OnConflict{
+	err := e.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "name"}},
 		DoUpdates: clause.AssignmentColumns([]string{"display_name", "description", "updated_at"}),
 	}).Create(&row).Error
@@ -100,7 +99,7 @@ func (e *Enforcer) EnsureRole(ctx context.Context, in CreateRoleInput) (*RoleRec
 		return nil, err
 	}
 	var out RoleRecord
-	if err := e.db.First(&out, "name = ?", name).Error; err != nil {
+	if err := e.db.WithContext(ctx).First(&out, "name = ?", name).Error; err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -113,14 +112,13 @@ func (e *Enforcer) CreateRole(ctx context.Context, in CreateRoleInput) (*RoleRec
 
 // ListRoles 返回角色元数据；仅存在于 Casbin 中的角色也会一并列出。
 func (e *Enforcer) ListRoles(ctx context.Context) ([]RoleRecord, error) {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return nil, err
 	}
 	meta := map[string]RoleRecord{}
 	if e.db != nil {
 		var rows []RoleRecord
-		if err := e.db.Order("name").Find(&rows).Error; err != nil {
+		if err := e.db.WithContext(ctx).Order("name").Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, r := range rows {
@@ -191,7 +189,6 @@ type DeleteRoleInput struct {
 
 // DeleteRole 删除角色及其策略/绑定。
 func (e *Enforcer) DeleteRole(ctx context.Context, in DeleteRoleInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -208,7 +205,7 @@ func (e *Enforcer) DeleteRole(ctx context.Context, in DeleteRoleInput) error {
 		return err
 	}
 	if e.db != nil {
-		if err := e.db.Delete(&RoleRecord{}, "name = ?", role).Error; err != nil {
+		if err := e.db.WithContext(ctx).Delete(&RoleRecord{}, "name = ?", role).Error; err != nil {
 			return err
 		}
 	}
@@ -217,7 +214,6 @@ func (e *Enforcer) DeleteRole(ctx context.Context, in DeleteRoleInput) error {
 
 // ListRolePermissions 以 path+method 形式返回角色的 p 规则。
 func (e *Enforcer) ListRolePermissions(ctx context.Context, role string) ([]RolePermission, error) {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return nil, err
 	}
@@ -249,7 +245,6 @@ func (e *Enforcer) ListRolePermissions(ctx context.Context, role string) ([]Role
 
 // SetRolePermissions 替换角色的全部权限。
 func (e *Enforcer) SetRolePermissions(ctx context.Context, in SetRolePermissionsInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -301,7 +296,6 @@ type AddRolePermissionInput struct {
 
 // AddRolePermission 添加单条 p 规则。
 func (e *Enforcer) AddRolePermission(ctx context.Context, in AddRolePermissionInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -322,7 +316,6 @@ func (e *Enforcer) AddRolePermission(ctx context.Context, in AddRolePermissionIn
 
 // RemoveRolePermission 删除单条 p 规则。
 func (e *Enforcer) RemoveRolePermission(ctx context.Context, in AddRolePermissionInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -340,7 +333,6 @@ func (e *Enforcer) RemoveRolePermission(ctx context.Context, in AddRolePermissio
 
 // ListSubjectRoles 返回绑定到某个主体（用户 id）的角色。
 func (e *Enforcer) ListSubjectRoles(ctx context.Context, subject string) ([]string, error) {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return nil, err
 	}
@@ -360,7 +352,6 @@ func (e *Enforcer) ListSubjectRoles(ctx context.Context, subject string) ([]stri
 
 // SetSubjectRoles 替换主体的全部角色绑定。
 func (e *Enforcer) SetSubjectRoles(ctx context.Context, in SubjectRolesInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -403,7 +394,6 @@ func (e *Enforcer) SetSubjectRoles(ctx context.Context, in SubjectRolesInput) er
 
 // AddSubjectRole 绑定一个角色。
 func (e *Enforcer) AddSubjectRole(ctx context.Context, in AddSubjectRoleInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -420,7 +410,6 @@ func (e *Enforcer) AddSubjectRole(ctx context.Context, in AddSubjectRoleInput) e
 
 // RemoveSubjectRole 解绑一个角色。
 func (e *Enforcer) RemoveSubjectRole(ctx context.Context, in AddSubjectRoleInput) error {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return err
 	}
@@ -437,7 +426,6 @@ func (e *Enforcer) RemoveSubjectRole(ctx context.Context, in AddSubjectRoleInput
 
 // ListBindings 返回全部用户→角色的 grouping 规则。
 func (e *Enforcer) ListBindings(ctx context.Context) ([]RoleBinding, error) {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return nil, err
 	}
@@ -465,7 +453,6 @@ func (e *Enforcer) ListBindings(ctx context.Context) ([]RoleBinding, error) {
 
 // ListPolicies 返回全部 casbin p 规则。
 func (e *Enforcer) ListPolicies(ctx context.Context) ([]Policy, error) {
-	_ = ctx
 	if err := e.requireEnabled(); err != nil {
 		return nil, err
 	}

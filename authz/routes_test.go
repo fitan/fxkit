@@ -8,7 +8,7 @@ import (
 
 func TestFindRouteTrailingSlash(t *testing.T) {
 	routes := []HTTPRoute{{Method: http.MethodGet, Path: "/users", Permission: "users:list"}}
-	got, ok := findRoute(routes, http.MethodGet, "/users/")
+	got, ok := indexRoutes(routes).find(http.MethodGet, "/users/")
 	if !ok || got.Permission != "users:list" {
 		t.Fatalf("got=%+v ok=%v", got, ok)
 	}
@@ -26,15 +26,15 @@ func TestFindRoutePrefersSpecific(t *testing.T) {
 		{Method: http.MethodGet, Path: "/users/{id}", Permission: "users:read"},
 		{Method: http.MethodGet, Path: "/users/me", Permission: "users:me"},
 	}
-	got, ok := findRoute(routes, http.MethodGet, "/users/me")
+	got, ok := indexRoutes(routes).find(http.MethodGet, "/users/me")
 	if !ok || got.Permission != "users:me" {
 		t.Fatalf("got=%+v ok=%v", got, ok)
 	}
-	got, ok = findRoute(routes, http.MethodGet, "/users/42")
+	got, ok = indexRoutes(routes).find(http.MethodGet, "/users/42")
 	if !ok || got.Permission != "users:read" {
 		t.Fatalf("got=%+v ok=%v", got, ok)
 	}
-	got, ok = findRoute(routes, http.MethodDelete, "/users/42")
+	got, ok = indexRoutes(routes).find(http.MethodDelete, "/users/42")
 	if !ok || got.Permission != "users:get" {
 		t.Fatalf("got=%+v ok=%v", got, ok)
 	}

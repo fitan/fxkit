@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/internal/consuladdr"
 )
 
 const (
@@ -28,6 +29,11 @@ const (
 	maxWatchWait = 10 * time.Minute
 	// tryLockAcquireAttempts TryLock 在遇到 5xx/传输错误时的最大尝试次数。
 	tryLockAcquireAttempts = 3
+	// consulRetryBackoff 是 blocking query 出错后的短退避。
+	//
+	// 不能再用 opts.RetryWait：waitKVChange 本身已经阻塞了 wait 这么久，
+	// 叠加等于等两次（RetryWait=30s 时每次重试白等 60s）。
+	consulRetryBackoff = 200 * time.Millisecond
 )
 
 type consulLocker struct {
@@ -42,12 +48,14 @@ func NewConsulLocker(consulAddr string, client *http.Client) (Locker, error) {
 	if addr == "" {
 		return nil, ErrConsulDisabled
 	}
-	base, err := normalizeConsulAddr(addr)
+	base, err := consuladdr.Normalize(addr)
 	if err != nil {
 		return nil, fmt.Errorf("consulx: invalid consul address: %w", err)
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		// 长轮询的 wait 可能到 maxWatchWait，客户端超时必须大于它，
+		// 否则每次 blocking query 都会被本地超时打断并退化为错误重试。
+		client = &http.Client{Timeout: maxWatchWait + 10*time.Second}
 	}
 	return &consulLocker{
 		baseURL: base,
@@ -353,7 +361,7 @@ func (l *consulLock) Lock(ctx context.Context) (err error) {
 					l.discardSession(st)
 					return werr
 				}
-				if !sleepCtx(ctx, l.opts.RetryWait) {
+				if !sleepCtx(ctx, consulRetryBackoff) {
 					l.discardSession(st)
 					return ctx.Err()
 				}
@@ -658,6 +666,13 @@ func (l *consulLock) waitKVChange(ctx context.Context, fullKey string, index uin
 	}
 	if wait > maxWatchWait {
 		wait = maxWatchWait
+	}
+	// 服务端 wait 必须短于客户端超时：否则长轮询会在本地被超时打断，
+	// 每次都要等满 10s 再报错重试，退化成轮询。
+	if t := l.locker.client.Timeout; t > 0 {
+		if limit := t - 5*time.Second; limit >= minWatchWait && wait > limit {
+			wait = limit
+		}
 	}
 	q := url.Values{}
 	q.Set("wait", wait.String())

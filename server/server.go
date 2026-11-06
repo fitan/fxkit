@@ -27,9 +27,13 @@ func NewMux(p MuxParams) *chi.Mux {
 	r := chi.NewRouter()
 
 	slog.Info("──── http mux (middleware) ────")
+	var ssePrefixes []string
+	if p.Server != nil {
+		ssePrefixes = p.Server.SSEPathPrefixes
+	}
 	// recover 必须位于最外层，这样 CORS/OTel/body-log 中的 panic 才能被捕获。
 	r.Use(recoverMiddleware)
-	r.Use(sseWriteDeadlineMiddleware)
+	r.Use(sseWriteDeadlineMiddleware(ssePrefixes))
 	if p.Server != nil && p.Server.AccessLog {
 		r.Use(accessLogMiddleware)
 	}
@@ -38,7 +42,7 @@ func NewMux(p MuxParams) *chi.Mux {
 		r.Use(rateLimitMiddleware(p.Server.RateLimit))
 	}
 	if p.Otel != nil && p.Otel.HTTPEnabled() {
-		r.Use(otelMiddleware)
+		r.Use(otelMiddleware(ssePrefixes))
 		r.Use(routePatternMiddleware)
 	}
 
@@ -50,7 +54,7 @@ func NewMux(p MuxParams) *chi.Mux {
 	}
 
 	if p.Server != nil && p.Server.LogPayloads {
-		r.Use(requestBodyLogMiddleware)
+		r.Use(requestBodyLogMiddleware(ssePrefixes))
 	}
 
 	return r
@@ -60,26 +64,35 @@ func NewMux(p MuxParams) *chi.Mux {
 type RouterParams struct {
 	Mux    *chi.Mux
 	Routes []Route
+	// MaxBodyBytes 是默认请求体上限（来自 [Config.MaxBodyBytes]）。
+	// 单条 [Route] 可用 MaxBodyBytes 覆盖；<=0 表示不限制。
+	MaxBodyBytes int64
 }
 
 // RegisterRoutes 在共享 chi mux 上挂载 grouped [Route] 值。
 //
-// 非法条目（空 pattern / nil handler）会被跳过并告警，而不是让 chi panic ——
-// panic 发生在 PreStart 里，堆栈只剩 "routing pattern must begin with '/' in ”"，
-// 很难定位到底是哪个模块贡献了坏路由。
-func RegisterRoutes(p RouterParams) {
+// 非法条目（空 pattern / 缺前导斜杠 / nil handler / 未知 method）会让启动失败，
+// 并一次性列出所有问题条目。chi 自己只会 panic 出
+// "routing pattern must begin with '/' in ”"，堆栈无法定位是哪个模块贡献了坏路由；
+// 而静默跳过会把装配期 bug 变成线上 404。这里两种都不选：先整体校验，
+// 有任何问题就返回错误（调用方在 PreStart 里返回它，进程不启动）。
+func RegisterRoutes(p RouterParams) error {
 	if p.Mux == nil {
-		return
+		return fmt.Errorf("server: RegisterRoutes called with nil mux")
+	}
+	if err := validateRoutes(p.Routes); err != nil {
+		return err
 	}
 	slog.Info("──── route registration ────")
 
 	registered := 0
 	seen := make(map[string]struct{}, len(p.Routes))
 	for _, route := range p.Routes {
-		if err := validateRoute(route); err != nil {
-			slog.Error("route skipped: invalid entry", "pattern", route.Pattern, "error", err)
-			continue
+		limit := route.MaxBodyBytes
+		if limit == 0 {
+			limit = p.MaxBodyBytes
 		}
+		h := limitRequestBody(route.Handler, limit)
 		if len(route.Methods) > 0 {
 			for _, m := range route.Methods {
 				key := m + " " + route.Pattern
@@ -90,7 +103,7 @@ func RegisterRoutes(p RouterParams) {
 						"method", m, "pattern", route.Pattern)
 				}
 				seen[key] = struct{}{}
-				p.Mux.Method(m, route.Pattern, route.Handler)
+				p.Mux.Method(m, route.Pattern, h)
 				slog.Info("route", "method", m, "pattern", route.Pattern)
 				registered++
 			}
@@ -104,13 +117,40 @@ func RegisterRoutes(p RouterParams) {
 			slog.Warn("route registered twice; the later handler wins", "pattern", pattern)
 		}
 		seen["*"+pattern] = struct{}{}
-		p.Mux.Handle(pattern, route.Handler)
+		p.Mux.Handle(pattern, h)
 		slog.Info("route", "pattern", route.Pattern)
 		registered++
 	}
 
 	slog.Info("──── registration complete ────",
 		"app_routes", len(p.Routes), "registered", registered)
+	return nil
+}
+
+// validateRoutes 汇总所有非法路由，而不是遇到第一个就返回 —— 一次启动能看到全部问题。
+func validateRoutes(routes []Route) error {
+	var errs []error
+	for i, r := range routes {
+		if err := validateRoute(r); err != nil {
+			errs = append(errs, fmt.Errorf("route[%d] (methods=%q pattern=%q): %w",
+				i, r.Methods, r.Pattern, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// validMethods 是 chi 接受的 HTTP method 集合（见 go-chi/chi Mux.Method）。
+// 不在这里拦住的话，chi 会在 PreStart 里直接 panic。
+var validMethods = map[string]struct{}{
+	http.MethodConnect: {},
+	http.MethodDelete:  {},
+	http.MethodGet:     {},
+	http.MethodHead:    {},
+	http.MethodOptions: {},
+	http.MethodPatch:   {},
+	http.MethodPost:    {},
+	http.MethodPut:     {},
+	http.MethodTrace:   {},
 }
 
 // validateRoute 检查一条 [Route] 是否可挂载。
@@ -125,8 +165,12 @@ func validateRoute(r Route) error {
 		return fmt.Errorf("nil handler for pattern %q", r.Pattern)
 	}
 	for _, m := range r.Methods {
-		if strings.TrimSpace(m) == "" {
+		mm := strings.ToUpper(strings.TrimSpace(m))
+		if mm == "" {
 			return fmt.Errorf("empty method in %q", r.Pattern)
+		}
+		if _, ok := validMethods[mm]; !ok {
+			return fmt.Errorf("unsupported method %q in %q (chi accepts GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/CONNECT/TRACE)", m, r.Pattern)
 		}
 	}
 	return nil
@@ -230,10 +274,18 @@ var Module = di.Module("fxkit/server",
 					if err != nil {
 						return err
 					}
-					RegisterRoutes(RouterParams{
-						Mux:    mux,
-						Routes: di.GetGroup[Route](i),
-					})
+					// 裸 chi 路由的请求体上限；Huma 路由有各自的 MaxBodyBytes。
+					var maxBodyBytes int64
+					if cfg, cfgErr := di.Invoke[*Config](i); cfgErr == nil && cfg != nil {
+						maxBodyBytes = cfg.MaxBodyBytes
+					}
+					if err := RegisterRoutes(RouterParams{
+						Mux:          mux,
+						Routes:       di.GetGroup[Route](i),
+						MaxBodyBytes: maxBodyBytes,
+					}); err != nil {
+						return fmt.Errorf("server: %w", err)
+					}
 
 					// 健康检查走 HealthChecker 接口，server 不再反向依赖 gormx。
 					registerHealthRoutes(i, mux)
@@ -248,7 +300,7 @@ var Module = di.Module("fxkit/server",
 var ListenerModule = di.Module("fxkit/server/listener",
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (*HTTPServer, error) {
-			lc, _ := di.Invoke[*di.Lifecycle](i)
+			lc := di.MustInvoke[*di.Lifecycle](i)
 			cfg, err := di.Invoke[*Config](i)
 			if err != nil {
 				return nil, err

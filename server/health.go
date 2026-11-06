@@ -3,9 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -137,54 +135,27 @@ func registerHealthRoutes(i di.Injector, mux *chi.Mux) {
 //
 // 支持 HealthChecker 值、func() HealthChecker、func(di.Injector) HealthChecker，
 // 以及 func(dep...) HealthChecker（延迟到 PreStart 解析依赖后构造）。
-func ProvideHealthChecker(fn any) di.Option {
+// ProvideHealthChecker 发布若干 [HealthChecker]。需要依赖时用 [ProvideHealthCheckerLazy]。
+func ProvideHealthChecker(hcs ...HealthChecker) di.Option {
 	return func(i di.Injector) {
-		if fn == nil {
-			return
-		}
-		switch v := fn.(type) {
-		case HealthChecker:
-			di.ProvideGroupItem(i, v)
-			return
-		case func() HealthChecker:
-			if hc := v(); hc != nil {
+		for _, hc := range hcs {
+			if hc != nil {
 				di.ProvideGroupItem(i, hc)
 			}
-			return
-		case func(di.Injector) HealthChecker:
-			if hc := v(i); hc != nil {
-				di.ProvideGroupItem(i, hc)
-			}
-			return
 		}
+	}
+}
 
-		// 任意 func(dep...) HealthChecker：延迟到 PreStart 装配。
-		val := reflect.ValueOf(fn)
-		if val.Kind() != reflect.Func {
-			panic("server.ProvideHealthChecker: unsupported argument " + reflect.TypeOf(fn).String())
-		}
-		if err := di.ValidateConstructor(val.Type()); err != nil {
-			panic("server.ProvideHealthChecker: " + err.Error())
-		}
-		lc, err := di.Invoke[*di.Lifecycle](i)
-		if err != nil || lc == nil {
-			panic("server.ProvideHealthChecker: constructor form requires *di.Lifecycle in the graph")
-		}
-		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
-			OnStart: func(context.Context) error {
-				out, callErr := di.CallConstructor(i, fn)
-				if callErr != nil {
-					return fmt.Errorf("server.ProvideHealthChecker: %w", callErr)
-				}
-				hc, ok := out.(HealthChecker)
-				if !ok {
-					return fmt.Errorf("server.ProvideHealthChecker: constructor returned %T, want server.HealthChecker", out)
-				}
-				if hc != nil {
-					di.ProvideGroupItem(i, hc)
-				}
-				return nil
-			},
+// ProvideHealthCheckerLazy 在 PreStart 求值（可访问完整依赖图）。
+func ProvideHealthCheckerLazy(fn func(di.Injector) (HealthChecker, error)) di.Option {
+	return func(i di.Injector) {
+		di.ProvideLazyE[HealthChecker](i, func(i di.Injector) (HealthChecker, error) {
+			hc, err := fn(i)
+			if err != nil || hc == nil {
+				// 返回空检查器时写入一个 no-op，避免 group 出现 nil 条目。
+				return nil, err
+			}
+			return hc, nil
 		})
 	}
 }

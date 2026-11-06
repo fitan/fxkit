@@ -68,7 +68,6 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 	if params == nil {
 		return nil, 0, fxerrors.Internal("crudx.ApplyList: nil params")
 	}
-	spec = deriveSortFields(spec)
 	spec.Normalize(params)
 
 	groups, err := ParseQGroups(spec, params.Q)
@@ -359,9 +358,6 @@ func applyCondition(tx *gorm.DB, col string, c Condition) (*gorm.DB, error) {
 }
 
 func validatedSortPath(spec ListSpec, sortBy, sortDir string) (col, dir string, ok bool) {
-	if len(spec.SortFields) == 0 {
-		return "", "", false
-	}
 	sortBy = strings.TrimSpace(sortBy)
 	if sortBy == "" {
 		if spec.DefaultSort != "" {
@@ -370,14 +366,24 @@ func validatedSortPath(spec ListSpec, sortBy, sortDir string) (col, dir string, 
 			return "", "", false
 		}
 	}
+	// SortFields 优先（允许排序键与过滤键不同名）。
 	col, ok = spec.SortFields[sortBy]
 	if !ok {
-		if res, err := resolveField(spec, sortBy); err == nil {
+		// StrictSort：只允许显式白名单（SortFields）或带索引的列。
+		// 关系路径（含 "."）仍然放行：它们由 Relations 显式声明。
+		if spec.StrictSort && !strings.Contains(sortBy, ".") {
+			fs, ferr := resolveFieldSpec(spec, sortBy)
+			if ferr != nil || !fs.Indexed {
+				return "", "", false
+			}
+			col, ok = fs.Column, true
+		} else if res, err := resolveField(spec, sortBy); err == nil {
 			col = res.Column
 			ok = true
 		}
 	}
-	if !ok {
+	// 空列名无法生成 ORDER BY（FieldSpec 存在但没填 Column 的字段不应可排序）。
+	if !ok || col == "" {
 		return "", "", false
 	}
 	dir = normalizeSortDir(sortDir)

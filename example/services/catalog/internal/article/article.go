@@ -12,13 +12,13 @@ import (
 	"github.com/fitan/fxkit"
 	"github.com/fitan/fxkit/authz"
 	"github.com/fitan/fxkit/crudx"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/hatchetx"
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/outbox"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-	"github.com/fitan/fxkit/di"
 )
 
 const articleCreatedTopic = "article-created"
@@ -367,8 +367,22 @@ func toArticleDetail(m Article) ArticleDetail {
 }
 
 var Module = di.Options(
-	fxkit.Service("article", NewService),
-	fxhuma.ProvideRegistrar(NewHumaRegistrar),
-	hatchetx.ProvideRegistrar(RegisterWorker),
-	authz.ProvideHTTPRoutes(articleHTTPRoutes),
+	fxkit.Service("article",
+		fxkit.Provide(func(i di.Injector) (*Service, error) {
+			return NewService(
+				di.MustInvoke[*gormx.Client](i),
+				di.MustInvoke[*outbox.Store](i),
+				di.MustInvoke[*outbox.Inbox](i),
+				di.MustInvoke[*outbox.Config](i),
+				di.MustInvoke[*di.Lifecycle](i),
+			)
+		}),
+	),
+	fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+		return NewHumaRegistrar(di.MustInvoke[*Service](i)), nil
+	}),
+	hatchetx.ProvideRegistrarLazy(func(i di.Injector) (hatchetx.Registrar, error) {
+		return RegisterWorker(di.MustInvoke[*Service](i)), nil
+	}),
+	authz.ProvideHTTPRoutes(articleHTTPRoutes()...),
 )

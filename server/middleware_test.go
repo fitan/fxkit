@@ -62,7 +62,7 @@ func TestRequestBodyLogMiddleware_DoesNotDropByte(t *testing.T) {
 	const maxLoggedBytes = 8 * 1024
 	want := bytes.Repeat([]byte("x"), maxLoggedBytes+50)
 	var got []byte
-	h := requestBodyLogMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := requestBodyLogMiddleware([]string{"/sse/"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
 		got, err = io.ReadAll(r.Body)
 		if err != nil {
@@ -136,18 +136,24 @@ func TestCORS_WildcardWithCredentialsEchoesOrigin(t *testing.T) {
 }
 
 func TestIsSSERequest(t *testing.T) {
+	prefixes := []string{"/sse/"}
+	// 路径前缀现在是显式配置：/api/sse/stream 不以 /sse/ 开头，不再匹配。
 	pathReq := httptest.NewRequest(http.MethodGet, "/api/sse/stream", nil)
-	if !isSSERequest(pathReq) {
-		t.Fatal("path /sse/ should match")
+	if isSSERequest(pathReq, prefixes) {
+		t.Fatal("/api/sse/stream should not match a /sse/ prefix")
+	}
+	rootPathReq := httptest.NewRequest(http.MethodGet, "/sse/stream", nil)
+	if !isSSERequest(rootPathReq, prefixes) {
+		t.Fatal("/sse/stream should match")
 	}
 	acceptReq := httptest.NewRequest(http.MethodGet, "/events", nil)
 	acceptReq.Header.Set("Accept", "text/event-stream")
-	if !isSSERequest(acceptReq) {
+	if !isSSERequest(acceptReq, prefixes) {
 		t.Fatal("Accept text/event-stream should match")
 	}
 	plain := httptest.NewRequest(http.MethodGet, "/api/v1/sse", nil)
-	if isSSERequest(plain) {
-		t.Fatal("/sse without slash or Accept should not match")
+	if isSSERequest(plain, prefixes) {
+		t.Fatal("/sse without trailing slash or Accept should not match")
 	}
 }
 

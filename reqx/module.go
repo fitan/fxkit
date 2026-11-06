@@ -10,7 +10,7 @@ import (
 var Module = di.Module("fxkit/reqx",
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (*Factory, error) {
-			lc, _ := di.Invoke[*di.Lifecycle](i)
+			lc := di.MustInvoke[*di.Lifecycle](i)
 			cfg, _ := di.Invoke[*config.Config](i)
 			return NewFactory(lc, cfg), nil
 		})

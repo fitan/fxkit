@@ -42,6 +42,11 @@ type ModelMeta struct {
 	PKInfo
 	Resource string // 结构体名，用于 NotFound 消息，例如 "User"
 	Table    string // 数据库表名，例如 "users"
+	// ColumnIndex 是「数据库列名 → 结构体字段索引路径」。
+	//
+	// 由 GORM schema 解析得到，因此尊重自定义 NamingStrategy；
+	// 游标分页按列名回读字段值时依赖它，而不是自己推驼峰→下划线。
+	ColumnIndex map[string][]int
 }
 
 // modelMetaCache 使用 sync.Map，读写已并发安全，无需额外 mutex。
@@ -77,6 +82,13 @@ func resolveModelUncached[T any](db *gorm.DB) (*ModelMeta, error) {
 		return nil, fmt.Errorf("crudx: type %T has composite primary key (not supported yet)", zero)
 	}
 	pf := s.PrimaryFields[0]
+	cols := make(map[string][]int, len(s.Fields))
+	for _, f := range s.Fields {
+		if f == nil || f.DBName == "" || len(f.StructField.Index) == 0 {
+			continue
+		}
+		cols[f.DBName] = f.StructField.Index
+	}
 	return &ModelMeta{
 		PKInfo: PKInfo{
 			FieldName:     pf.Name,
@@ -84,8 +96,9 @@ func resolveModelUncached[T any](db *gorm.DB) (*ModelMeta, error) {
 			Kind:          pf.FieldType.Kind(),
 			AutoIncrement: pf.AutoIncrement,
 		},
-		Resource: s.Name,
-		Table:    s.Table,
+		Resource:    s.Name,
+		Table:       s.Table,
+		ColumnIndex: cols,
 	}, nil
 }
 

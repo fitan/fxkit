@@ -82,13 +82,23 @@ type RelationSpec struct {
 }
 
 // ListSpec 是 [List] / [ApplyList] 的过滤/排序白名单。
-// 只有此处列出的名称才能出现在 q= 或 sortBy 中。
+// 只有此处列出的名称才能出现在 q= 中；sortBy 可用的名称是
+// SortFields ∪ Fields ∪ Relations 路径（例如 cluster.name）。
+//
+// SortFields 只影响 sortBy，不影响 q=；它主要用于两种情况：
+// 排序键与过滤键不同名，或排序表达式无法写成 FieldSpec.Column。
 type ListSpec struct {
 	Fields      map[string]FieldSpec
 	Relations   map[string]*RelationSpec
 	SortFields  map[string]string // API 路径 -> SQL 列/表达式
 	DefaultSort string
 	Limits      Limits
+	// StrictSort 为 true 时，只有 SortFields 里的名字可以出现在 sortBy。
+	//
+	// 默认 false：保持「Fields 声明的列都可排序」（含 Relations 点号路径），
+	// 兼容既有服务。若要确保「只有显式列入白名单的列才能排序」
+	// （避免对 TEXT/未索引列做 ORDER BY），开启它。
+	StrictSort bool
 }
 
 // Condition 是解析后的 q= 表达式。

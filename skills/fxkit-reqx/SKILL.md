@@ -43,9 +43,8 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 | `Timeout` | 30s | 底层 `http.Client` |
 | `PassingOnly` | true | 仅 healthy；`ptr(false)` 可放宽 |
 | `OTel` | true | `otelhttp` 包装；`ptr(false)` 关闭 |
-| `SpanName` | — | 可选覆盖 span 名 |
-| `WatchWait` | 5m（上限 10m） | Consul blocking query 最长空闲挂起；index 变化立刻返回 |
 | `MaxFailover` | 5 | 失败时最多尝试几个不同端点 |
+| `ServerName` | — | TLS SNI / 证书校验名（https + IP 端点时有用） |
 | `BaseTransport` | — | 可选底层 RoundTripper |
 
 ## 行为

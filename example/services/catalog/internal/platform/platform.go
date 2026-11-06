@@ -11,13 +11,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/fitan/fxkit"
 	"github.com/fitan/fxkit/authz"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	"github.com/fitan/fxkit/hatchetx"
 	fxhuma "github.com/fitan/fxkit/huma"
 	"github.com/fitan/fxkit/server"
 	"github.com/go-chi/chi/v5"
-	"github.com/fitan/fxkit/di"
 )
 
 type Config struct {
@@ -408,15 +408,28 @@ func chiRoutes() []server.Route {
 }
 
 var Module = di.Options(
-	fxkit.Service("platform", NewService,
+	fxkit.Service("platform",
+		fxkit.Provide(func(i di.Injector) (*Service, error) {
+			return NewService(
+				di.MustInvoke[*gormx.Client](i),
+				di.MustInvoke[*hatchetx.Client](i),
+				di.MustInvoke[*authz.Enforcer](i),
+				di.MustInvoke[*Config](i),
+				di.MustInvoke[*di.Lifecycle](i),
+			)
+		}),
 		fxkit.ProvideConfig[Config]("catalog"),
-		fxkit.Routes(chiRoutes),
+		fxkit.Routes(chiRoutes()...),
 	),
-	server.ProvideMiddleware(chiHeader),
-	fxhuma.ProvideMiddleware(humaHeader),
-	fxhuma.ProvideRegistrar(Register),
-	hatchetx.ProvideRegistrar(RegisterWorker),
-	authz.ProvideHTTPRoutes(platformHTTPRoutes),
+	server.ProvideMiddleware(chiHeader()),
+	fxhuma.ProvideMiddleware(humaHeader()),
+	fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+		return Register(di.MustInvoke[*Service](i)), nil
+	}),
+	hatchetx.ProvideRegistrarLazy(func(i di.Injector) (hatchetx.Registrar, error) {
+		return RegisterWorker(di.MustInvoke[*Service](i)), nil
+	}),
+	authz.ProvideHTTPRoutes(platformHTTPRoutes()...),
 	// 业务级就绪探针：验证 counter 表真的可读（连接级 Ping 通过但迁移未完成时能提前发现）
 	ProvideReadiness(),
 )

@@ -91,7 +91,7 @@ func collectOpenAPI(opts []di.Option, cfg config.Options, in openapi.EncodeInput
 	root := di.New(all...)
 	defer root.Shutdown()
 
-	lc, _ := di.Invoke[*di.Lifecycle](root)
+	lc := di.MustInvoke[*di.Lifecycle](root)
 	if lc != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), defaultStartTimeout)
 		defer cancel()

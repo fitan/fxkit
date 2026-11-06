@@ -1,8 +1,11 @@
 package gormx
 
 import (
+	"log/slog"
 	"net/url"
 	"strings"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 // extractDBName 从 DSN 提取数据库名用于遥测标签。
@@ -38,18 +41,12 @@ func extractPostgresDBName(dsn string) string {
 }
 
 func extractMySQLDBName(dsn string) string {
-	slashIdx := strings.Index(dsn, "/")
-	if slashIdx == -1 {
-		return ""
+	// 交给驱动解析：手写按第一个 '/' 切分会把
+	// user:pass@unix(/tmp/mysql.sock)/dbname 解析成 tmp/mysql.sock)/dbname。
+	if cfg, err := mysql.ParseDSN(dsn); err == nil {
+		return cfg.DBName
 	}
-	rest := dsn[slashIdx+1:]
-	if idx := strings.Index(rest, "?"); idx != -1 {
-		rest = rest[:idx]
-	}
-	if idx := strings.Index(rest, "#"); idx != -1 {
-		rest = rest[:idx]
-	}
-	return rest
+	return ""
 }
 
 // prepareDSN 应用驱动相关的 DSN 默认值（SQLite busy timeout / WAL）。
@@ -71,7 +68,11 @@ func ensureSQLitePragmas(dsn string) string {
 	}
 	q, err := url.ParseQuery(rawQuery)
 	if err != nil {
-		q = url.Values{}
+		// 不能回退成空 Values：那会把用户显式写的 _journal_mode/_busy_timeout
+		// 等参数整段丢掉，再补上我们的默认值，行为静默改变。
+		slog.Warn("gormx: sqlite dsn query is malformed; leaving DSN unchanged",
+			"query", rawQuery, "error", err)
+		return dsn
 	}
 	defaults := map[string]string{
 		"_busy_timeout": "5000",

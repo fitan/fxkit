@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/internal/consuladdr"
 	"github.com/fitan/fxkit/server"
 )
 
@@ -152,7 +153,7 @@ func TestConsulRegisterSelfIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = deregisterSelf(context.Background(), disc, id) })
 
-	base, err := normalizeConsulAddr(addr)
+	base, err := consuladdr.Normalize(addr)
 	if err != nil {
 		t.Fatalf("addr: %v", err)
 	}

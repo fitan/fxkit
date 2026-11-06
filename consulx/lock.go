@@ -225,39 +225,6 @@ func BuildLocker(disc *Config) (Locker, error) {
 	return NewConsulLocker(disc.ConsulAddress, nil)
 }
 
-// ProvideLocker 提供 Fx 容器中的全局 Locker 实例（兼容旧 API）。
-//
-// 当 discovery.consul_address 为空时返回 disabledLocker；地址非法时同样返回
-// disabledLocker，但其调用会返回包含配置错误的 ErrConsulDisabled（并记录 Warn）。
-// 需要把配置错误暴露为启动失败的场景请使用 BuildLocker。
-func ProvideLocker(disc *Config) Locker {
-	l, err := BuildLocker(disc)
-	if err != nil {
-		slog.Warn("consulx: invalid consul address, locker disabled", "error", err)
-		return &disabledLocker{err: err}
-	}
-	return l
-}
-
-// WithLockResult 快捷在分布式锁临界区执行 fn 并返回计算结果 R。
-// 利用 Go 1.27+ 泛型函数/方法，免除在外部定义临时变量。
-func WithLockResult[R any](l Locker, ctx context.Context, key string, fn func(ctx context.Context) (R, error), opts ...LockOption) (R, error) {
-	var zero R
-	var res R
-	err := l.WithLock(ctx, key, func(ctx context.Context) error {
-		val, err := fn(ctx)
-		if err != nil {
-			return err
-		}
-		res = val
-		return nil
-	}, opts...)
-	if err != nil {
-		return zero, err
-	}
-	return res, nil
-}
-
 // joinUnlockErr 把 Unlock 错误附加到已有错误上，便于 WithLock 报告释放失败。
 func joinUnlockErr(err error, key string, unlockErr error) error {
 	if unlockErr == nil {

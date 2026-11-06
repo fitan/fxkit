@@ -29,16 +29,10 @@ func TestProvideHealthChecker_AllFormsShareOneGroup(t *testing.T) {
 		func(i di.Injector) {
 			server.ProvideHealthChecker(namedChecker{name: "direct"})(i)
 		},
-		// func() HealthChecker
+		// 延迟构造（可访问依赖图）
 		func(i di.Injector) {
-			server.ProvideHealthChecker(func() server.HealthChecker {
-				return namedChecker{name: "from-func"}
-			})(i)
-		},
-		// func(di.Injector) HealthChecker
-		func(i di.Injector) {
-			server.ProvideHealthChecker(func(di.Injector) server.HealthChecker {
-				return namedChecker{name: "from-injector"}
+			server.ProvideHealthCheckerLazy(func(di.Injector) (server.HealthChecker, error) {
+				return namedChecker{name: "from-injector"}, nil
 			})(i)
 		},
 	)
@@ -53,7 +47,7 @@ func TestProvideHealthChecker_AllFormsShareOneGroup(t *testing.T) {
 	for _, c := range checkers {
 		names = append(names, c.Name())
 	}
-	assert.ElementsMatch(t, []string{"direct", "from-func", "from-injector"}, names,
+	assert.ElementsMatch(t, []string{"direct", "from-injector"}, names,
 		"all registration forms must land in the same group")
 }
 
@@ -64,8 +58,8 @@ func TestProvideHealthChecker_ConstructorForm(t *testing.T) {
 	root := di.New(
 		func(i di.Injector) { di.ProvideValue(i, &dep{v: "injected"}) },
 		func(i di.Injector) {
-			server.ProvideHealthChecker(func(d *dep) server.HealthChecker {
-				return namedChecker{name: d.v}
+			server.ProvideHealthCheckerLazy(func(i di.Injector) (server.HealthChecker, error) {
+				return namedChecker{name: di.MustInvoke[*dep](i).v}, nil
 			})(i)
 		},
 	)

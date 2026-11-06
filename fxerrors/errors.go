@@ -2,6 +2,7 @@ package fxerrors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -58,12 +59,35 @@ func (k Kind) Status() int {
 // 勿直接构造，以保持 kind/status 映射一致。
 type Error struct {
 	Kind    Kind           `json:"code"`
-	Status  int            `json:"status"`
 	Message string         `json:"message"`
 	Details map[string]any `json:"details,omitempty"`
 	TraceID string         `json:"trace_id,omitempty"`
 
 	cause error
+}
+
+// MarshalJSON 把 status 作为派生字段输出（由 Kind 决定）。
+//
+// 早期 Status 是结构体上的可写字段，于是必须到处防「手写 &Error{} 导致的零值」，
+// 而且 code 与 status 可能不一致。现在只有 Kind 是真源，status 在序列化时计算。
+func (e *Error) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Kind    Kind           `json:"code"`
+		Status  int            `json:"status"`
+		Message string         `json:"message"`
+		Details map[string]any `json:"details,omitempty"`
+		TraceID string         `json:"trace_id,omitempty"`
+	}
+	if e == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(wire{
+		Kind:    e.Kind,
+		Status:  e.Kind.Status(),
+		Message: e.Message,
+		Details: e.Details,
+		TraceID: e.TraceID,
+	})
 }
 
 // Error 满足 error 接口。Message 为空时回退到 cause / kind。
@@ -80,19 +104,8 @@ func (e *Error) Error() string {
 	return string(e.Kind)
 }
 
-// GetStatus 返回此错误的 HTTP 状态码。
-func (e *Error) GetStatus() int { return e.Status }
-
 // Unwrap 向 [errors.Is] / [errors.As] 暴露底层 cause。
 func (e *Error) Unwrap() error { return e.cause }
-
-// ContentType 为 JSON 错误响应选择 Content-Type。
-func (e *Error) ContentType(ct string) string {
-	if ct == "application/json" {
-		return "application/problem+json"
-	}
-	return ct
-}
 
 // WithCause 附加底层错误，保留 [errors.Is] / [errors.As] 链。
 //
@@ -131,7 +144,6 @@ func new_(k Kind, format string, args ...any) *Error {
 	}
 	return &Error{
 		Kind:    k,
-		Status:  k.Status(),
 		Message: msg,
 	}
 }
@@ -161,7 +173,6 @@ func NotFound(resource string, format string, args ...any) *Error {
 	}
 	return &Error{
 		Kind:    KindNotFound,
-		Status:  http.StatusNotFound,
 		Message: msg,
 		Details: map[string]any{"resource": resource},
 	}
@@ -220,23 +231,15 @@ func Wrap(err error) *Error {
 	}
 	switch {
 	case errors.Is(err, context.Canceled):
-		return &Error{Kind: KindCanceled, Status: KindCanceled.Status(), Message: "request canceled", cause: err}
+		return &Error{Kind: KindCanceled, Message: "request canceled", cause: err}
 	case errors.Is(err, context.DeadlineExceeded):
-		return &Error{Kind: KindTimeout, Status: KindTimeout.Status(), Message: "deadline exceeded", cause: err}
+		return &Error{Kind: KindTimeout, Message: "deadline exceeded", cause: err}
 	}
 	return &Error{
 		Kind:    KindInternal,
-		Status:  KindInternal.Status(),
 		Message: err.Error(),
 		cause:   err,
 	}
-}
-
-// WrapKind 以指定 kind 包装底层错误，并保留 cause。
-func WrapKind(k Kind, cause error, format string, args ...any) *Error {
-	e := new_(k, format, args...)
-	e.cause = cause
-	return e
 }
 
 // Is 报告 err（或其包装 cause）是否为给定 kind 的 fxkit Error。便于一行模式匹配：

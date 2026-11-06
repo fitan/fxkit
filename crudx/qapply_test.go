@@ -329,6 +329,22 @@ func TestApplyList_unknownSortFieldRejected(t *testing.T) {
 	assertInvalid(t, err, ReasonInvalidSortField)
 }
 
+// TestApplyList_fieldWithoutColumnNotSortable 回归：FieldSpec 存在但没填 Column
+// 时无法生成 ORDER BY，必须拒绝而不是拼出空列名。
+func TestApplyList_fieldWithoutColumnNotSortable(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := ListSpec{
+		Fields: map[string]FieldSpec{
+			"name":  {Column: "users.name", Kind: FieldString},
+			"ghost": {Kind: FieldString}, // 只有声明，没有列名
+		},
+	}
+	_, err := ApplyList(db.Model(&struct{}{}).Table("users"), spec, &ListParams{
+		Limit: 10, SortBy: "ghost", SortDirection: "asc",
+	})
+	assertInvalid(t, err, ReasonInvalidSortField)
+}
+
 func TestApplyList_emptySortUsesNoOrder(t *testing.T) {
 	db := setupUsersDB(t)
 	spec := testSpec() // 没有 DefaultSort

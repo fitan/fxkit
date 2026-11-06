@@ -9,10 +9,10 @@ import (
 	"github.com/fitan/fxkit"
 	"github.com/fitan/fxkit/authz"
 	"github.com/fitan/fxkit/crudx"
+	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/fxerrors"
 	"github.com/fitan/fxkit/gormx"
 	fxhuma "github.com/fitan/fxkit/huma"
-	"github.com/fitan/fxkit/di"
 	"gorm.io/gorm"
 )
 
@@ -249,9 +249,18 @@ func toRow(m Comment) CommentRow {
 }
 
 var Module = di.Options(
-	fxkit.Service("comment", NewService,
+	fxkit.Service("comment",
+		fxkit.Provide(func(i di.Injector) (*Service, error) {
+			return NewService(
+				di.MustInvoke[*gormx.Client](i),
+				di.MustInvoke[*Config](i),
+				di.MustInvoke[*di.Lifecycle](i),
+			)
+		}),
 		fxkit.ProvideConfig[Config]("comments"),
 	),
-	fxhuma.ProvideRegistrar(Register),
-	authz.ProvideHTTPRoutes(commentHTTPRoutes),
+	fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
+		return Register(di.MustInvoke[*Service](i)), nil
+	}),
+	authz.ProvideHTTPRoutes(commentHTTPRoutes()...),
 )

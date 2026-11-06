@@ -14,8 +14,12 @@ const (
 	ReasonTooManyInValues        = "TOO_MANY_IN_VALUES"
 	ReasonTooManyJoins           = "TOO_MANY_JOINS"
 	ReasonTooManyLikeConditions  = "TOO_MANY_LIKE_CONDITIONS"
-	ReasonFieldNotIndexed        = "FIELD_NOT_INDEXED"
-	ReasonInvalidSortField       = "INVALID_SORT_FIELD"
+	// ReasonFieldNotLikeable: 该列未声明 Likeable，不允许 ~ / !~。
+	ReasonFieldNotLikeable = "FIELD_NOT_LIKEABLE"
+	// ReasonFieldNotIndexed 已弃用：它过去被用于「不允许 LIKE」，
+	// 与名字含义（未建索引）不符。保留常量仅供旧调用方编译通过，新代码用 ReasonFieldNotLikeable。
+	ReasonFieldNotIndexed  = "FIELD_NOT_INDEXED"
+	ReasonInvalidSortField = "INVALID_SORT_FIELD"
 	// ReasonDistinctRelationSort: 一对多 JOIN 需要 DISTINCT 时，不能按关联列排序
 	// （PG 要求 ORDER BY 表达式出现在 SELECT 列表；MySQL 语义也不确定）。
 	ReasonDistinctRelationSort = "DISTINCT_RELATION_SORT_UNSUPPORTED"

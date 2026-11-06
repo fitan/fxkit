@@ -30,6 +30,7 @@ func TestShortRevision(t *testing.T) {
 
 func TestParseDirty(t *testing.T) {
 	Dirty = "true"
+	Normalize() // 快照是懒构建的：修改包级变量后必须重新 Normalize
 	info := Get()
 	if !info.Dirty {
 		t.Fatal("expected dirty")
@@ -46,6 +47,7 @@ func TestMetaOmitsEmpty(t *testing.T) {
 	BuildTime = ""
 	BuiltBy = ""
 
+	Normalize() // 重建快照
 	m := Meta()
 	if m["version"] != "1.2.3" || m["build_commit"] != "abc123" {
 		t.Fatalf("meta=%v", m)

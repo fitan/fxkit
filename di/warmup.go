@@ -59,7 +59,7 @@ func (r WarmupReport) Error() error {
 // 使用建议：在 `Lifecycle.PreStart` 的最后一个阶段调用（此时所有延迟构造函数
 // 已求值、group 已完整），失败则中止启动。
 //
-//	lc.AppendPreStartPhase(di.PhaseMountHTTP+1, di.Hook{
+//	lc.AppendPreStartPhase(di.PhaseAfterHTTPServer, di.Hook{
 //	    OnStart: func(ctx context.Context) error {
 //	        return di.Warmup(root).Error()
 //	    },
@@ -88,7 +88,7 @@ func Warmup(i Injector) WarmupReport {
 		}
 
 		if _, err := do.InvokeNamed[any](i, name); err != nil {
-			if isMissingDependency(err) {
+			if IsNotFound(err) {
 				report.Optional = append(report.Optional, WarmupError{Service: name, Err: err})
 				continue
 			}
@@ -114,17 +114,13 @@ func isInvoked(i Injector, name string) bool {
 	return false
 }
 
-// isMissingDependency 判断错误是否只是「依赖不存在」，
-// 这类情况对可选子系统是合法的（没配 Redis 就不该有 cache 服务）。
-func isMissingDependency(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, do.ErrServiceNotFound) || errors.Is(err, do.ErrServiceNotMatch) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "could not find service")
+// IsNotFound 报告 err 是否表示「容器里没有该服务」（含其上游依赖缺失）。
+//
+// samber/do 用 %w 包装 ErrServiceNotFound，因此本函数对经过多层包装的错误同样成立。
+// 模块的可选依赖（例如未使用 cli 时缺失的 config.Options）应把它与真正的构造
+// 失败区分开：前者可以忽略，后者必须中止启动。
+func IsNotFound(err error) bool {
+	return errors.Is(err, do.ErrServiceNotFound) || errors.Is(err, do.ErrServiceNotMatch)
 }
 
 // AssertNoUnresolved 是 [Warmup] 的严格版本：任何服务解析失败都算错误

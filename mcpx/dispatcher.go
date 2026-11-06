@@ -15,9 +15,10 @@ import (
 // bufferRecorder 是可完全重置的 ResponseWriter（httptest.ResponseRecorder 的
 // wroteHeader 未导出，复用时会忽略第二次 WriteHeader）。
 type bufferRecorder struct {
-	header http.Header
-	code   int
-	buf    bytes.Buffer
+	header  http.Header
+	code    int
+	buf     bytes.Buffer
+	flushed bool
 }
 
 func (r *bufferRecorder) Header() http.Header {
@@ -40,11 +41,16 @@ func (r *bufferRecorder) Write(p []byte) (int, error) {
 	return r.buf.Write(p)
 }
 
-// Flush 满足 http.Flusher，避免 SSE/流式中间件报不支持。
-func (r *bufferRecorder) Flush() {}
+// Flush 满足 http.Flusher。
+//
+// 只记标记、不丢数据：tool 调用结束后若发现发生过 Flush，
+// 说明这是流式（SSE）端点，无法作为一个 MCP tool 的同步结果返回。
+// 早期这里是空实现，结果是「看起来成功、内容是空的」。
+func (r *bufferRecorder) Flush() { r.flushed = true }
 
 func (r *bufferRecorder) reset() {
 	r.code = 0
+	r.flushed = false
 	r.buf.Reset()
 	for k := range r.header {
 		delete(r.header, k)
@@ -53,11 +59,6 @@ func (r *bufferRecorder) reset() {
 
 // recorderPool 复用 ResponseWriter，避免每次 tool 调用分配（进程内直通是高频路径）。
 var recorderPool = sync.Pool{New: func() any { return &bufferRecorder{} }}
-
-// Dispatcher 定义将大模型 Tool 调用请求派发到当前服务执行的接口。
-type Dispatcher interface {
-	Dispatch(ctx context.Context, tool Tool, args map[string]any) (string, error)
-}
 
 // InProcessDispatcher 是进程内直通执行器。
 // 它完全绕过外部网络 IO 和监听端口，直接构造内存级 HTTP 请求投递给当前微服务的 http.Handler (即 chi.Mux / Huma)。
@@ -92,12 +93,16 @@ func (d *InProcessDispatcher) Dispatch(ctx context.Context, tool Tool, args map[
 
 	respBody := rec.buf.String()
 	status := rec.code
+	flushed := rec.flushed
 	if status == 0 {
 		status = http.StatusOK
 	}
 	rec.reset()
 	recorderPool.Put(rec)
 
+	if flushed {
+		return "", fmt.Errorf("tool %q targets a streaming endpoint; streaming responses cannot be returned as a synchronous MCP tool result", tool.Name)
+	}
 	if status < 200 || status >= 300 {
 		return "", fmt.Errorf("HTTP %d error: %s", status, strings.TrimSpace(respBody))
 	}
