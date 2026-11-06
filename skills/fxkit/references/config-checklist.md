@@ -38,6 +38,8 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `outbox.enabled` | 事务性 outbox relay |
 | `outbox.poll_interval` | 默认 `1s`；必须 > 0 |
 | `outbox.batch_size` / `max_retries` / `claim_timeout` | 批大小、重试、租约 |
+| `outbox.publish_concurrency` | 并行投递数，默认 `1`（严格顺序）；>1 不保证批内顺序 |
+| `outbox.partition_field` | 按 payload 字段分组保序（如 `"actorId"`）；同 key 串行、不同 key 并行；空 = 不分组 |
 | `hatchet.enabled` | 启用 client（有 registrar 时启 worker） |
 | `hatchet.token` / `HATCHET_CLIENT_TOKEN` | 必填（启用时；SDK 环境变量） |
 | `hatchet.host_port` | 如 `localhost:7077`；loopback 默认 TLS `none` |

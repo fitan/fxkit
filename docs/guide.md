@@ -503,7 +503,7 @@ server.ProvideHealthChecker(func(svc *Svc) server.HealthChecker {
 | `server` | `port` / `log_payloads` / `access_log` / `rate_limit.*` / `cors_*` / 超时 | 8080 / false / false / 关 |
 | `db` | `driver` / `dsn` / `auto_migrate` / `check_schema` / 连接池 | 不连库 / false / false |
 | `cache` | `driver` / `default_ttl` / `null_ttl` / `singleflight` / `jitter_max_percent` / `redis.*` | 禁用 / 30m / 1m / true / 10 |
-| `outbox` | `enabled` / `poll_interval` / `batch_size` / `max_retries` / `claim_timeout` / `publish_concurrency` | false / 1s / 50 / 10 / 30s / 1 |
+| `outbox` | `enabled` / `poll_interval` / `batch_size` / `max_retries` / `claim_timeout` / `publish_concurrency` / `partition_field` | false / 1s / 50 / 10 / 30s / 1 / 空 |
 | `hatchet` | `enabled` / `token` / `host_port` / `server_url` / `tls_strategy` / `worker_*` / `outbox_publisher` | false |
 | `auth` | `enabled` / `issuer` / `audience` / `dev_header_user` / `deny_unregistered` / `mux_middleware` / `public_paths` / `casbin.*` | false |
 | `otel` | `enabled` / `endpoint` / `protocol` / `sampling` / `traces|metrics|logs.*` | false |

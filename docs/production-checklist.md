@@ -154,6 +154,8 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 - [ ] Consul 锁：确认 `TTL`（默认 15s）大于一次续租 RTT 的 3 倍以上；关注
       `consulx.lock.renew.failures` 与 `consulx.lock.lost`。
 - [ ] outbox relay：多副本会各自 claim，`publish_concurrency` 默认 1；确认 `claim_timeout` > 单批处理时间。
+      actor 事件需要高吞吐时用 `partition_field: "actorId"`（同 actor 保序、不同 actor 并行），
+      不要仅调大 `publish_concurrency`，否则同一 actor 的命令可能乱序执行。
 - [ ] Hatchet worker：`worker_slots` 与实例数匹配；`hatchetx.actor.runs` 用于观察邮箱积压。
 - [ ] 优雅停机：`stop-timeout` 要大于最慢请求；LB 摘流要在 SIGTERM 之前完成。
 

@@ -533,6 +533,7 @@ outbox:
   max_retries: 10
   claim_timeout: 30s           # processing 租约超时后可被其他 relay 回收
   publish_concurrency: 1       # 同批并发投递数；1 = 严格顺序，>1 提吞吐但不保证批内顺序
+  partition_field: ""          # 按 payload 字段分组保序（如 "actorId"）；空 = 不分组
 
 hatchet:
   enabled: false
@@ -1056,7 +1057,36 @@ outbox:
   max_retries: 10
   claim_timeout: 30s
   publish_concurrency: 1   # 默认 1（严格顺序）；>1 提吞吐，但不保证批内顺序
+  partition_field: ""      # 设了它则「同 key 串行、不同 key 并行」（见下）
 ```
+
+### 高吞吐 + 同一 actor 保序
+
+`publish_concurrency > 1` 能提吞吐，但会让同一批内的事件乱序——对语义 actor 是致命的（同一 actorId 的命令会乱执行）。用 `partition_field` 解决：
+
+```yaml
+outbox:
+  enabled: true
+  publish_concurrency: 4      # 并行组数
+  partition_field: "actorId"  # payload 里用于分组的 JSON 字段
+```
+
+行为：
+
+```
+claimBatch (ORDER BY id ASC)
+  └─ 按 partition_field 分组：a=[e1,e3,e5] b=[e2] c=[e4]
+       └─ 组内串行（保序）· 组间并行（最多 publish_concurrency 个）
+```
+
+- **同一 key** 的事件按产生顺序投递；**不同 key** 并行。
+- 取不到该字段的事件归入同一个串行组（宁可牺牲并发，也不打乱顺序）。
+- 支持 `gjson` 路径：payload 是 `{"input":{"actorId":"x"}}` 时写 `partition_field: "input.actorId"`。
+- 跨批次顺序由「`claimBatch` 按 id 排序 + 整批完成后才取下一批」保证，所以端到端按 key 有序。
+- 只影响**投递顺序**，不影响 `at-least-once` 语义；重试仍可能乱序（与是否分片无关）。
+- 不改变表结构，无需迁移。
+
+> 典型配置：actor 命令用 `partition_field: "actorId"`；普通领域事件不设该字段，保持全局并行即可。
 
 ### 生产端
 
