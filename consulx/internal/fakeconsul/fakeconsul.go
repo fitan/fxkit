@@ -45,6 +45,9 @@ type Server struct {
 	// AcquireDelay 在 acquire 请求处理前等待（不持内部锁），用于让续租协程先失败。
 	AcquireDelay time.Duration
 
+	// SuppressAcquireIndex 模拟真实 Consul：KV PUT 不返回 X-Consul-Index。
+	SuppressAcquireIndex bool
+
 	Registrations   [][]byte
 	Deregistrations []string
 	PassCalls       []string
@@ -150,11 +153,16 @@ func (s *Server) RoundTrip(req *http.Request) (*http.Response, error) {
 				return resp(req, http.StatusInternalServerError, "acquire boom", 0), nil
 			}
 			s.index++
+			idx := s.index
+			// 真实 Consul 的 KV PUT 不返回 X-Consul-Index；用于回归测试 fencing 补齐逻辑。
+			if s.SuppressAcquireIndex {
+				idx = 0
+			}
 			if cur, ok := s.KV[key]; !ok || cur == sid {
 				s.KV[key] = sid
-				return resp(req, http.StatusOK, "true", s.index), nil
+				return resp(req, http.StatusOK, "true", idx), nil
 			}
-			return resp(req, http.StatusOK, "false", s.index), nil
+			return resp(req, http.StatusOK, "false", idx), nil
 		}
 
 		if sid := q.Get("release"); sid != "" {

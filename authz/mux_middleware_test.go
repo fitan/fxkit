@@ -18,10 +18,10 @@ func newMuxAuthzHandler(t *testing.T) http.Handler {
 
 	mw := NewMuxMiddleware(MuxMiddlewareConfig{
 		Enabled:       true,
-		DevHeaderUser: true,
-		Enforcer:      enf,
-		SubjectFunc:   DefaultDevSubjectFunc,
-		PublicPaths:   []string{"/public"},
+		DevHeaderUser: true, DevOrgID: DefaultDomain,
+		Enforcer:    enf,
+		SubjectFunc: DefaultDevSubjectFunc,
+		PublicPaths: []string{"/public"},
 	})
 	return mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		subj, _ := SubjectFromContext(r.Context())

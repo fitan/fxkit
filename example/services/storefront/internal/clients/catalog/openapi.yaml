@@ -3,11 +3,8 @@ components:
     AddRolePermissionBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/AddRolePermissionBody.json
-          format: uri
-          readOnly: true
+        domain:
+          default: "*"
           type: string
         method:
           minLength: 1
@@ -22,11 +19,8 @@ components:
     AddSubjectRoleBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/AddSubjectRoleBody.json
-          format: uri
-          readOnly: true
+        domain:
+          default: "*"
           type: string
         role:
           minLength: 1
@@ -37,12 +31,6 @@ components:
     ArticleDetail:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ArticleDetail.json
-          format: uri
-          readOnly: true
-          type: string
         author:
           type: string
         body:
@@ -67,6 +55,26 @@ components:
         - createdAt
         - updatedAt
       type: object
+    ArticleFanout:
+      additionalProperties: false
+      properties:
+        ArticleID:
+          format: int64
+          type: integer
+        CreatedAt:
+          format: date-time
+          type: string
+        ID:
+          format: int64
+          type: integer
+        Title:
+          type: string
+      required:
+        - ID
+        - ArticleID
+        - Title
+        - CreatedAt
+      type: object
     ArticleListRow:
       additionalProperties: false
       properties:
@@ -87,12 +95,6 @@ components:
     CommentRow:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/CommentRow.json
-          format: uri
-          readOnly: true
-          type: string
         articleId:
           format: int64
           type: integer
@@ -117,12 +119,6 @@ components:
     CreateArticleReq:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/CreateArticleReq.json
-          format: uri
-          readOnly: true
-          type: string
         body:
           type: string
         title:
@@ -133,12 +129,6 @@ components:
     CreateCommentReq:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/CreateCommentReq.json
-          format: uri
-          readOnly: true
-          type: string
         articleId:
           format: int64
           type: integer
@@ -153,12 +143,6 @@ components:
     CreateRoleBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/CreateRoleBody.json
-          format: uri
-          readOnly: true
-          type: string
         description:
           type: string
         display_name:
@@ -185,12 +169,6 @@ components:
     ErrorModel:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ErrorModel.json
-          format: uri
-          readOnly: true
-          type: string
         detail:
           description: A human-readable explanation specific to this occurrence of the problem.
           example: Property foo is required but is missing.
@@ -222,15 +200,20 @@ components:
           format: uri
           type: string
       type: object
+    FanoutBody:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/ArticleFanout"
+          nullable: true
+          type: array
+      required:
+        - items
+      type: object
     HeartbeatOut:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/HeartbeatOut.json
-          format: uri
-          readOnly: true
-          type: string
         lastTick:
           format: date-time
           type: string
@@ -244,13 +227,10 @@ components:
     IncInBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/IncInBody.json
-          format: uri
-          readOnly: true
-          type: string
         delta:
+          format: int64
+          type: integer
+        holdMs:
           format: int64
           type: integer
       required:
@@ -259,27 +239,23 @@ components:
     IncOutput:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/IncOutput.json
-          format: uri
-          readOnly: true
-          type: string
+        actorInflight:
+          format: int32
+          type: integer
+        inflight:
+          format: int32
+          type: integer
         value:
           format: int64
           type: integer
       required:
         - value
+        - inflight
+        - actorInflight
       type: object
     ListBindingsBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ListBindingsBody.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/RoleBinding"
@@ -291,12 +267,6 @@ components:
     ListPermissionsBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ListPermissionsBody.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/PermissionView"
@@ -319,12 +289,6 @@ components:
     ListPoliciesBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ListPoliciesBody.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/Policy"
@@ -336,12 +300,6 @@ components:
     ListResultArticleListRow:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ListResultArticleListRow.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/ArticleListRow"
@@ -366,12 +324,6 @@ components:
     ListResultCommentRow:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ListResultCommentRow.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/CommentRow"
@@ -396,12 +348,6 @@ components:
     ListRolesBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/ListRolesBody.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/RoleRecord"
@@ -410,53 +356,16 @@ components:
       required:
         - items
       type: object
-    PermissionBody:
+    PermissionView:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/PermissionBody.json
-          format: uri
-          readOnly: true
-          type: string
         description:
           type: string
-        method:
-          description: HTTP 方法，如 GET
-          minLength: 1
-          type: string
-        operation_id:
-          type: string
-        path:
-          description: Huma 路径，如 /users/{id}
-          minLength: 1
-          type: string
-        summary:
-          type: string
-        tags:
+        grants:
           items:
             type: string
           nullable: true
           type: array
-      required:
-        - method
-        - path
-      type: object
-    PermissionView:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/PermissionView.json
-          format: uri
-          readOnly: true
-          type: string
-        description:
-          type: string
-        id:
-          format: int64
-          minimum: 0
-          type: integer
         method:
           type: string
         operation_id:
@@ -473,7 +382,6 @@ components:
           nullable: true
           type: array
       required:
-        - id
         - method
         - path
         - pattern
@@ -481,52 +389,56 @@ components:
         - summary
         - description
         - tags
+        - grants
       type: object
     Policy:
       additionalProperties: false
       properties:
-        Act:
+        act:
           type: string
-        Obj:
+        dom:
           type: string
-        Sub:
+        obj:
+          type: string
+        sub:
           type: string
       required:
-        - Sub
-        - Obj
-        - Act
+        - sub
+        - dom
+        - obj
+        - act
       type: object
     RoleBinding:
       additionalProperties: false
       properties:
-        Role:
+        dom:
           type: string
-        User:
+        role:
+          type: string
+        user:
           type: string
       required:
-        - User
-        - Role
+        - user
+        - role
+        - dom
       type: object
     RolePermission:
       additionalProperties: false
       properties:
+        domain:
+          type: string
         method:
           type: string
         path:
           type: string
       required:
+        - domain
         - path
         - method
       type: object
     RolePermissionsBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/RolePermissionsBody.json
-          format: uri
-          readOnly: true
-          type: string
         items:
           items:
             $ref: "#/components/schemas/RolePermission"
@@ -538,12 +450,6 @@ components:
     RoleRecord:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/RoleRecord.json
-          format: uri
-          readOnly: true
-          type: string
         created_at:
           format: date-time
           type: string
@@ -566,11 +472,8 @@ components:
     SetRolePermissionsBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/SetRolePermissionsBody.json
-          format: uri
-          readOnly: true
+        domain:
+          default: "*"
           type: string
         items:
           items:
@@ -583,11 +486,8 @@ components:
     SetSubjectRolesBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/SetSubjectRolesBody.json
-          format: uri
-          readOnly: true
+        domain:
+          default: "*"
           type: string
         roles:
           items:
@@ -600,12 +500,6 @@ components:
     SubjectRolesBody:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/SubjectRolesBody.json
-          format: uri
-          readOnly: true
-          type: string
         roles:
           items:
             type: string
@@ -617,12 +511,6 @@ components:
     UpdateArticleReq:
       additionalProperties: false
       properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/UpdateArticleReq.json
-          format: uri
-          readOnly: true
-          type: string
         body:
           type: string
         id:
@@ -638,6 +526,25 @@ info:
   version: 1.0.0
 openapi: 3.0.3
 paths:
+  /article-fanout:
+    get:
+      operationId: listArticleFanout
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FanoutBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Second Hatchet consumer of article-created (fan-out)
+      tags:
+        - Articles
   /articles:
     get:
       operationId: listarticles
@@ -848,7 +755,7 @@ paths:
         - Authz
   /authz/permissions:
     get:
-      description: 返回已登记的 path/method + Huma 元数据
+      description: 从路由表 + Casbin 策略派生（只读）
       operationId: listAuthzPermissions
       parameters:
         - description: 模糊搜索 method/path/summary 等
@@ -895,112 +802,6 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: 列出 API 权限目录
-      tags:
-        - Authz
-    post:
-      operationId: createAuthzPermission
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PermissionBody"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PermissionView"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      summary: 创建权限目录项
-      tags:
-        - Authz
-  /authz/permissions/{id}:
-    delete:
-      description: 仅删除目录元数据，不删除 Casbin 策略
-      operationId: deleteAuthzPermission
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            format: int64
-            minimum: 0
-            type: integer
-      responses:
-        "204":
-          description: No Content
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      summary: 删除权限目录项
-      tags:
-        - Authz
-    get:
-      operationId: getAuthzPermission
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            format: int64
-            minimum: 0
-            type: integer
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PermissionView"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      summary: 获取权限目录项
-      tags:
-        - Authz
-    put:
-      operationId: updateAuthzPermission
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            format: int64
-            minimum: 0
-            type: integer
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PermissionBody"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PermissionView"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      summary: 更新权限目录项
       tags:
         - Authz
   /authz/policies:
@@ -1122,6 +923,12 @@ paths:
             type: string
         - explode: false
           in: query
+          name: domain
+          schema:
+            default: "*"
+            type: string
+        - explode: false
+          in: query
           name: path
           schema:
             minLength: 1
@@ -1234,6 +1041,12 @@ paths:
           required: true
           schema:
             type: string
+        - explode: false
+          in: query
+          name: domain
+          schema:
+            default: "*"
+            type: string
       responses:
         "200":
           content:
@@ -1320,6 +1133,12 @@ paths:
           required: true
           schema:
             type: string
+        - explode: false
+          in: query
+          name: domain
+          schema:
+            default: "*"
+            type: string
       responses:
         "204":
           description: No Content
@@ -1332,6 +1151,26 @@ paths:
       summary: 移除用户角色
       tags:
         - Authz
+  /cache-demo:
+    get:
+      operationId: cacheDemo
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: cachex Get/Set demo
+      tags:
+        - Platform
   /comments:
     get:
       operationId: listComments
@@ -1541,6 +1380,24 @@ paths:
       summary: Last hatchetx reminder tick
       tags:
         - Platform
+    post:
+      operationId: callHeartbeat
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeartbeatOut"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Trigger heartbeat actor once
+      tags:
+        - Platform
   /me:
     get:
       operationId: getMe
@@ -1578,6 +1435,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
-      summary: Anonymous ping (authz.public)
+      summary: Anonymous ping (auth.public_paths)
       tags:
         - Platform

@@ -11,7 +11,7 @@ type Subject struct {
 	ID          string
 	OrgID       string
 	Permissions []string // Logto scopes / permissions，如 "users:list"
-	Roles       []string // 可选，仅供展示；鉴权看 Permissions
+	Roles       []string // 可选。路由鉴权看 Casbin；handler 里可用 Has 看 Permissions
 }
 
 type subjectCtxKey struct{}
@@ -65,5 +65,5 @@ func DefaultDevSubjectFunc(_ context.Context, h http.Header) Subject {
 	if id == "" {
 		return Subject{}
 	}
-	return Subject{ID: id}
+	return Subject{ID: id, OrgID: strings.TrimSpace(h.Get("X-Org"))}
 }

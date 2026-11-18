@@ -41,17 +41,19 @@ func newLeaseID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// claimPredicate 是「可认领」条件：pending，或租约已过期的 processing。
+// claimPredicate 是「可认领」条件：pending 且已到重试时间，或租约已过期的 processing。
 // PG 与 SQLite 两条路径共用，避免改一处忘另一处。
-const claimPredicate = `(status = ? OR (status = ? AND (locked_at IS NULL OR locked_at < ?)))`
+const claimPredicate = `((status = ? OR (status = ? AND (locked_at IS NULL OR locked_at < ?))) AND (next_attempt_at IS NULL OR next_attempt_at <= ?))`
 
 // claimSetValues 是认领时要写入的列。
+//
+// 注意：**不在这里递增 attempts**。租约过期后被其他副本重领只是「换人执行」，
+// 不是一次业务失败；把它计入重试预算会让 relay 崩溃/发布超时直接把消息打成 failed。
 func claimSetValues(now time.Time, leaseID string) map[string]any {
 	return map[string]any{
 		"status":    StatusProcessing,
 		"locked_at": now,
 		"lease_id":  leaseID,
-		"attempts":  gorm.Expr("attempts + 1"),
 	}
 }
 
@@ -62,7 +64,6 @@ func markClaimed(claimed []OutboxEvent, now time.Time, leaseID string) {
 		locked := now
 		claimed[i].LockedAt = &locked
 		claimed[i].LeaseID = leaseID
-		claimed[i].Attempts++
 	}
 }
 
@@ -78,7 +79,7 @@ func claimSkipLocked(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxE
 		if err := tx.Raw(
 			`SELECT * FROM outbox_events WHERE `+claimPredicate+
 				` ORDER BY id ASC LIMIT ? FOR UPDATE SKIP LOCKED`,
-			StatusPending, StatusProcessing, p.StaleBefore, p.Limit,
+			StatusPending, StatusProcessing, p.StaleBefore, now, p.Limit,
 		).Scan(&pending).Error; err != nil {
 			return fmt.Errorf("outbox: claim select: %w", err)
 		}
@@ -111,11 +112,11 @@ func claimSQLite(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// SQLite 不支持 SKIP LOCKED；子查询 UPDATE 在事务内是原子的。
 		if err := tx.Raw(
-			`UPDATE outbox_events SET status = ?, locked_at = ?, lease_id = ?, attempts = attempts + 1 WHERE id IN (
+			`UPDATE outbox_events SET status = ?, locked_at = ?, lease_id = ? WHERE id IN (
 				SELECT id FROM outbox_events WHERE `+claimPredicate+
 				` ORDER BY id ASC LIMIT ?
 			) RETURNING *`,
-			StatusProcessing, now, leaseID, StatusPending, StatusProcessing, p.StaleBefore, p.Limit,
+			StatusProcessing, now, leaseID, StatusPending, StatusProcessing, p.StaleBefore, now, p.Limit,
 		).Scan(&claimed).Error; err != nil {
 			return fmt.Errorf("outbox: sqlite claim: %w", err)
 		}

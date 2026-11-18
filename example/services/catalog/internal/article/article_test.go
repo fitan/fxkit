@@ -3,10 +3,11 @@ package article_test
 import (
 	"context"
 	"fmt"
-	"testing"
 	"path/filepath"
+	"testing"
 
 	"github.com/fitan/fxkit-example/services/catalog/internal/article"
+	"github.com/fitan/fxkit-example/services/catalog/internal/repository"
 	"github.com/fitan/fxkit/crudx"
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/gormx"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// setupTestDB 为每个测试创建独立的 SQLite 数据库。
 func setupTestDB(t *testing.T) *gormx.Client {
 	dsn := filepath.Join(t.TempDir(), "article_test.db")
 	client, err := gormx.New(&gormx.Config{
@@ -27,11 +29,12 @@ func setupTestDB(t *testing.T) *gormx.Client {
 	return client
 }
 
+// setupArticleService 构造 article.Service 并跑 Lifecycle.OnStart（迁移表）。
 func setupArticleService(t *testing.T, client *gormx.Client) *article.Service {
 	lc := di.NewLifecycle()
 	obcfg := &outbox.Config{Enabled: false}
 
-	svc, err := article.NewService(client, nil, nil, obcfg, lc)
+	svc, err := article.NewService(client, repository.NewArticleRepo(client), nil, nil, obcfg, lc)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 
@@ -39,6 +42,7 @@ func setupArticleService(t *testing.T, client *gormx.Client) *article.Service {
 	return svc
 }
 
+// TestArticleService_CRUD 覆盖创建/重名冲突/校验/查询/乐观锁更新/删除。
 func TestArticleService_CRUD(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestDB(t)
@@ -54,6 +58,7 @@ func TestArticleService_CRUD(t *testing.T) {
 	assert.Equal(t, "Go 1.27 Generics", created.Title)
 	assert.Equal(t, "Deep dive into reverse type inference", created.Body)
 	assert.Equal(t, "draft", created.Status)
+	assert.Equal(t, int64(1), created.Version)
 
 	idStr := fmt.Sprintf("%d", created.ID)
 
@@ -78,13 +83,23 @@ func TestArticleService_CRUD(t *testing.T) {
 
 	// 5. 更新
 	updated, err := svc.Update(ctx, article.UpdateArticleReq{
-		ID:    idStr,
-		Title: "Go 1.27 Generics Updated",
-		Body:  "Updated body content",
+		ID:      idStr,
+		Version: detail.Version,
+		Title:   "Go 1.27 Generics Updated",
+		Body:    "Updated body content",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Go 1.27 Generics Updated", updated.Title)
 	assert.Equal(t, "Updated body content", updated.Body)
+	assert.Equal(t, detail.Version+1, updated.Version)
+
+	// 陈旧 version 应该冲突
+	_, err = svc.Update(ctx, article.UpdateArticleReq{
+		ID:      idStr,
+		Version: detail.Version,
+		Title:   "stale update",
+	})
+	assert.Error(t, err)
 
 	// 6. 带过滤条件的列表查询
 	listRes, err := svc.List(ctx, crudx.ListParams{
@@ -103,6 +118,7 @@ func TestArticleService_CRUD(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestArticleService_Fanout 验证 fan-out 副表初始为空。
 func TestArticleService_Fanout(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestDB(t)

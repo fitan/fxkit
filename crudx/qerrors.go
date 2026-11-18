@@ -25,6 +25,10 @@ const (
 	ReasonDistinctRelationSort = "DISTINCT_RELATION_SORT_UNSUPPORTED"
 	ReasonCursorNeedsPK        = "CURSOR_NEEDS_PRIMARY_KEY"
 	ReasonCursorRelationSort   = "CURSOR_RELATION_SORT_UNSUPPORTED"
+	// ReasonInvalidCursor: 游标内容非法（非标量排序值、无法解码等）。
+	ReasonInvalidCursor = "INVALID_CURSOR"
+	// ReasonInvalidCursorPK: 游标里的主键无法转换为模型中主键的类型。
+	ReasonInvalidCursorPK = "INVALID_CURSOR_PK"
 )
 
 // InvalidQueryCondition 为 q= 解析/校验失败返回 HTTP 400。

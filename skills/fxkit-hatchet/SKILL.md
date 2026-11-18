@@ -51,7 +51,6 @@ client.Crons()       // *features.CronsClient (周期性 Cron)
 client.RateLimits()  // *features.RateLimitsClient (全局限流规则管理)
 client.Events()      // v0Client.EventClient (事件发布)
 client.Workflows()   // *features.WorkflowsClient (工作流定义管理)
-client.Workers()     // *features.WorkersClient (Worker 状态)
 ```
 
 ---
@@ -146,6 +145,7 @@ var UserEventsModule = di.Module("user-events",
         "users-on-user-created", // task 名（相同 task 名在多副本间竞争消费，不同 task 名多重扇出）
         "user-created",          // event key (topic)
         func(ctx hatchetx.Context, ev UserCreatedEvent) error {
+            // 已完成返回 nil；别人还在处理返回 outbox.ErrInboxBusy，交给 Hatchet 重试。
             return svc.inbox.Once(ctx, outbox.OnceInput{
                 Key:   "user-created:" + ev.UserID,
                 Topic: "user-created",
@@ -195,7 +195,6 @@ func ProvideOrderWorkflow(client *hatchetx.Client) hatchetx.WorkflowBase {
 
 // 在模块 DI 中一行注册：
 var Module = di.Module("order",
-    di.Provide(ProvideOrderWorkflow),
     hatchetx.ProvideWorkflowFn(func(c *hatchetx.Client) ([]hatchetx.WorkflowBase, error) {
         return []hatchetx.WorkflowBase{ProvideOrderWorkflow(c)}, nil
     }),
@@ -254,7 +253,7 @@ task := client.NewStandaloneTask("send-email", sendEmailFn,
 | 事务生产 | `outbox.EnqueueTopicMsg`（同事务写入） → relay → `PushEvent` |
 | 单消费者互斥 | **同名** task + 多 worker 实例并发争抢 |
 | 多消费者扇出 | **不同** task 名订阅同一个 event key |
-| 消费幂等 | 消费端 `inbox.Once`（At-least-once → Exactly-once） |
+| 消费幂等 | `inbox.Once`：至少一次投递。已完成返回 nil；还在处理返回 `outbox.ErrInboxBusy`，交给 Hatchet 重试 |
 
 ### 生产（事务安全）
 
@@ -272,6 +271,12 @@ return client.Transaction(ctx, func(txCtx context.Context) error {
 })
 ```
 
+## 保留与 DLQ
+
+- `outbox.purge_interval > 0` 时自动清理 published/failed + inbox done；默认关闭。
+- 多副本用 Consul 锁 `fxkit:outbox:purge` 串行；无锁时退化为单进程执行。
+- SDK：`Store.ListFailed` / `Store.PurgeFailed` / `Inbox.ListStale` / `Inbox.PurgeDone`。
+
 ---
 
 ## 语义 Actor（并发并发邮箱模式）
@@ -280,7 +285,7 @@ return client.Transaction(ctx, func(txCtx context.Context) error {
 
 - **保证**：同一 `actorId` 的所有请求强制排队串行；不同 `actorId` 跨节点并行。
 - **与传统 Dapr Actor 的区别**：无进程内状态驻留（状态必须持久化在 DB/Redis 中）。
-- **关键约束**：入参结构体**必须**能 JSON 序列化出 `"actorId"` 字段（嵌入 `hatchetx.ActorRef` 或使用 `json:"actorId"` 标签）。
+- **关键约束**：入参结构体**必须直接匿名嵌入** `hatchetx.ActorRef`。`NewActor` 在装配期强校验；未嵌入会直接返回错误，服务无法启动。命名嵌入、指针嵌入、间接嵌入都会被拒绝。
 
 ```go
 type CounterInput struct {
@@ -288,7 +293,10 @@ type CounterInput struct {
     Delta int64 `json:"delta"`
 }
 
-actor := hatchetx.NewActor("catalog-counter", handleInc)
+actor, err := hatchetx.NewActor("catalog-counter", handleInc)
+if err != nil {
+    return err // 启动失败
+}
 hatchetx.ProvideRegistrar(actor.Registrar())
 
 // 调用

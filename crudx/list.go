@@ -44,10 +44,12 @@ func (lr ListResult[T]) Map[R any](fn func(T) R) ListResult[R] {
 //
 // ToRow 将每个取出的模型投影为 API 列表行。
 type ListInput[M, Row any] struct {
-	DB       *gorm.DB                // 已限定范围的基准查询（已设置 Model+Table）
-	Spec     ListSpec                // ZStack 风格的过滤/排序注册表
-	Params   ListParams              // 请求参数（offset 或游标）
-	ToRow    func(M) Row             // 必需的投影
+	DB     *gorm.DB   // 已限定范围的基准查询（已设置 Model+Table）
+	Spec   ListSpec   // ZStack 风格的过滤/排序注册表
+	Params ListParams // 请求参数（offset 或游标）
+	// ToRow 将每个取出的模型投影为 API 列表行（必需）。
+	// 返回 entity 时用 identity：func(m entity.X) entity.X { return m }。
+	ToRow    func(M) Row
 	Select   []string                // 可选的 SELECT 列白名单
 	Preload  func(*gorm.DB) *gorm.DB // 可选，在 Find 之前应用的预加载
 	Preloads []string                // 可选，需要预加载的关联名，例如 []string{"Profile"}
@@ -75,30 +77,11 @@ func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult
 	if err != nil {
 		return ListResult[Row]{}, err
 	}
+	if err := validateSelectColumns(in.Select); err != nil {
+		return ListResult[Row]{}, err
+	}
 
 	tx := in.DB.WithContext(ctx)
-	selectCols := in.Select
-	// 游标需要读取主键来生成 nextCursor；Select 未投影主键时自动补上，
-	// 否则 FormatPrimaryKey 会取到零值，第二页直接变空。
-	if (in.Params.Cursor != "" || in.Params.UseCursor) && len(selectCols) > 0 {
-		if meta.Column == "" {
-			return ListResult[Row]{}, InvalidQueryCondition("", ReasonCursorNeedsPK)
-		}
-		pkCol := qualifiedColumn(meta.Table, meta.Column)
-		if !selectHasColumn(selectCols, meta.Column, pkCol) {
-			cp := make([]string, 0, len(selectCols)+1)
-			cp = append(cp, selectCols...)
-			selectCols = append(cp, pkCol)
-		}
-	}
-	if len(selectCols) > 0 {
-		cols := make([]any, len(selectCols))
-		for i, col := range selectCols {
-			cols[i] = col
-		}
-		tx = tx.Select(cols[0], cols[1:]...)
-	}
-
 	params := in.Params
 	pkCol := qualifiedColumn(meta.Table, meta.Column)
 	// 先应用过滤/排序/游标而不加 Limit/Offset，这样无论 GORM 版本如何 Count 都准确。
@@ -126,6 +109,21 @@ func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult
 			return ListResult[Row]{}, fxerrors.Wrap(err)
 		}
 		total = &n
+	}
+
+	// Select 必须在 Count 之后再应用（Count 不应被列投影影响）。
+	// 游标模式需要额外补上主键与排序列：GORM 不会为未 SELECT 的列填值，
+	// 排序列取到零值时游标会退化为「永远第一页」。
+	selectCols, err := listSelectColumns(in.Select, in.Spec, meta, params)
+	if err != nil {
+		return ListResult[Row]{}, err
+	}
+	if len(selectCols) > 0 {
+		cols := make([]any, len(selectCols))
+		for i, col := range selectCols {
+			cols[i] = col
+		}
+		tx = tx.Select(cols[0], cols[1:]...)
 	}
 
 	tx = tx.Limit(params.Limit)
@@ -214,6 +212,39 @@ func selectHasColumn(cols []string, names ...string) bool {
 		}
 	}
 	return false
+}
+
+// listSelectColumns 补齐游标模式下必需的投影列。
+//
+// 主键用于生成 nextCursor；排序列用于读取当前页的排序值。
+// 只补主键而不补排序列时，游标会编码零值，第二页重复第一页。
+func listSelectColumns(sel []string, spec ListSpec, meta *ModelMeta, params ListParams) ([]string, error) {
+	if len(sel) == 0 {
+		return nil, nil
+	}
+	if params.Cursor == "" && !params.UseCursor {
+		return sel, nil
+	}
+	if meta.Column == "" {
+		return nil, InvalidQueryCondition("", ReasonCursorNeedsPK)
+	}
+	out := append([]string(nil), sel...)
+	pkCol := qualifiedColumn(meta.Table, meta.Column)
+	if !selectHasColumn(out, meta.Column, pkCol) {
+		out = append(out, pkCol)
+	}
+	col, _, ok := validatedSortPath(spec, params.SortBy, params.SortDirection)
+	if !ok {
+		return nil, InvalidQueryCondition("", ReasonInvalidSortField)
+	}
+	base := col
+	if i := strings.LastIndex(base, "."); i >= 0 {
+		base = base[i+1:]
+	}
+	if !selectHasColumn(out, col, base) {
+		out = append(out, col)
+	}
+	return out, nil
 }
 
 func nextCursor[M any](last *M, params ListParams, spec ListSpec, meta *ModelMeta) (string, error) {

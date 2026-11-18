@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestNewFromFactory 验证 reqx + 生成 client 的两种接入方式：
+//   - nil factory 明确报错；
+//   - 静态 Seeds 能发起真实 HTTP 调用。
 func TestNewFromFactory(t *testing.T) {
 	serverCalled := false
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

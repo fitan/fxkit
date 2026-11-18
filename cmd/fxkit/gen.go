@@ -39,7 +39,6 @@ type resourceField struct {
 	Column   string // 数据库列名，由 GORM NamingStrategy 推导
 	GoType   string // Go 类型字面量
 	GormTag  string // gorm:"..."（由固定的标记片段拼成）
-	Tags     string // 额外 tag / 校验提示
 	Required bool
 	Unique   bool
 	Indexed  bool
@@ -86,6 +85,7 @@ func genResourceCmd() *cobra.Command {
 		search    []string
 		filters   []string
 		sortSpec  string
+		force     bool
 	)
 
 	cmd := &cobra.Command{
@@ -146,8 +146,8 @@ Example:
 				return err
 			}
 			outFile := filepath.Join(absOut, data.Package+".go")
-			if _, err := os.Stat(outFile); err == nil {
-				return fmt.Errorf("refusing to overwrite existing file %q", outFile)
+			if _, err := os.Stat(outFile); err == nil && !force {
+				return fmt.Errorf("refusing to overwrite existing file %q (use --force)", outFile)
 			}
 
 			formatted, err := renderResource(data)
@@ -176,6 +176,7 @@ Example:
 	cmd.Flags().StringSliceVar(&search, "search", nil, "comma-separated columns allowing q=~ fuzzy match (must be indexed)")
 	cmd.Flags().StringSliceVar(&filters, "filter", nil, "comma-separated columns allowing q= exact / in filters")
 	cmd.Flags().StringVar(&sortSpec, "sort", "created_at desc", "default ORDER BY clause for List")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite the generated file if it exists")
 	return cmd
 }
 
@@ -197,7 +198,7 @@ func parseResourceArgs(name, tableOverride string, fields, search, filters []str
 			return nil, fmt.Errorf("parse field %q: %w", raw, err)
 		}
 		if isReservedFieldName(f.Name) {
-			return nil, fmt.Errorf("field %q is reserved: generated models already define ID/CreatedAt/UpdatedAt", raw)
+			return nil, fmt.Errorf("field %q is reserved: generated models already define ID/CreatedAt/UpdatedAt/TableName", raw)
 		}
 		key := strings.ToLower(f.Name)
 		if prev, ok := seenName[key]; ok {
@@ -311,7 +312,8 @@ func normalizeIdent(name string) string {
 // isReservedFieldName 报告字段名是否与生成的 model 内置字段冲突。
 func isReservedFieldName(name string) bool {
 	switch normalizeIdent(name) {
-	case "id", "createdat", "updatedat":
+	case "id", "createdat", "updatedat", "tablename":
+		// tablename 会生成同名方法 TableName()；字段与方法同名会导致生成物无法编译。
 		return true
 	}
 	return false
@@ -589,15 +591,6 @@ func parseField(raw string) (resourceField, error) {
 		default:
 			return f, fmt.Errorf("unknown flag %q", flag)
 		}
-	}
-
-	// 构建 struct 字段 tag
-	extraTags := []string{}
-	if f.Required {
-		extraTags = append(extraTags, `required:"true"`)
-	}
-	if len(extraTags) > 0 {
-		f.Tags = " " + strings.Join(extraTags, " ")
 	}
 
 	return f, nil

@@ -1,0 +1,20 @@
+# migrations
+
+框架与业务表的版本化迁移。建议用 Atlas 管理：
+
+```bash
+# 首次：把 fxkit 框架表写成 baseline
+fxkit migrate baseline --dialect postgres --dir migrations/postgres
+
+# 之后：新增业务迁移
+atlas migrate diff add_orders \
+  --dir file://migrations/postgres \
+  --to file://schema.hcl \
+  --dev-url "docker://postgres/16/dev"
+
+# CI / 发布
+atlas migrate lint  --dir file://migrations/postgres --dev-url "docker://postgres/16/dev" --latest 1
+atlas migrate apply --dir file://migrations/postgres --url "$DATABASE_URL"
+```
+
+应用启动只做 `migrate check`，不执行 DDL。

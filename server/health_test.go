@@ -27,7 +27,9 @@ func (c staticChecker) Check(context.Context) error {
 
 func newHealthMux(checkers ...HealthChecker) *chi.Mux {
 	mux := chi.NewRouter()
-	RegisterHealth(HealthParams{Mux: mux, Checkers: checkers})
+	if err := RegisterHealth(HealthParams{Mux: mux, Checkers: checkers}); err != nil {
+		panic(err)
+	}
 	return mux
 }
 
@@ -94,11 +96,11 @@ func (c slowChecker) Check(ctx context.Context) error {
 
 func TestReadyz_RespectsTimeout(t *testing.T) {
 	mux := chi.NewRouter()
-	RegisterHealth(HealthParams{
+	require.NoError(t, RegisterHealth(HealthParams{
 		Mux:      mux,
 		Checkers: []HealthChecker{slowChecker{delay: 5 * time.Second}},
 		Timeout:  50 * time.Millisecond,
-	})
+	}))
 
 	start := time.Now()
 	rec := doGet(t, mux, "/readyz")
@@ -111,7 +113,7 @@ func TestReadyz_RespectsTimeout(t *testing.T) {
 // TestReadyz_CheckersRunConcurrently 并发检查：3 个 200ms 的检查应在 ~200ms 内完成。
 func TestReadyz_CheckersRunConcurrently(t *testing.T) {
 	mux := chi.NewRouter()
-	RegisterHealth(HealthParams{
+	require.NoError(t, RegisterHealth(HealthParams{
 		Mux: mux,
 		Checkers: []HealthChecker{
 			slowChecker{delay: 200 * time.Millisecond},
@@ -119,7 +121,7 @@ func TestReadyz_CheckersRunConcurrently(t *testing.T) {
 			slowChecker{delay: 200 * time.Millisecond},
 		},
 		Timeout: 2 * time.Second,
-	})
+	}))
 
 	start := time.Now()
 	rec := doGet(t, mux, "/readyz")
@@ -136,6 +138,6 @@ func TestVersion_Route(t *testing.T) {
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
-func TestRegisterHealth_NilMuxIsNoop(t *testing.T) {
-	assert.NotPanics(t, func() { RegisterHealth(HealthParams{}) })
+func TestRegisterHealth_NilMuxReturnsError(t *testing.T) {
+	assert.Error(t, RegisterHealth(HealthParams{}))
 }

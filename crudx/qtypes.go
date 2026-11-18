@@ -90,7 +90,7 @@ type RelationSpec struct {
 type ListSpec struct {
 	Fields      map[string]FieldSpec
 	Relations   map[string]*RelationSpec
-	SortFields  map[string]string // API 路径 -> SQL 列/表达式
+	SortFields  map[string]string // API 路径 -> SQL 列（仅限标识符）
 	DefaultSort string
 	Limits      Limits
 	// StrictSort 为 true 时，只有 SortFields 里的名字可以出现在 sortBy。

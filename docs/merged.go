@@ -73,9 +73,21 @@ func (m *mergedSpec) jsonBytes() ([]byte, error) {
 	return b, nil
 }
 
+// RouteOptions 控制文档挂载路径与 Scalar 资源。
+type RouteOptions struct {
+	BasePath  string
+	ScalarURL string
+	ScalarSRI string
+}
+
 // MergedRoutes 在 /docs 提供 Scalar，在 /openapi.{yaml,json} 提供 OpenAPI，
 // 把可选的 baseYAML 与当前生效的 Huma spec 合并。
 func MergedRoutes(baseYAML []byte, api huma.API) []server.Route {
+	return MergedRoutesWithOptions(baseYAML, api, RouteOptions{})
+}
+
+// MergedRoutesWithOptions 是 [MergedRoutes] 的可配置版本。
+func MergedRoutesWithOptions(baseYAML []byte, api huma.API, opts RouteOptions) []server.Route {
 	spec := &mergedSpec{baseYAML: baseYAML, api: api}
 
 	yamlHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -102,14 +114,19 @@ func MergedRoutes(baseYAML []byte, api huma.API) []server.Route {
 
 	docsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(scalarHTML))
+		_, _ = w.Write([]byte(scalarHTML(opts)))
 	})
 
+	base := normalizeBasePath(opts.BasePath)
+	docsPath := joinURLPath(base, "/docs")
+	yamlPath := joinURLPath(base, "/openapi.yaml")
+	jsonPath := joinURLPath(base, "/openapi.json")
+
 	return []server.Route{
-		{Pattern: "/docs", Handler: docsHandler},
-		{Pattern: "/docs/", Handler: docsHandler},
-		{Pattern: "/openapi.yaml", Handler: yamlHandler},
-		{Pattern: "/openapi.json", Handler: jsonHandler},
+		{Pattern: docsPath, Handler: docsHandler},
+		{Pattern: docsPath + "/", Handler: docsHandler},
+		{Pattern: yamlPath, Handler: yamlHandler},
+		{Pattern: jsonPath, Handler: jsonHandler},
 	}
 }
 
@@ -131,13 +148,25 @@ func registerMerged(i di.Injector, baseYAML []byte) {
 	if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {
 		lc.AppendPreStartPhase(di.PhasePostWire, di.Hook{
 			OnStart: func(context.Context) error {
-				api, _ := di.Invoke[huma.API](i)
-				server.ProvideRoutes(MergedRoutes(baseYAML, api)...)(i)
+				server.ProvideRoutes(mergedRoutesFor(i, baseYAML)...)(i)
 				return nil
 			},
 		})
 		return
 	}
+	server.ProvideRoutes(mergedRoutesFor(i, baseYAML)...)(i)
+}
+
+func mergedRoutesFor(i di.Injector, baseYAML []byte) []server.Route {
 	api, _ := di.Invoke[huma.API](i)
-	server.ProvideRoutes(MergedRoutes(baseYAML, api)...)(i)
+	cfg, _ := di.Invoke[*Config](i)
+	opts := RouteOptions{}
+	if cfg != nil {
+		opts = RouteOptions{
+			BasePath:  cfg.BasePath,
+			ScalarURL: cfg.ScalarURL,
+			ScalarSRI: cfg.ScalarSRI,
+		}
+	}
+	return MergedRoutesWithOptions(baseYAML, api, opts)
 }

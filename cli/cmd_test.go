@@ -41,6 +41,38 @@ func TestBuildMigrateCmd_PrintUnknownDialect(t *testing.T) {
 	}
 }
 
+// TestBuildMigrateCmd_Baseline 覆盖 `migrate baseline`：写出框架 DDL，且默认不覆盖。
+func TestBuildMigrateCmd_Baseline(t *testing.T) {
+	dir := t.TempDir()
+	cmd := buildMigrateCmd(nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"baseline", "--dialect", "sqlite", "--dir", dir})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "0001_fxkit_core.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"outbox_events", "idempotency_keys"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("baseline missing %q", want)
+		}
+	}
+
+	// 第二次必须拒绝覆盖。
+	cmd2 := buildMigrateCmd(nil)
+	cmd2.SetOut(&bytes.Buffer{})
+	cmd2.SetErr(&bytes.Buffer{})
+	cmd2.SetArgs([]string{"baseline", "--dialect", "sqlite", "--dir", dir})
+	if err := cmd2.Execute(); err == nil {
+		t.Fatal("baseline must refuse to overwrite by default")
+	}
+}
+
 // TestBuildVersionCmd 覆盖 `version` 的输出（含构建信息字段名）。
 func TestBuildVersionCmd(t *testing.T) {
 	cmd := buildVersionCmd()

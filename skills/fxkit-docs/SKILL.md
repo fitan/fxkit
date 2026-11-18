@@ -10,7 +10,7 @@ description: >-
 
 # fxkit docs + openapi
 
-`docs.Module` 在 `fxkit.Default()` / `Minimal()`，提供骨架：
+`docs.Module` 在 `fxkit.Default()` 里，不在 `Minimal()` / `Core()` 里。默认 `docs.enabled: false`，不对外暴露。打开后提供骨架：
 
 | 路径 | 内容 |
 |------|------|
@@ -57,6 +57,8 @@ make openapi SVC=users
 ```bash
 fxkit gen client --spec services/users/openapi.yaml --out ./internal/clients/users
 ```
+
+`fxkit new` 默认把 spec 放在 `services/<svc>/openapi.yaml`。若按 `fxkit-layout` 使用 `api/` 目录，则改成 `services/<svc>/api/openapi.yaml`，并新增同目录的 `api/embed.go`（embed 不能引用父目录）。
 
 产出 `client.gen.go`（oapi-codegen types+client）、`reqx.go`（`NewFromFactory`）、`oapi-codegen.yaml`、`generate.go`、拷贝的 `openapi.yaml`。
 

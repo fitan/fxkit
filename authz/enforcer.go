@@ -16,50 +16,65 @@ import (
 	"gorm.io/gorm"
 )
 
-// defaultRBACModel 是经典 RBAC（sub, obj, act），带角色继承。
-// keyMatch2 让 /users/:id 这类模式与请求路径匹配。
+// DefaultDomain 是全局（跨租户）策略/角色绑定的 domain。
+const DefaultDomain = "*"
+
+func normalizeDomain(d string) string {
+	d = strings.TrimSpace(d)
+	if d == "" {
+		return DefaultDomain
+	}
+	return d
+}
+
+// defaultRBACModel 是带 domain 的 RBAC（sub, dom, obj, act），带角色继承。
 //
-// 注意：模型**不含** domain（多租户）维度。需要按租户隔离时，
-// 要么先把租户写进 sub（例如 "org:42/user:alice"），要么在 handler 里自行校验。
+// 匹配规则：
+//   - policy 的 dom 等于请求 dom，或为 "*"（全局策略）；
+//   - 角色绑定在请求 dom 或 "*"（跨租户管理员）；
+//   - keyMatch2 让 /users/:id 这类模式与请求路径匹配。
 const defaultRBACModel = `
 [request_definition]
-r = sub, obj, act
+r = sub, dom, obj, act
 
 [policy_definition]
-p = sub, obj, act
+p = sub, dom, obj, act
 
 [role_definition]
-g = _, _
+g = _, _, _
 
 [policy_effect]
 e = some(where (p.eft == allow))
 
 [matchers]
-m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && (r.act == p.act || p.act == "*")
+m = (r.dom == p.dom || p.dom == "*") && (g(r.sub, p.sub, r.dom) || g(r.sub, p.sub, "*")) && keyMatch2(r.obj, p.obj) && (r.act == p.act || p.act == "*")
 `
 
 // EnforceInput 是授权请求。
 //
-// 没有 domain 字段：早期版本有一个 `Dom` 预留字段但被 `_ = in.Dom` 静默忽略，
-// 调用方会误以为已按租户隔离。要按租户隔离，请把租户编进 Sub
-// （例如 "org:42/user:alice"）或改 matcher。
+// Dom 是租户 domain（来自 JWT org claim）。**空 Dom 一律拒绝**：
+// 缺失租户信息的 token 不能被当成全局身份。
+// 跨租户管理员通过 Dom="*" 的 g/p 规则实现。
 type EnforceInput struct {
 	Sub string
+	Dom string // 租户 domain；空 = 拒绝
 	Obj string // 例如 "/users/1" 或 "/users"
 	Act string // 例如 "GET"
 }
 
-// Policy 是一条 casbin p 规则：角色/用户可以对 Obj 执行 Act。
+// Policy 是一条 casbin p 规则：角色/用户可以在 Dom 下对 Obj 执行 Act。
 type Policy struct {
-	Sub string // 角色或主体
-	Obj string // 路径模式，例如 "/users/:id"
-	Act string // HTTP 方法或 "*"
+	Sub string `json:"sub"` // 角色或主体
+	Dom string `json:"dom"` // 租户 domain；"*" = 全局
+	Obj string `json:"obj"` // 路径模式，例如 "/users/:id"
+	Act string `json:"act"` // HTTP 方法或 "*"
 }
 
-// RoleBinding 是一条 casbin g 规则：用户继承角色。
+// RoleBinding 是一条 casbin g 规则：用户在某 domain 下继承角色。
 type RoleBinding struct {
-	User string
-	Role string
+	User string `json:"user"`
+	Role string `json:"role"`
+	Dom  string `json:"dom"` // 租户 domain；"*" = 全局角色
 }
 
 // Enforcer 是 fxkit 的 Casbin 门面。
@@ -68,6 +83,10 @@ type Enforcer struct {
 	e       *casbin.Enforcer
 	db      *gorm.DB // 权限目录（内存执行器为 nil）
 	enabled bool
+
+	// auto-bind 缓存（Huma / mux 中间件共用）。
+	bindMu   sync.Mutex
+	bindSeen map[string]struct{}
 
 	reloadMu     sync.Mutex
 	reloadCancel context.CancelFunc
@@ -106,10 +125,9 @@ func NewEnforcer(p enforcerParams) (*Enforcer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth casbin enforcer: %w", err)
 	}
+	// casbin.NewEnforcer 在 adapter 非 nil 时会自动 LoadPolicy；
+	// 再调一次只是重复读一遍策略表。
 	e.EnableAutoSave(true)
-	if err := e.LoadPolicy(); err != nil {
-		return nil, fmt.Errorf("auth casbin load: %w", err)
-	}
 	if autoMigrate {
 		if err := ensureRoleTable(p.DB.Pool()); err != nil {
 			return nil, fmt.Errorf("auth role table: %w", err)
@@ -206,15 +224,18 @@ func (e *Enforcer) Enforce(ctx context.Context, in EnforceInput) (bool, error) {
 		return true, nil
 	}
 	sub := strings.TrimSpace(in.Sub)
+	dom := strings.TrimSpace(in.Dom)
 	obj := normalizeRequestPath(in.Obj)
 	act := strings.ToUpper(strings.TrimSpace(in.Act))
-	if sub == "" || obj == "" || act == "" {
+	if sub == "" || dom == "" || obj == "" || act == "" {
 		return false, nil
 	}
 	e.mu.RLock()
 	start := time.Now()
-	allowed, err := e.e.Enforce(sub, obj, act)
-	e.mu.RUnlock()
+	// 必须 defer：Casbin 的 keyMatch2 对非法 policy 路径会 panic，
+	// 非 defer 的 RUnlock 会让读写锁永久泄漏，后续 ReloadPolicies 全部楔死。
+	defer e.mu.RUnlock()
+	allowed, err := e.e.Enforce(sub, dom, obj, act)
 	recordEnforce(ctx, time.Since(start), allowed, err)
 	return allowed, err
 }
@@ -231,8 +252,9 @@ func (e *Enforcer) AddPolicies(policies []Policy) error {
 		if sub == "" || obj == "" || act == "" {
 			continue
 		}
+		dom := normalizeDomain(p.Dom)
 		obj = HumaPathToCasbin(obj)
-		if _, err := e.e.AddPolicy(sub, obj, act); err != nil {
+		if _, err := e.e.AddPolicy(sub, dom, obj, act); err != nil {
 			return err
 		}
 	}
@@ -251,7 +273,8 @@ func (e *Enforcer) AddRoleBindings(bindings []RoleBinding) error {
 		if user == "" || role == "" {
 			continue
 		}
-		if _, err := e.e.AddGroupingPolicy(user, role); err != nil {
+		dom := normalizeDomain(b.Dom)
+		if _, err := e.e.AddGroupingPolicy(user, role, dom); err != nil {
 			return err
 		}
 	}
@@ -259,6 +282,11 @@ func (e *Enforcer) AddRoleBindings(bindings []RoleBinding) error {
 }
 
 // HumaPathToCasbin 把 Huma 的 `{id}` 占位符转换成 Casbin 的 `:id`，供 keyMatch2 策略使用。
+//
+// 非占位符部分按字面量转义正则元字符。keyMatch2 会把 policy 当正则编译：
+// `/files/{name}.json` 中的 `.` 会匹配任意字符（`xXjson` 也能通过），
+// 而 `(` 这类字符会让 regexp 编译失败并 panic。转义后 `.` 只匹配字面点号，
+// 非法字符也不再能制造 panic。`:`（参数）与 `*`（通配）保留语义。
 func HumaPathToCasbin(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -268,19 +296,28 @@ func HumaPathToCasbin(path string) string {
 	for i := 0; i < len(path); {
 		if path[i] == '{' {
 			j := strings.IndexByte(path[i:], '}')
-			if j < 0 {
-				b.WriteByte(path[i])
-				i++
+			if j > 0 {
+				name := path[i+1 : i+j]
+				b.WriteByte(':')
+				b.WriteString(name)
+				i += j + 1
 				continue
 			}
-			name := path[i+1 : i+j]
-			b.WriteByte(':')
-			b.WriteString(name)
-			i += j + 1
-			continue
 		}
-		b.WriteByte(path[i])
+		escapeCasbinLiteral(&b, path[i])
 		i++
 	}
+	if b.Len() == 0 {
+		return "/"
+	}
 	return b.String()
+}
+
+// escapeCasbinLiteral 写入一个字面量字节，必要时加反斜杠。
+func escapeCasbinLiteral(b *strings.Builder, c byte) {
+	switch c {
+	case '.', '+', '(', ')', '[', ']', '?', '^', '$', '|', '\\', '{', '}':
+		b.WriteByte('\\')
+	}
+	b.WriteByte(c)
 }

@@ -3,6 +3,7 @@ package outbox_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/fitan/fxkit/gormx"
@@ -13,7 +14,10 @@ import (
 
 func testDB(t *testing.T) *gormx.Client {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{TranslateError: true})
+	// 用临时文件而不是 :memory:：sqlite 的内存库是「每连接一个库」，
+	// relay 的并发发布/心脏跳动会拿到不同连接，表现为随机 "no such table"。
+	dsn := filepath.Join(t.TempDir(), "outbox.db")
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		t.Fatal(err)
 	}

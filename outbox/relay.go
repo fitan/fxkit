@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -109,9 +110,6 @@ func (r *Relay) Publisher() EventPublisher {
 	return r.publisher
 }
 
-func (r *Relay) getPublisher() EventPublisher { return r.Publisher() }
-
-// Notify 立即唤醒 relay 轮询循环处理新事件，不必等待 ticker。
 func (r *Relay) Notify() {
 	if r == nil {
 		return
@@ -140,10 +138,10 @@ func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
 }
 
 func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
-	if r == nil || r.client == nil {
-		return batchResult{}, fmt.Errorf("outbox: nil relay client")
+	if r == nil || r.client == nil || !r.client.Enabled() {
+		return batchResult{}, fmt.Errorf("outbox: relay has no configured database")
 	}
-	pub := r.getPublisher()
+	pub := r.Publisher()
 	if pub == nil {
 		return batchResult{}, fmt.Errorf("outbox: nil publisher")
 	}
@@ -170,10 +168,7 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 	hbwg.Add(1)
 	go func() {
 		defer hbwg.Done()
-		r.heartbeat(hbCtx, heartbeatInput{
-			LeaseID:      events[0].LeaseID,
-			ClaimTimeout: claimTimeout,
-		})
+		r.heartbeat(hbCtx, events[0].LeaseID, claimTimeout)
 	}()
 	defer func() {
 		hbCancel()
@@ -186,6 +181,12 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 	}
 	if concurrency > len(events) {
 		concurrency = len(events)
+	}
+
+	// 分组必须先于「并发度为 1」的捷径。PublishConcurrency 默认就是 1，
+	// 若先走串行循环，partition_field 永远不会生效，失败后同 key 的后续事件仍会被发出。
+	if field := strings.TrimSpace(r.cfg.PartitionField); field != "" {
+		return r.processPartitioned(ctx, pub, events, field, concurrency, maxRetries, &out)
 	}
 
 	if concurrency == 1 {
@@ -203,12 +204,6 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 			}
 		}
 		return out, errors.Join(markErrs...)
-	}
-
-	// 按 partition_field 分组：同一分组内串行（保序），不同分组并行。
-	// 设了它时，并发度就是「并行组数」，“同 actorId 保序 + 高吞吐”由此成立。
-	if field := strings.TrimSpace(r.cfg.PartitionField); field != "" {
-		return r.processPartitioned(ctx, pub, events, field, concurrency, maxRetries, &out)
 	}
 
 	// 未分组：全局并发，不保证同一批内的投递顺序。
@@ -250,8 +245,9 @@ type publishOutcome struct {
 // processPartitioned 按 payload 中的 field 分组投递：
 // 同一分组内严格串行（保持产生顺序），不同分组由最多 concurrency 个 worker 并行。
 //
-// 注意：分组只影响「同一批内」的顺序；跨批次顺序由 claimBatch 的 id ASC
-// 与「整批完成后才取下一批」共同保证，因此端到端仍然按 key 有序。
+// 顺序只保证单个 relay 的同一批：同 key 按 id 顺序投递，当前事件没成功就停住该组。
+// 跨批重试不保证同 key 顺序（组头在退避，组尾租约到期后可能先发）。
+// 多副本用 SKIP LOCKED 领走更大的 id，同样不保证全序。没设分组时，失败不挡住同批后续事件。
 func (r *Relay) processPartitioned(
 	ctx context.Context,
 	pub EventPublisher,
@@ -272,7 +268,7 @@ func (r *Relay) processPartitioned(
 		groups[key] = append(groups[key], ev)
 	}
 
-	if len(groups) > concurrency {
+	if len(groups) > 0 && concurrency > len(groups) {
 		concurrency = len(groups)
 	}
 
@@ -302,6 +298,12 @@ func (r *Relay) processPartitioned(
 				if o.markErr != nil {
 					res.markErrs = append(res.markErrs, o.markErr)
 				}
+				// 同 key 保序：当前事件未成功（失败或状态未落库）时必须停止本组，
+				// 否则后续事件会先于它被消费，正好在重试场景下破坏顺序。
+				// 未处理的事件仍处于 processing，租约到期后会被重新认领。
+				if !o.published || o.markErr != nil {
+					break
+				}
 			}
 			results[i] = res
 		}(i, groups[key])
@@ -320,9 +322,6 @@ func (r *Relay) processPartitioned(
 // partitionKeyOf 取 payload 中 field 的值作为分组键。
 // 取不到时返回空串（这些事件会归入同一串行组，宁可牺牲并发也不打乱顺序）。
 func partitionKeyOf(ev OutboxEvent, field string) string {
-	if len(ev.Payload) == 0 {
-		return ""
-	}
 	return strings.TrimSpace(gjson.GetBytes(ev.Payload, field).String())
 }
 
@@ -334,12 +333,22 @@ func (r *Relay) publishOne(ctx context.Context, pub EventPublisher, ev OutboxEve
 
 	meta := publishMetadata(ctx, ev)
 	start := time.Now()
-	pubErr := pub.PublishEvent(ctx, ev.Pubsub, ev.Topic, ev.Payload, meta)
+	pubCtx := ctx
+	if r.cfg.PublishTimeout > 0 {
+		var cancel context.CancelFunc
+		pubCtx, cancel = context.WithTimeout(ctx, r.cfg.PublishTimeout)
+		defer cancel()
+	}
+	pubErr := pub.PublishEvent(pubCtx, ev.Pubsub, ev.Topic, ev.Payload, meta)
 	recordPublish(ctx, time.Since(start), pubErr == nil)
+	// 状态回写不能跟着批次 ctx 一起被取消（优雅停机时批次 ctx 已 cancel），
+	// 否则已投递/已失败的事件会停在 processing，租约到期后被重复投递。
+	markCtx, markCancel := terminalWriteContext(ctx)
+	defer markCancel()
 	if pubErr != nil {
 		span.RecordError(pubErr)
 		span.SetStatus(codes.Error, "publish failed")
-		n, markErr := r.markFailed(ctx, ev, maxRetries, pubErr)
+		n, markErr := r.markFailed(markCtx, ev, maxRetries, pubErr)
 		if markErr != nil {
 			slog.ErrorContext(ctx, "outbox: markFailed after publish error",
 				"id", ev.ID, "error", markErr,
@@ -355,12 +364,12 @@ func (r *Relay) publishOne(ctx context.Context, pub EventPublisher, ev OutboxEve
 			return out
 		}
 		slog.WarnContext(ctx, "outbox: publish failed, will retry",
-			"id", ev.ID, "topic", ev.Topic, "attempts", ev.Attempts, "error", pubErr,
+			"id", ev.ID, "topic", ev.Topic, "attempts", ev.Attempts+1, "error", pubErr,
 		)
 		out.failed = true
 		return out
 	}
-	n, err := r.markPublished(ctx, ev)
+	n, err := r.markPublished(markCtx, ev)
 	if err != nil {
 		// 已投递但未能标记：租约过期后会被重新认领并再次投递。
 		// 早期实现在这里只记日志并返回成功，调用方看到的是「批次成功、
@@ -408,16 +417,18 @@ func idempotencyKeyValue(ev OutboxEvent) string {
 	return *ev.IdempotencyKey
 }
 
-type heartbeatInput struct {
-	LeaseID      string
-	ClaimTimeout time.Duration
+// terminalWriteContext 返回用于写终态（published/pending/failed）的 context。
+// 它脱离调用方的取消信号，保证优雅停机时仍能写完状态；同时保留硬超时，
+// 避免数据库挂起时无限阻塞。
+func terminalWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
-func (r *Relay) heartbeat(ctx context.Context, in heartbeatInput) {
-	if in.LeaseID == "" {
+func (r *Relay) heartbeat(ctx context.Context, leaseID string, claimTimeout time.Duration) {
+	if leaseID == "" {
 		return
 	}
-	interval := in.ClaimTimeout / 3
+	interval := claimTimeout / 3
 	if interval < time.Second {
 		interval = time.Second
 	}
@@ -430,10 +441,10 @@ func (r *Relay) heartbeat(ctx context.Context, in heartbeatInput) {
 		case <-ticker.C:
 			now := time.Now().UTC()
 			if err := r.client.Conn(ctx).Model(&OutboxEvent{}).
-				Where("lease_id = ? AND status = ?", in.LeaseID, StatusProcessing).
+				Where("lease_id = ? AND status = ?", leaseID, StatusProcessing).
 				Update("locked_at", now).Error; err != nil && !errors.Is(err, context.Canceled) {
 				slog.WarnContext(ctx, "outbox: lease heartbeat failed",
-					"lease_id", in.LeaseID, "error", err,
+					"lease_id", leaseID, "error", err,
 				)
 			}
 		}
@@ -455,21 +466,73 @@ func (r *Relay) markPublished(ctx context.Context, ev OutboxEvent) (int64, error
 }
 
 func (r *Relay) markFailed(ctx context.Context, ev OutboxEvent, maxRetries int, pubErr error) (int64, error) {
-	status := StatusPending
-	// ev.Attempts 在 claim 时已自增，因此它是「含本次在内的总尝试次数」。
-	// max_retries 语义为总尝试次数上限：0 = 只试一次就落 failed，N = 最多 N 次尝试。
-	if ev.Attempts >= maxRetries {
-		status = StatusFailed
+	// attempts 只在真正投递失败时递增：租约过期被重新认领不算一次业务重试。
+	// max_retries 仍是「总失败次数上限」：0 = 第一次失败就落 failed。
+	// 用 CASE 在一条 UPDATE 里完成「递增 + 判定终态 + 计算下次重试时间」，
+	// 避免读改写竞态。
+	//
+	// 列顺序必须写死。GORM 对 map 的 key 按字母序生成 SET，attempts 会排在
+	// 两个 CASE 前面；MySQL 从左到右赋值，CASE 会看到已经 +1 的 attempts，
+	// 于是 max_retries=N 在第 N-1 次失败就标成 failed。
+	next := r.nextAttemptAt(ev.Attempts + 1)
+	var nextAt any
+	if next != nil {
+		nextAt = *next
 	}
-	res := r.client.Conn(ctx).Model(&OutboxEvent{}).
-		Where("id = ? AND lease_id = ? AND status = ?", ev.ID, ev.LeaseID, StatusProcessing).
-		Updates(map[string]any{
-			"status":     status,
-			"last_error": pubErr.Error(),
-			"locked_at":  nil,
-			"lease_id":   "",
-		})
+	// PostgreSQL 在 THEN NULL ELSE ? 上推断不出参数类型（尤其 ? 是 NULL 时），
+	// 会把表达式当成 text，写不进 timestamptz。显式 CAST 把类型定死。
+	// MySQL / SQLite 不需要，CAST AS timestamptz 在 SQLite 里会把时间弄成数字。
+	nextExpr := "?"
+	if r.client.Conn(ctx).Dialector.Name() == "postgres" {
+		nextExpr = "CAST(? AS timestamptz)"
+	}
+	res := r.client.Conn(ctx).Exec(
+		`UPDATE outbox_events SET
+			status = CASE WHEN attempts + 1 >= ? THEN ? ELSE ? END,
+			next_attempt_at = CASE WHEN attempts + 1 >= ? THEN NULL ELSE ` + nextExpr + ` END,
+			attempts = attempts + 1,
+			last_error = ?,
+			locked_at = NULL,
+			lease_id = ?
+		WHERE id = ? AND lease_id = ? AND status = ?`,
+		maxRetries, StatusFailed, StatusPending,
+		maxRetries, nextAt,
+		pubErr.Error(),
+		"",
+		ev.ID, ev.LeaseID, StatusProcessing,
+	)
 	return res.RowsAffected, res.Error
+}
+
+// nextAttemptAt 按失败次数计算下次可重试时间。
+// attempt 从 1 开始（第一次失败）；RetryBase<=0 表示不退避。
+func (r *Relay) nextAttemptAt(attempt int) *time.Time {
+	base := r.cfg.RetryBase
+	if base <= 0 {
+		return nil
+	}
+	max := r.cfg.RetryMax
+	if max <= 0 {
+		max = base
+	}
+	d := base
+	for i := 1; i < attempt && d < max; i++ {
+		d *= 2
+		if d > max {
+			d = max
+		}
+	}
+	if p := r.cfg.RetryJitterPercent; p > 0 && d > 0 {
+		delta := int64(d) * int64(p) / 100
+		if delta > 0 {
+			d += time.Duration(rand.Int64N(delta*2+1) - delta)
+		}
+	}
+	if d <= 0 {
+		return nil
+	}
+	t := time.Now().UTC().Add(d)
+	return &t
 }
 
 // Start 在后台 goroutine 中启动轮询循环。
@@ -555,4 +618,9 @@ func (r *Relay) Stop() {
 		cancel()
 	}
 	r.wg.Wait()
+	// 置空后 Start/Run 可以再次启动。不置空会让「重启」静默变成 no-op。
+	// 必须放在 wg.Wait 之后：否则新的 Start 可能与旧循环并发。
+	r.mu.Lock()
+	r.cancel = nil
+	r.mu.Unlock()
 }

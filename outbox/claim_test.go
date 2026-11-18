@@ -13,6 +13,9 @@ func mustOutboxCfg(t *testing.T) *outbox.Config {
 	t.Helper()
 	c := &outbox.Config{}
 	c.SetDefaults()
+	// 测试默认「立即重试」，退避行为由专门用例覆盖。
+	c.RetryBase = 0
+	c.RetryJitterPercent = 0
 	return c
 }
 

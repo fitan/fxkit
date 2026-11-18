@@ -13,11 +13,12 @@ import (
 	"github.com/fitan/fxkit/di"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-func TestMemoryCache_Basic(t *testing.T) {
+func TestCache_Basic(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 
 	// 1. 读取未命中
 	_, err := c.Get(ctx, "k1")
@@ -45,9 +46,9 @@ func TestMemoryCache_Basic(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCacheMiss)
 }
 
-func TestMemoryCache_Batch(t *testing.T) {
+func TestCache_Batch(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 
 	pairs := map[string][]byte{
 		"k1": []byte("v1"),
@@ -65,7 +66,7 @@ func TestMemoryCache_Batch(t *testing.T) {
 
 func TestPrefixWrapper(t *testing.T) {
 	ctx := context.Background()
-	mem := NewMemoryCache()
+	mem := newTestCache()
 	c := wrapPrefix("test:", mem)
 
 	err := c.Set(ctx, "foo", []byte("bar"), time.Hour)
@@ -96,7 +97,7 @@ type User struct {
 
 func TestGetOrSet_SingleflightAndCache(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 
 	var loadCount int64
 
@@ -137,22 +138,19 @@ func TestGetOrSet_SingleflightAndCache(t *testing.T) {
 
 func TestGetOrSet_CacheNull(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 
 	var loadCount int64
 	loader := func(ctx context.Context) (User, error) {
 		atomic.AddInt64(&loadCount, 1)
-		return User{}, errors.New("record not found")
+		return User{}, gorm.ErrRecordNotFound
 	}
 
-	// 第一次调用返回 record not found，并缓存空占位符
 	_, err := GetOrSet(ctx, c, "user:404", loader, WithNullTTL(time.Minute))
 	assert.Error(t, err)
 	assert.Equal(t, int64(1), atomic.LoadInt64(&loadCount))
 
-	// 第二次调用应当命中空值缓存，直接返回「未找到」语义，而不会再次触发 loader（防穿透）。
-	// 注意不是 ErrCacheMiss：调用方通常用 errors.Is(err, gorm.ErrRecordNotFound) 判断，
-	// 首访与命中负缓存必须给出同一种错误语义。
+	// 第二次命中负缓存，不再打 loader。
 	_, err = GetOrSet(ctx, c, "user:404", func(ctx context.Context) (User, error) {
 		t.Fatal("should not call loader for cached null")
 		return User{}, nil
@@ -165,7 +163,7 @@ func TestGetOrSet_CacheNull(t *testing.T) {
 
 func TestDIModule(t *testing.T) {
 	cfgYAML := `cache:
-  driver: "memory"
+  driver: ""
   prefix: "app:"
   default_ttl: 10m
 `
@@ -184,20 +182,14 @@ func TestDIModule(t *testing.T) {
 	cacheInst, err := di.Invoke[Cache](injector)
 	require.NoError(t, err)
 	require.NotNil(t, cacheInst)
-
-	ctx := context.Background()
-	err = cacheInst.Set(ctx, "hello", []byte("world"), time.Minute)
-	require.NoError(t, err)
-
-	val, err := cacheInst.Get(ctx, "hello")
-	require.NoError(t, err)
-	assert.Equal(t, "world", string(val))
+	require.IsType(t, &DisabledCache{}, cacheInst)
+	require.ErrorIs(t, cacheInst.Set(context.Background(), "hello", []byte("world"), time.Minute), ErrCacheDisabled)
 }
 
-// BenchmarkMemoryCacheGet 基准：内存缓存读取（含值拷贝）。
-func BenchmarkMemoryCacheGet(b *testing.B) {
+// BenchmarkTestCacheGet 基准：测试缓存读取（含值拷贝）。
+func BenchmarkTestCacheGet(b *testing.B) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 	if err := c.Set(ctx, "k", []byte(`{"id":1,"name":"x"}`), time.Minute); err != nil {
 		b.Fatal(err)
 	}

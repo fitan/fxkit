@@ -10,8 +10,8 @@
 //
 //   - 运行之间没有进程亲和性（粘性只作用于单次运行内的 step）
 //   - 没有内存内激活；状态请持久化在处理器之外（DB、appkv 等）
-//   - Call/CallAsync 要求载荷 JSON 序列化出 "actorId"（嵌入
-//     [ActorRef] 或带 json:"actorId" 的字段），并发 CEL 才能匹配
+//   - Call/CallAsync 要求载荷直接匿名嵌入 [ActorRef]；NewActor 在装配期
+//     校验顶层 "actorId"，不满足直接启动失败
 //
 // # 定时提醒
 //

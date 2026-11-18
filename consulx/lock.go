@@ -60,6 +60,9 @@ type Lock interface {
 	// IsHeld 返回当前进程/实例是否仍然有效持有该锁。
 	// 续租协程判定会话失效后会立即返回 false。
 	IsHeld() bool
+	// FencingToken 返回最近一次成功获取锁的单调 token（0 = 未持有/已释放）。
+	// 下游写路径应把它带到存储层，并拒绝小于当前值的旧持有者写入。
+	FencingToken() uint64
 }
 
 // LockOptions 分布式锁配置选项。

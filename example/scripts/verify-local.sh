@@ -56,7 +56,7 @@ db:
   dsn: "file:${DB}?_fk=1&_busy_timeout=5000"
   log_level: "error"
   slow_threshold: 0s
-  auto_migrate: true   # 本地冒烟用 AutoMigrate；生产由 SQL 平台执行 `migrate print` 的 DDL
+  auto_migrate: true   # 本地冒烟用 AutoMigrate；生产由 SQL 平台执行 migrate print 的 DDL
 
 outbox:
   enabled: false
@@ -67,6 +67,9 @@ hatchet:
 auth:
   enabled: true
   dev_header_user: true
+  dev_org_id: "demo"          # Casbin domain（不是数据隔离）
+  public_paths:
+    - "/public"
   casbin:
     enabled: true
     table_name: "casbin_rule"
@@ -111,7 +114,7 @@ grep -q '"version"' "$BODY" && pass "version JSON" || flop "version JSON" "$(hea
 expect "GET /public/ping (匿名)" 200 "$(code "$BASE/public/ping")"
 
 echo "== chi 裸路由与中间件 =="
-HDR=$(curl -sS -D - -o /dev/null "$BASE/chi/echo?msg=hi")
+HDR=$(curl -sS -D - -o /dev/null -H 'X-User: alice' "$BASE/chi/echo?msg=hi")
 echo "$HDR" | head -1 | grep -q ' 200 ' && pass "GET /chi/echo" || flop "GET /chi/echo" "$(echo "$HDR" | head -1)"
 echo "$HDR" | grep -qi 'X-Fxkit-Chi' && pass "宿主 chi 中间件生效" || flop "宿主 chi 中间件" "missing X-Fxkit-Chi"
 
@@ -167,7 +170,15 @@ expect "GET /openapi.yaml" 200 "$(code "$BASE/openapi.yaml")"
 grep -q '/articles' "$BODY" && pass "openapi live /articles" || flop "openapi live" "missing /articles"
 
 echo "== MCP 默认关闭 / authz =="
-expect "GET /mcp/sse -> 404" 404 "$(code "$BASE/mcp/sse")"
+# 未启用时 /mcp/* 没有挂载；但路由已登记到 authz 目录（启用后 admin 才能访问），
+# 所以 alice 会通过鉴权并命中 404（而不是旧行为的 403）。
+expect "GET /mcp/sse 匿名 -> 401" 401 "$(code "$BASE/mcp/sse")"
+expect "GET /mcp/sse alice -> 404（未启用）" 404 "$(code -H 'X-User: alice' "$BASE/mcp/sse")"
+SPEC=$(curl -sS "$BASE/openapi.yaml")
+case "$SPEC" in
+  *"/mcp"*) flop "MCP 未出现在 spec" "found /mcp in openapi.yaml" ;;
+  *) pass "MCP 未出现在 spec" ;;
+esac
 expect "GET /authz/roles alice" 200 "$(code -H 'X-User: alice' "$BASE/authz/roles")"
 
 echo

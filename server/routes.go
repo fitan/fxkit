@@ -6,6 +6,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -78,7 +79,23 @@ func ProvideRoutes(routes ...Route) di.Option {
 // ProvideRoutesLazy 在 PreStart 求值（可访问完整依赖图）。
 func ProvideRoutesLazy(fn func(di.Injector) ([]Route, error)) di.Option {
 	return func(i di.Injector) {
-		di.ProvideLazyE[[]Route](i, fn)
+		if fn == nil {
+			return
+		}
+		lc, err := di.Invoke[*di.Lifecycle](i)
+		if err != nil || lc == nil {
+			return
+		}
+		lc.AppendPreStartPhase(di.PhaseResolveContributors, di.Hook{
+			OnStart: func(context.Context) error {
+				routes, err := fn(i)
+				if err != nil {
+					return err
+				}
+				di.ProvideGroupItems(i, routes...)
+				return nil
+			},
+		})
 	}
 }
 

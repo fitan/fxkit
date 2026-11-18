@@ -340,6 +340,12 @@ func registerServiceWithMeta(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("consul register status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
+	// 重新注册会重建 TTL check，而新建的 TTL check 在首次 pass 之前是 critical。
+	// 下一次心跳可能 5s 后才到，期间开启 passing_only 的发现会把实例摘掉。
+	if err := passTTL(ctx, client, base, svc.ID); err != nil {
+		slog.Warn("consul: pass TTL after metadata re-register failed",
+			"id", svc.ID, "error", err)
+	}
 	return nil
 }
 

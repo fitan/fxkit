@@ -1,0 +1,25 @@
+# Atlas 配置（fxkit 生成）。
+#
+# 用法：
+#   export DATABASE_URL='postgres://user:pass@localhost:5432/app?sslmode=disable'
+#   atlas migrate status --env local
+#   atlas migrate lint   --env local --latest 1
+#   atlas migrate apply  --env local
+#
+# 首次接入：
+#   fxkit migrate baseline --dialect postgres --dir migrations/postgres
+# 然后把业务表迁移按版本追加到同一目录。
+#
+# 生产注意：
+#   - 不要由应用启动时执行 DDL；用独立 Job 跑 atlas migrate apply；
+#   - 破坏性变更先备份/PITR，不依赖自动 down；
+#   - 多副本不要各自执行迁移。
+
+env "local" {
+  url = getenv("DATABASE_URL")
+  dev = "docker://postgres/16/dev"
+
+  migration {
+    dir = "file://migrations/postgres"
+  }
+}

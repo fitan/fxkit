@@ -64,11 +64,11 @@ func TestRBAC_RolePermissionsAndBindings(t *testing.T) {
 	if err != nil || len(roles) != 2 || roles[0] != "editor" || roles[1] != "writer" {
 		t.Fatalf("roles=%v err=%v", roles, err)
 	}
-	ok, err := e.Enforce(ctx, authz.EnforceInput{Sub: "bob", Obj: "/users", Act: "GET"})
+	ok, err := e.Enforce(ctx, authz.EnforceInput{Dom: authz.DefaultDomain, Sub: "bob", Obj: "/users", Act: "GET"})
 	if err != nil || !ok {
 		t.Fatalf("enforce list=%v err=%v", ok, err)
 	}
-	ok, err = e.Enforce(ctx, authz.EnforceInput{Sub: "bob", Obj: "/users", Act: "POST"})
+	ok, err = e.Enforce(ctx, authz.EnforceInput{Dom: authz.DefaultDomain, Sub: "bob", Obj: "/users", Act: "POST"})
 	if err != nil || !ok {
 		t.Fatalf("bob with writer should POST: ok=%v err=%v", ok, err)
 	}
@@ -76,7 +76,7 @@ func TestRBAC_RolePermissionsAndBindings(t *testing.T) {
 	if err := e.SetSubjectRoles(ctx, authz.SubjectRolesInput{Subject: "bob", Roles: nil}); err != nil {
 		t.Fatal(err)
 	}
-	ok, _ = e.Enforce(ctx, authz.EnforceInput{Sub: "bob", Obj: "/users", Act: "GET"})
+	ok, _ = e.Enforce(ctx, authz.EnforceInput{Dom: authz.DefaultDomain, Sub: "bob", Obj: "/users", Act: "GET"})
 	if ok {
 		t.Fatal("expected deny after clearing roles")
 	}
@@ -102,7 +102,7 @@ func TestEnforce_TrailingSlashNeedsNormalize(t *testing.T) {
 	if err := e.AddRoleBindings([]authz.RoleBinding{{User: "alice", Role: "admin"}}); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := e.Enforce(ctx, authz.EnforceInput{Sub: "alice", Obj: "/users/", Act: "GET"})
+	ok, err := e.Enforce(ctx, authz.EnforceInput{Dom: authz.DefaultDomain, Sub: "alice", Obj: "/users/", Act: "GET"})
 	if err != nil || !ok {
 		t.Fatalf("trailing slash should match /users: ok=%v err=%v", ok, err)
 	}

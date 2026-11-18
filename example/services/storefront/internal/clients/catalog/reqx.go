@@ -6,9 +6,10 @@ import (
 	"github.com/fitan/fxkit/reqx"
 )
 
-// NewFromFactory builds the generated OpenAPI client on a [reqx] transport
-// (Consul watch, failover, OTel). Set ClientInput.Name to the Consul service
-// name; use Seeds for local/dev without Consul. Do not hardcode instance IPs.
+// NewFromFactory 用 reqx 的 transport 构建生成的 OpenAPI client。
+// reqx 负责 Consul 服务发现、均衡/failover 与 OTel；不要在业务代码里硬编码实例 IP。
+//
+// ClientInput.Name 填 Consul 服务名；本地/无 Consul 时用 Seeds 指定直连地址。
 func NewFromFactory(f *reqx.Factory, in reqx.ClientInput) (*ClientWithResponses, error) {
 	if f == nil {
 		return nil, fmt.Errorf("catalog: nil reqx factory")

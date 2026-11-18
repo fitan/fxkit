@@ -73,9 +73,38 @@ func Default() di.Option {
 	)
 }
 
-// Minimal 是 Core 的保留别名（早期版本还包含 docs，现在文档端点默认关闭）。
+// Minimal 是 Core 的保留别名。脚手架的 --minimal 用这个名字。
 func Minimal() di.Option {
 	return Core()
+}
+
+// Data 是数据面服务预设：HTTP + gormx/outbox/cachex + 发现/出站 HTTP。
+// 不含 authz/MCP/hatchet，适合内部数据 API 或 BFF。
+func Data() di.Option {
+	return di.Options(
+		Core(),
+		docs.Module,
+		gormx.Module,
+		outbox.Module,
+		cachex.Module,
+		consulx.Module,
+		reqx.Module,
+	)
+}
+
+// Worker 是无 HTTP listener 的后台任务预设：config/otel/cli + gormx + outbox + hatchet + cachex。
+// `serve` 会直接等待退出信号，不绑定端口。
+func Worker() di.Option {
+	return di.Options(
+		config.Module,
+		buildinfo.Module,
+		otelx.Module,
+		cli.Module,
+		gormx.Module,
+		outbox.Module,
+		hatchetx.Module,
+		cachex.Module,
+	)
 }
 
 // Run 将给定 options 装配为 Fx 应用并调用 Cobra 入口。

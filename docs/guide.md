@@ -42,20 +42,29 @@
 fxkit.Core()      // config + buildinfo + otelx + server(+listener) + cli
 fxkit.Default()   // Core + docs/gormx/hatchetx/outbox/authz/consulx/reqx/mcpx/cachex
 fxkit.Minimal()   // Core 的别名（历史名）
+fxkit.Data()      // Core + docs/gormx/outbox/cachex/consulx/reqx（数据面，无 authz/MCP/hatchet）
+fxkit.Worker()    // config/otel/cli + gormx/outbox/hatchetx/cachex（无 HTTP listener）
 ```
 
 - **只写 HTTP 服务** → `Core()`。
 - **要数据库/鉴权/工作流** → `Default()`，再按需加 `huma.Module`。
+- **数据面 / BFF** → `Data()`；**纯后台 worker** → `Worker()`。
 - `docs` 与 `mcp` 即使被打包也**默认不暴露**，需 `docs.enabled` / `mcp.enabled`。
 
-### 2.2 四阶段生命周期（最重要的约束）
+### 2.2 PreStart 阶段
 
 | 阶段 | 优先级 | 用途 |
 |---|---|---|
-| `PhaseResolveContributors` | 0 | 求值 `func(*Svc) T` 这类延迟构造函数，写入 group |
-| `PhaseWireGroup` | 100 | 固化 group（Huma 安装 middleware + registrar） |
+| `PhaseResolveContributors` | 0 | 求值延迟构造函数，写入 group |
+| `PhaseWireGroup` | 100 | 安装 Huma middleware 和 registrar |
+| `PhaseAfterRegistrars` | 110 | registrar 装完之后（例如把路由写成 Casbin 策略） |
 | `PhasePostWire` | 150 | 依赖已安装结果（`/docs` 合并 live spec、MCP 提取 tools） |
-| `PhaseMountHTTP` | 200 | 把 `server.Route` 挂到 chi mux、注册健康检查 |
+| `PhaseMountHTTP` | 200 | 把 `server.Route` 挂到 chi，注册健康检查 |
+| `PhaseMountHTTP+1` | 201 | 构造 HTTP listener、`--warmup=before-start` |
+| `PhaseAfterHTTPServer` | 210 | listener 的监听钩子已经追加之后（Consul 自注册） |
+
+`PhaseMountHTTP+1` 不是 PreStart 的最后一档。210 才第一次解析的服务不在 `--warmup=before-start` 里。
+监听端口发生在全部 PreStart 之后的 OnStart，并且先于 Consul 注册钩子。
 
 **铁律：不要在模块的 `Option` 闭包里读 `di.GetGroup`。** 那时业务模块还没装配完，只能读到一部分。
 正确做法是在 `Lifecycle.PreStart` 里读。
@@ -224,14 +233,22 @@ func (s *Service) Create(ctx context.Context, o *Order) error {
 }
 ```
 
-**建表（框架自己的 5 张表）**：
+**建表（框架表 + 业务表）**：
 
 ```bash
-myapp migrate print --dialect postgres > fxkit-0001.sql   # 交给 SQL 平台执行
-myapp migrate check -c configs/config.yaml                # 执行后校验 → schema OK
+# 方式 A：SQL 平台（离线审批）
+myapp migrate print --dialect postgres > fxkit-0001.sql
+
+# 方式 B：Atlas（推荐，版本化 + lint + 锁）
+myapp migrate baseline --dialect postgres --dir migrations/postgres
+atlas migrate lint  --dir file://migrations/postgres --dev-url "docker://postgres/16/dev" --latest 1
+atlas migrate apply --dir file://migrations/postgres --url "$DATABASE_URL"
+
+# 执行后校验
+myapp migrate check -c configs/config.yaml
 ```
 
-业务表由业务迁移管理；`db.auto_migrate: true` 只用于本地开发。
+业务表由业务迁移管理；`db.auto_migrate: true` 只用于本地开发。完整流程见 [`docs/migrations-atlas.md`](migrations-atlas.md)。
 
 ### Step 4：列表查询（crudx）
 
@@ -319,12 +336,10 @@ auth:
 登记需要权限的路由：
 
 ```go
-authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
-    return []authz.HTTPRoute{
-        {Method: http.MethodGet, Path: "/orders", Permission: "orders:list"},
-        {Method: http.MethodPost, Path: "/orders", Permission: "orders:create"},
-    }
-})
+authz.ProvideHTTPRoutes(
+    authz.HTTPRoute{Method: http.MethodGet, Path: "/orders"},
+    authz.HTTPRoute{Method: http.MethodPost, Path: "/orders"},
+)
 ```
 
 handler 里取身份：
@@ -335,8 +350,7 @@ if !ok { /* 理论上不会发生：中间件已拦截 */ }
 _ = subj.ID
 ```
 
-- 默认只覆盖 **Huma**。裸 chi 路由需 `auth.mux_middleware: true`（覆盖全部 mux 请求）或宿主自行加中间件。
-- 匿名端点：Huma 用 `authz.OpPublic` 元数据；mux 模式用 `auth.public_paths`。
+- 鉴权挂在 chi 上，Huma 和裸路由一起过。匿名路径只写 `auth.public_paths`。Casbin 关闭时登录即可；按路由拒绝要开 Casbin。
 - 本地联调：`dev_header_user: true` + `curl -H 'X-User: alice'`。
 
 ### Step 6：异步（outbox + Hatchet）
@@ -377,8 +391,9 @@ func (s *Svc) HandleOrderCreated(ctx hatchet.Context, ev OrderCreated) (map[stri
         Key:   fmt.Sprintf("order-created:%d", ev.ID),
         Topic: "order-created",
         Fn: func(ctx context.Context) error {
-            return s.apply(ctx, ev)   // 至少一次投递 → 这里保证只应用一次
+            return s.apply(ctx, ev)   // 至少一次投递 → 成功过一次后不再执行
         },
+        // 别的投递还在处理时 Once 返回 outbox.ErrInboxBusy，交给 Hatchet 重试。
     })
 }
 ```
@@ -398,9 +413,12 @@ defer hatchetx.DeleteReminder(ctx, client, id)
 **Actor（按 id 串行的邮箱）**：
 
 ```go
-counter := hatchetx.NewActor("order-counter", func(ctx context.Context, in IncInput) (IncOut, error) {
+counter, err := hatchetx.NewActor("order-counter", func(ctx context.Context, in IncInput) (IncOut, error) {
     return IncOut{Total: in.Delta}, nil
 })
+if err != nil {
+    return err // 输入未直接嵌入 ActorRef 时，装配期失败
+}
 hatchetx.ProvideRegistrar(counter.Registrar())
 // 调用：counter.Call(ctx, client, IncInput{ActorRef: hatchetx.ActorRef{ActorID: "o-1"}, Delta: 1})
 ```
@@ -500,16 +518,26 @@ server.ProvideHealthChecker(func(svc *Svc) server.HealthChecker {
 | 段 | 关键键 | 默认 |
 |---|---|---|
 | `app` | `name` | — |
-| `server` | `port` / `log_payloads` / `access_log` / `rate_limit.*` / `cors_*` / 超时 | 8080 / false / false / 关 |
+| `server` | `port` / `log_payloads` / `access_log` / `cors_*` / `pprof.*` / `security_headers.*` / `csrf.*` / 超时 | 8080 / false / false / 关 / 关 |
 | `db` | `driver` / `dsn` / `auto_migrate` / `check_schema` / 连接池 | 不连库 / false / false |
 | `cache` | `driver` / `default_ttl` / `null_ttl` / `singleflight` / `jitter_max_percent` / `redis.*` | 禁用 / 30m / 1m / true / 10 |
-| `outbox` | `enabled` / `poll_interval` / `batch_size` / `max_retries` / `claim_timeout` / `publish_concurrency` / `partition_field` | false / 1s / 50 / 10 / 30s / 1 / 空 |
+| `outbox` | `enabled` / `poll_interval` / `batch_size` / `max_retries` / `claim_timeout` / `publish_concurrency` / `partition_field` / `purge_interval` / `purge_before` | false / 1s / 50 / 10 / 30s / 1 / 空 / 0 / 168h |
 | `hatchet` | `enabled` / `token` / `host_port` / `server_url` / `tls_strategy` / `worker_*` / `outbox_publisher` | false |
-| `auth` | `enabled` / `issuer` / `audience` / `dev_header_user` / `deny_unregistered` / `mux_middleware` / `public_paths` / `casbin.*` | false |
+| `auth` | `enabled` / `issuer` / `audience` / `dev_header_user` / `public_paths` / `casbin.*` | false |
 | `otel` | `enabled` / `endpoint` / `protocol` / `sampling` / `traces|metrics|logs.*` | false |
 | `discovery` | `consul_address` / `register` / `advertise_address` / `tags` | 空 / false |
 | `docs` | `enabled` | **false** |
-| `mcp` | `enabled` / `name` / `path` / `headers` / `max_response_bytes` | **false** / 1 MiB |
+| `mcp` | `enabled` / `name` / `path` / `headers` / `include_tools` / `max_response_bytes` | **false** / 1 MiB |
+| `audit` | `enabled` / `sink` (slog/db/outbox) / `include_body` / `include_headers` / `retention` | false / slog / false / false / 720h |
+| `idempotency` | `enabled` / `header` / `ttl` / `methods` / `store` / `purge_interval` | false / Idempotency-Key / 24h / POST… / db / 1h |
+| `idempotency` | `enabled` / `store` / `ttl` / `purge_interval` | false / db / 24h / 1h |
+
+- 乐观锁：模型实现 `GetVersion/SetVersion`，用 `gormx.UpdateWithVersion`；冲突返回 409。
+- 限流：在网关/边缘做全局限流；框架不再内置进程内限流。
+- 幂等：`idempotency.Module` 只对带 `Idempotency-Key` 的 mutating 请求生效。
+- 安全头默认开启；CSRF 仅 cookie 认证场景开启。
+
+热更新：opt-in `config.ProvideWatch[T](key)` 只 watch Consul KV；消费方依赖 `config.Dynamic[T]`；`ProvideConfig` 仍是启动快照；框架对象不热替换。
 
 完整示例见 README §4。
 
@@ -533,8 +561,10 @@ HTTP 端到端：`cd example && bash scripts/verify-local.sh`。
 完整清单见 [`docs/production-checklist.md`](./production-checklist.md)。核心顺序：
 
 ```
-migrate print → SQL 平台执行 → migrate check → 滚动发布（check_schema 再校验）
+migrate baseline/print → Atlas migrate apply（或 SQL 平台）→ migrate check → 滚动发布（check_schema 再校验）
 ```
+
+框架表：`outbox_events` / `outbox_inbox_events`、`casbin_rule`、`authz_role`；opt-in：`idempotency_keys`、`audit_events`。
 
 灰度：1 副本 → 10% → 50% → 100%，观察错误率 / P99 / outbox lag / 锁丢失。
 
@@ -548,7 +578,7 @@ migrate print → SQL 平台执行 → migrate check → 滚动发布（check_sc
 | `relation/table does not exist` | DDL 未执行或顺序错 | `migrate print` → 平台执行；`db.check_schema: true` |
 | `/readyz` 503 | DB/Redis 不可用 | 看 `server.readyz.checks{status="error"}` 的 `check` 维度 |
 | 任务/worker 不执行 | `hatchet.enabled` 未开、token 无效、没有 registrar | 看启动日志 `hatchetx: worker started` |
-| outbox 不投递 | 没有 `EventPublisher` | 开 `hatchet.outbox_publisher` 或 `outbox.ProvidePublisher` |
+| outbox 启动失败 | `outbox.enabled=true` 但没有数据库或没有 `EventPublisher` | 配好 `db`，并开 `hatchet.outbox_publisher` 或 `outbox.ProvidePublisher` |
 | 锁偶尔丢失 | 续租失败（网络/TTL 过短） | 看 `consulx.lock.renew.failures` / `lock.lost`，加大 TTL |
 | 列表 400 `INVALID_SORT_FIELD` | 排序字段不在白名单，或与游标冲突 | 检查 `SortFields`；翻页只传 `cursor` |
 | 列表 400 `DISTINCT_RELATION_SORT_UNSUPPORTED` | 一对多 JOIN 下按关联列排序 | 声明 `RelationToOne` 或改按根表列排序 |
@@ -584,3 +614,39 @@ migrate print → SQL 平台执行 → migrate check → 滚动发布（check_sc
 | 迁移 SQL | [`gormx/migrations`](../gormx/migrations) |
 | Atlas 配置（仅 lint/diff） | [`atlas.hcl`](../atlas.hcl) |
 | AI 助手使用规范 | [`skills/`](../skills) |
+| 框架维护（贡献者） | [`.agents/skills/fxkit-maintain/SKILL.md`](../.agents/skills/fxkit-maintain/SKILL.md) |
+| 横切能力缺口与解决方案 | [`docs/gap-solutions.md`](./gap-solutions.md) |
+| 横切能力决策记录 | [`docs/gap-solutions-decisions.md`](./gap-solutions-decisions.md) |
+| 配置热更新方案 | [`docs/config-hot-reload-plan.md`](./config-hot-reload-plan.md) |
+| 支付业务使用指南 | [`docs/payments.md`](./payments.md) |
+
+---
+
+## 11. 框架维护（贡献者）
+
+修改 fxkit 框架本身（不是用 fxkit 写业务）时，先读 [`.agents/skills/fxkit-maintain/SKILL.md`](../.agents/skills/fxkit-maintain/SKILL.md)。两条硬原则：
+
+- **不过度设计**：没有第二个真实调用方，不抽接口、不加配置开关、不造通用层；先写具体实现。
+- **不过度防御**：只在系统边界（HTTP/DB/外部服务）校验；内部信任调用方；配置错误启动失败，不静默回退。
+
+后续对话中形成的可复用演进建议/约束，持续沉淀到该 skill 的「设计原则 / 包地图 / 评审清单 / 反模式」，并同步使用 skill 与文档。该 skill 内含优化循环、审计清单、优先级、验证矩阵与同步表。
+
+改动流程：
+
+1. 先读本指南 + 相关包 README + 对应的 `skills/fxkit-*`。
+2. 复现问题或写行为测试。
+3. 最小改动；优先复用现有函数/类型。
+4. 跑 `make test` / `make test-race` / `go vet ./...` / `gofmt -l .`；提交前跑 `make ci`。
+5. 同步文档与使用 skill（见下表）。
+
+| 改动 | 必须同步 |
+|---|---|
+| 公开 API / 行为 | `README.md` 对应章节 + `docs/*.md` + `skills/fxkit*/SKILL.md` |
+| 新配置键 | `skills/fxkit/references/config-checklist.md` + 示例配置 |
+| 新 CLI 命令 / flag | `skills/fxkit/SKILL.md` + 本指南 |
+| 新包 / 删包 | `skills/README.md` + `skills/fxkit/references/packages.md` |
+| 移除 / 弃用 | 文档 + 使用 skill + 迁移说明；不要静默删除 |
+
+公开 API/架构判断建议按 [`.cursor/skills/dual-review/SKILL.md`](../.cursor/skills/dual-review/SKILL.md) 走双模型复核。
+
+横切能力缺口的具体设计、接口、配置与优先级见 [`docs/gap-solutions.md`](./gap-solutions.md)。

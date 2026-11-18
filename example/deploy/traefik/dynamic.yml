@@ -1,0 +1,27 @@
+# file provider 只负责 Nuxt 和 StripPrefix 中间件。
+# catalog / storefront 的 router 由服务注册到 Consul 的 traefik.* tags 自动发现。
+http:
+  routers:
+    web:
+      rule: PathPrefix(`/`)
+      entryPoints:
+        - web
+      service: nuxt
+      priority: 1
+
+  services:
+    nuxt:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3000"
+
+  middlewares:
+    catalog-strip:
+      stripPrefix:
+        prefixes:
+          - /catalog
+
+    storefront-strip:
+      stripPrefix:
+        prefixes:
+          - /storefront

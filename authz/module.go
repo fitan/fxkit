@@ -1,14 +1,8 @@
-// Package authz 为 Huma/REST 提供鉴权：JWT（或开发头 X-User）识别身份，
-// Casbin 按 path + HTTP method 做 RBAC（策略存业务库 casbin_rule）。
+// Package authz 为 Huma/REST 提供鉴权：JWT（或开发头 X-User/X-Org）识别身份，
+// Casbin 按 (sub, dom, path, METHOD) 做多租户 RBAC（策略存业务库 casbin_rule）。
 //
-// 当 auth.casbin.enabled 时，权限完全由 Casbin 决定（JWT scopes 不参与授权）。
-// Casbin 关闭时，回退到 HTTPRoute.Permission + Subject.Has（兼容旧行为）。
-//
-// Subject.OrgID 只来自 JWT claim（auth.org_claim）；Enforce 不按组织隔离，
-// 多租户须在 handler 内自行校验。多副本通过 auth.casbin.reload_interval
-// 定期 LoadPolicy，避免只在本进程改策略。
-//
-// 仅覆盖 Huma/REST；裸 chi handler 需宿主自行鉴权。
+// 鉴权挂在 chi 上，覆盖 Huma、裸 chi、docs 和 MCP。Enforce 要求非空 domain：缺失 org 的请求一律拒绝；
+// 跨租户管理员用 domain="*" 的 g/p 规则。
 //
 // 配置见 [Config]（yaml: auth）。默认关闭。
 package authz
@@ -85,7 +79,6 @@ var Module = di.Module("fxkit/authz",
 
 		ProvideHTTPRoutes(adminHTTPRoutes()...)(i)
 
-		// mux 模式：一处鉴权覆盖 Huma + 裸 chi + docs/MCP；否则用 Huma 层中间件。
 		cfgPtr := mustResolve[*Config](i, "*Config")
 
 		// 登记 schema 契约：仅当 Casbin 启用时才要求这些表存在。
@@ -99,11 +92,7 @@ var Module = di.Module("fxkit/authz",
 				"name", "display_name", "description", "created_at", "updated_at")
 		}
 
-		if cfgPtr.MuxMiddleware {
-			server.ProvideMiddlewareLazy(provideMuxMiddleware)(i)
-		} else {
-			fxhuma.ProvideMiddlewareLazy(provideHumaMiddleware)(i)
-		}
+		server.ProvideMiddlewareLazy(provideMuxMiddleware)(i)
 		fxhuma.ProvideRegistrarLazy(provideAdminRegistrarLazy)(i)
 
 		// 自动注册 Casbin 策略依赖「完整的 Huma operation 集合」，必须等

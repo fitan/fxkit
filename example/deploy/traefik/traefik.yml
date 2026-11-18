@@ -1,0 +1,50 @@
+# Traefik 南北向入口：Nuxt dev server（host:3000）反代 + Consul Catalog（catalog / storefront）。
+# Consul Catalog 用服务登记的 Address（本机 LAN IP）；host.docker.internal 用来连 Consul API 与 Nuxt dev server。
+
+entryPoints:
+  web:
+    address: ":80"
+
+api:
+  dashboard: true
+  insecure: true
+
+experimental:
+  otlpLogs: true
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+  consulCatalog:
+    exposedByDefault: false
+    prefix: traefik
+    refreshInterval: 2s
+    endpoint:
+      address: "host.docker.internal:8500"
+      scheme: http
+
+log:
+  level: INFO
+
+# 与 catalog/storefront 同一 OTLP gRPC 采集端（10.170.34.223:4317）。
+tracing:
+  serviceName: traefik
+  sampleRate: 1.0
+  otlp:
+    grpc:
+      endpoint: "10.170.34.223:4317"
+      insecure: true
+
+metrics:
+  otlp:
+    grpc:
+      endpoint: "10.170.34.223:4317"
+      insecure: true
+
+accessLog:
+  otlp:
+    serviceName: traefik
+    grpc:
+      endpoint: "10.170.34.223:4317"
+      insecure: true

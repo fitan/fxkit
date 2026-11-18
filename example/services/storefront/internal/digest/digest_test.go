@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestDigestService_Success 验证 storefront 经 reqx 成功聚合 catalog 数据。
 func TestDigestService_Success(t *testing.T) {
 	// 1. 启动一个模拟的 Catalog 服务 HTTP Server
 	mockCatalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +56,7 @@ func TestDigestService_Success(t *testing.T) {
 	assert.Contains(t, string(out.Body.Articles), "Mock Article")
 }
 
+// TestDigestService_CatalogErrors 验证上游 401/403/404/5xx 的映射。
 func TestDigestService_CatalogErrors(t *testing.T) {
 	// 启动返回 403 Forbidden 的模拟服务
 	mockCatalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +78,7 @@ func TestDigestService_CatalogErrors(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestDigest_HumaRegistration 验证 /digest 注册后可直接调用。
 func TestDigest_HumaRegistration(t *testing.T) {
 	mockCatalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -5,6 +5,8 @@
 > **当前定位**：默认栈**不再依赖 Dapr**。HTTP 由 `server.ListenerModule` 直接监听；异步与定时能力走 **Hatchet**；跨事务发布走 **outbox**。
 
 > **Agent Skills**：可复制到其他项目的 Cursor/Claude skills 见 [`skills/`](./skills/README.md)（覆盖全部主要子包：核心 / Huma+crudx / Hatchet+outbox / authz / otel / consul+reqx / docs）。
+>
+> **框架维护者**：修改框架本身前先读 [`.agents/skills/fxkit-maintain/SKILL.md`](./.agents/skills/fxkit-maintain/SKILL.md)（不过度设计、不过度防御；改动同步 docs 与 skills）。
 
 ---
 
@@ -117,20 +119,27 @@ func main() {
 | 包 | 作用 |
 |----|------|
 | `fxkit` | `Core` / `Default` / `Minimal` / `Run` / `Service` / `Provide` / `Routes` / `Invoke` / `ProvideConfig` |
-| `fxkit/di` | samber/do 封装：`Provide` / `Invoke` / `Group` / 四阶段 `Lifecycle` / `Warmup` |
+| `fxkit/di` | samber/do 封装：`Provide` / `Invoke` / `Group` / PreStart 分阶段的 `Lifecycle` / `Warmup` |
 | `fxkit/config` | YAML + flag + 可选 Consul KV；`Load`/`Provide` 解各包 `Config` |
 | `fxkit/cli` | Cobra：`serve` / `openapi` / `mcp` / `validate` / `migrate` / `version` |
-| `fxkit/server` | chi mux、中间件（CORS/限流/访问日志/OTel/recover）、HTTP Server、健康检查 |
+| `fxkit/server` | chi mux、中间件（CORS/限流/安全头/CSRF/访问日志/OTel/recover）、HTTP Server、健康检查、pprof（opt-in） |
 | `fxkit/huma` | Huma v2 REST + `ListQueryInput`；可选 `RegisterResource` |
-| `fxkit/authz` | JWT/X-User 认人 + Casbin path/method RBAC（Huma 层或 mux 层） |
-| `fxkit/gormx` | `*Client`：`Conn(ctx)` / `Transaction` / `AfterCommit` / 迁移 DDL 与 schema 契约 |
+| `fxkit/authz` | JWT/X-User 认人 + Casbin path/method RBAC（chi 中间件，覆盖 Huma 和裸路由） |
+| `fxkit/gormx` | `*Client`：`Conn(ctx)` / `Transaction` / `AfterCommit` / `UpdateWithVersion` / 迁移 DDL 与 schema 契约 |
 | `fxkit/crudx` | 受控 list（`q=` / JOIN / keyset cursor / 白名单）+ `GetByID` |
-| `fxkit/cachex` | 内存/Redis 缓存：`GetOrSet`、singleflight、负缓存、TTL 抖动 |
+| `fxkit/cachex` | Redis 缓存：`GetOrSet`、singleflight、负缓存、TTL 抖动（不内置进程内缓存） |
 | `fxkit/outbox` | 事务性 outbox + relay + inbox 去重 |
 | `fxkit/hatchetx` | Hatchet client/worker、Semantic Actor、Reminder、Cron 归一化 |
 | `fxkit/otelx` | OTel traces / metrics / logs + slog 桥接 |
 | `fxkit/logx` | 本地彩色 slog（TTY 着色，不抢占宿主 handler） |
 | `fxkit/fxerrors` | 统一错误（Problem Details 风格） |
+| `fxkit/audit` | opt-in HTTP 审计日志：metadata + slog/db/outbox sink |
+| `fxkit/idempotency` | opt-in HTTP Idempotency-Key（DB store，响应重放，过期清理） |
+| `fxkit/money` | 最小货币单位金额（整数 + 币种） |
+| `fxkit/ledger` | 复式记账：账户 / 事务 / 分录 / 余额 |
+| `fxkit/payment` | 支付状态机 + CAS 流转 |
+| `fxkit/webhook` | HMAC 验签 + 时间戳容忍 + 原始 body |
+| `fxkit/reconciliation` | 内部/外部记录对账 |
 | `fxkit/docs` | Scalar + OpenAPI；可选 base YAML + Huma 合并（默认关闭） |
 | `fxkit/openapi` | 合并静态 OpenAPI YAML 与 Huma live spec；3.0/3.1 + YAML/JSON |
 | `fxkit/mcpx` | 零代码生成 MCP Server（stdio / SSE），从 Huma 提取 tools |
@@ -146,6 +155,10 @@ func main() {
 ```go
 // 全量：Core + docs / gormx / hatchetx / outbox / authz / consulx / reqx / mcpx / cachex
 fxkit.Default()
+
+// 场景预设（都保持单 module）
+fxkit.Data()    // HTTP + gormx/outbox/cachex/discovery/reqx（不含 authz/MCP/hatchet）
+fxkit.Worker()  // 无 HTTP listener：config/otel/cli + gormx/outbox/hatchet/cachex
 
 // 无状态核心：config + buildinfo + otelx + server（含 listener）+ cli
 fxkit.Core()
@@ -267,8 +280,8 @@ di.AssertGroupsNonEmpty(root,
 )
 ```
 
-建议放在 `PhaseMountHTTP+1` 的 PreStart 钩子里 —— 此时所有延迟构造函数已求值、
-group 内容最完整。example 的 `internal/stack` 就是这么做的。
+建议放在 `PhaseMountHTTP+1`（201）的 PreStart 钩子里。这时延迟构造函数已经求值。
+`PhaseAfterHTTPServer`（210）还在它后面，Consul 自注册在那一档。
 
 #### 懒加载陷阱：启动成功 ≠ 服务可用
 
@@ -334,10 +347,10 @@ slog.Info("warmup", "resolved", len(report.Resolved), "skipped", len(report.Opti
 require.NoError(t, di.AssertNoUnresolved(root))
 ```
 
-> **接入方式很重要**：`--warmup=before-start` 是注册成 `PreStart` 的最后阶段
-> （`PhaseMountHTTP+1`），**不是**在 `lc.Start()` 之前额外调一次
-> `lc.StartPreStartOnly()` —— 后者会让 huma registrar 执行两次，
-> operation ID 重复注册直接 panic（这个坑在实现时就踩到了）。
+> **接入方式**：`--warmup=before-start` 注册成 `PhaseMountHTTP+1`（201）的 PreStart 钩子，
+> **不是** PreStart 的最后一档，也**不是**在 `lc.Start()` 之前再调一次
+> `lc.StartPreStartOnly()`。后者会让 huma registrar 执行两次，operation ID 重复注册而 panic。
+> `PhaseAfterHTTPServer`（210）在预热之后，那里才第一次解析的服务不在这次预热里。
 
 ### 严格装配检查（防回退）
 
@@ -391,8 +404,18 @@ type HealthChecker interface {
 自定义（业务级）检查项：
 
 ```go
-server.ProvideHealthChecker(func(client *gormx.Client) server.HealthChecker {
-    return NewReadinessCheck(client)   // 例如验证关键业务表可读
+server.ProvideHealthCheckerLazy(func(i di.Injector) (server.HealthChecker, bool, error) {
+    client, err := di.Invoke[*gormx.Client](i)
+    if err != nil {
+        if di.IsNotFound(err) {
+            return nil, false, nil // 没有装配 gormx：本环境不适用
+        }
+        return nil, false, err
+    }
+    if client == nil || client.Pool() == nil {
+        return nil, false, nil // 未配置数据库：跳过
+    }
+    return NewReadinessCheck(client), true, nil // ok=true：注册
 })
 ```
 
@@ -400,8 +423,10 @@ server.ProvideHealthChecker(func(client *gormx.Client) server.HealthChecker {
 > 权限被收回时，Ping 仍然通过而业务请求全部失败。对关键依赖建议补一个业务级检查
 > （见 `example/.../platform/readiness.go` 的 `catalog-counter`）。
 
-支持 `HealthChecker` 值、`func() HealthChecker`、`func(di.Injector) HealthChecker`、
-`func(dep...) HealthChecker` 全部四种形式，且都落在**同一个** DI group。
+`ProvideHealthChecker` 接受已构造好的 `HealthChecker` 值（nil 会在装配期 panic）；
+需要依赖或条件注册时用 `ProvideHealthCheckerLazy`，它返回 `(checker, ok, error)`：
+`ok=false` 表示本环境跳过，`ok=true` 但 checker 为 nil（含 typed nil）会让启动失败。
+所有注册项落在**同一个** DI group。
 
 `server` 包不依赖 `gormx`/`cachex`（此前为了 ping 数据库而反向依赖，属职责越界）。
 
@@ -509,10 +534,6 @@ server:
   log_payloads: false          # true 时记录请求/响应体（含脱敏启发式）
   cors_allowed_origins:        # 空列表 = 不设 CORS；显式 ["*"] 才允许任意源
     - "http://localhost:3000"
-  rate_limit:                  # 可选：按客户端 IP 的令牌桶限流（不信任 XFF）
-    enabled: false
-    rps: 20                    # 每秒补充令牌数
-    burst: 40                  # 允许的瞬时突发
   access_log: false            # true = 结构化访问日志（route 用模板，避免高基数）
 
 app:
@@ -534,8 +555,13 @@ outbox:
   batch_size: 50
   max_retries: 10
   claim_timeout: 30s           # processing 租约超时后可被其他 relay 回收
-  publish_concurrency: 1       # 同批并发投递数；1 = 严格顺序，>1 提吞吐但不保证批内顺序
-  partition_field: ""          # 按 payload 字段分组保序（如 "actorId"）；空 = 不分组
+  publish_concurrency: 1       # 同批并发投递数；1 = 按 id 串行，>1 不保证批内顺序
+  partition_field: ""          # 单个 relay、同一批内按 payload 字段分组；空 = 不分组
+  publish_timeout: 30s         # 单条投递超时；0 = 不限制（不推荐）
+  retry_base: 2s               # 首次失败后的退避基数；0 = 立即重试
+  retry_max: 5m                # 退避上限
+  retry_jitter_percent: 20     # 退避抖动（0-50）
+  inbox_claim_timeout: 5m      # Inbox 认领租约；超时可被重新认领
 
 hatchet:
   enabled: false
@@ -557,11 +583,11 @@ auth:
   jwks_url: ""                 # 默认 {issuer}/jwks
   org_claim: "organization_id"
   require_org: false
-  deny_unregistered: false     # Casbin 关闭时：true = 未登记 403；false = 登录即可
-  mux_middleware: false        # true = 在 chi/mux 层统一鉴权（覆盖裸 chi + docs + MCP）
-  public_paths:                # mux 模式下的匿名路径（精确或前缀）
+  deny_unregistered: false     # 已删除；写成 true 会启动失败。Casbin 关闭时登录即可
+  public_paths:                # 匿名路径（精确或前缀）
     - "/public"
-  dev_header_user: false       # true 允许 X-User 绕过 JWT（仅本地）
+  dev_header_user: false       # true 允许 X-User/X-Org 绕过 JWT（仅本地）
+  dev_org_id: ""               # X-Org 缺失时的开发租户；为空则开发请求必须带 X-Org
   tls_insecure: false          # 跳过 JWKS 证书校验（仅本地自签 IdP）
   casbin:
     enabled: false
@@ -591,6 +617,7 @@ otel:
   logs:
     enabled: true
     exporter: "otlp"
+    replace_slog_default: true  # 库嵌入时设为 false，保留宿主 slog handler
 
 discovery:
   consul_address: ""           # 空 = 跳过
@@ -601,12 +628,21 @@ discovery:
 
 docs:
   enabled: false               # 默认关闭；true 才暴露 /docs 与 /openapi.{yaml,json}
+  base_path: ""                # 网关前缀，如 "/api"；空 = 根路径
+  scalar_url: "https://cdn.jsdelivr.net/npm/@scalar/api-reference"
+  scalar_sri: ""               # 可选 Subresource Integrity（如 sha384-...）
+
+huma:
+  public_spec: false           # 默认关闭；true 才暴露 /huma/openapi.*
+  schema_links: false          # 默认关闭响应中的 $schema / Link
 
 mcp:                           # 可选；默认不对外暴露 HTTP 端点
   enabled: false
   name: ""                     # 默认 fxkit-service
   path: "/mcp"                 # SSE base path
   max_response_bytes: 1048576   # 单次 tool 返回上限（默认 1 MiB，负数不限制）
+  include_tools: []            # 非空时只暴露这些 operationId
+  exclude_tools: []            # 排除的 operationId（优先级高于 include）
 ```
 
 ### 扩展业务配置
@@ -647,7 +683,7 @@ func NewService(cfg *OrdersConfig, db *gormx.Client) *Service {
 
 Fx 外：`config.Load[OrdersConfig](cfg, "orders")`。
 
-热重载：框架不提供自动热更新（`Config` 只在启动时构建）。需要热更新时，在宿主侧自行重建配置：新建 `config.Config` 后重新 `Load`，或重启进程。`ProvideConfig` 注入的 `*T` 不会自动更新。框架子系统配置在各自包内（`server.Config`、`gormx.Config` 等）。
+热重载：框架默认不自动刷新（`ProvideConfig` 是启动快照）。需要业务配置热更新时用 opt-in 的 `config.ProvideWatch[T](key)` 或 `(*config.Config).Watch[T](key)`；消费方只依赖 `config.Dynamic[T]`。它只 watch Consul KV，框架对象（listener/db/auth/otel）不做热替换，仍建议重启/滚动发布。
 
 ---
 
@@ -786,30 +822,34 @@ resp, err := cli.GreetWithResponse(ctx, "world")
 
 | 项 | 行为 |
 |----|------|
-| 鉴权范围 | **仅 Huma/REST**；裸 chi handler 需宿主自行鉴权 |
-| 身份 | JWT Bearer 或 `X-User`（`dev_header_user`） |
-| 授权 | `auth.casbin.enabled` 时：`Enforce(sub, path, METHOD)`；否则回退 `HTTPRoute.Permission` + scopes |
+| 鉴权范围 | chi 中间件，覆盖 Huma、裸 chi、docs、MCP |
+| 身份 | JWT Bearer 或 `X-User` + `X-Org`（`dev_header_user`）；`OrgID` 来自 `org_claim` |
+| 授权 | `auth.casbin.enabled` 时：`Enforce(sub, dom, path, METHOD)`；`dom` 为空**一律拒绝** |
 | 策略存储 | 业务库表（默认 `casbin_rule`）；多副本靠 `reload_interval` 拉齐内存 |
-| 未登记路由 | **一律要登录**（不再匿名放行）。Casbin 关闭时：`deny_unregistered=false` 登录即可；`true` 则未登记 403。Casbin 启用时一律 Enforce，未匹配策略 403。`Metadata[authz.OpPublic]=true` 可跳过。 |
-| 组织 | `org_claim` 写入 `Subject.OrgID`；**Enforce 不按组织隔离**，handler 须自行校验 |
+| 未登记路由 | Casbin 启用时一律 Enforce，未匹配策略 403；Casbin 关闭时登录即可 |
+| 组织 | **强制按 domain 隔离**；跨租户管理员用 `dom="*"` 的 g/p 规则（全局角色/全局策略） |
+| 匿名路由 | `auth.public_paths`（内置 health/version/docs/spec 始终公开） |
 
 ### 启用（Casbin 本地）
 
 ```yaml
 auth:
   enabled: true
+  public_paths: ["/public"]    # 匿名接口（health/version/docs/spec 内置公开）
+  dev_org_id: ""               # 本地可设 demo；为空时请求必须带 X-Org
   casbin:
     enabled: true
     table_name: casbin_rule
     auto_register_routes: true   # 启动时把 HTTPRoute + 已挂载的 Huma OpenAPI 写入 Casbin
     bootstrap_role: admin
-    bootstrap_users: [alice]     # 可选：本地用户绑到 admin
+    bootstrap_users: [alice]     # 可选：本地用户绑到 admin（domain="*"）
     reload_interval: 5s          # 多副本 LoadPolicy；0s 关闭
   deny_unregistered: false
   dev_header_user: true   # 生产必须 false；仅认人，权限走 Casbin
 ```
 
-启动时：每个 `HTTPRoute`（含从已注册 Huma operation 刮取的 OpenAPI 路径，因此 `RegisterResource` 不必再手写 ProvideHTTPRoutes）→ `p, {bootstrap_role}, {path}, {METHOD}`（Method 空则为 `*`），并绑定 `bootstrap_users`。
+启动时：每个 `HTTPRoute`（含从已注册 Huma operation 刮取的 OpenAPI 路径，因此 `RegisterResource` 不必再手写 ProvideHTTPRoutes）→ `p, {bootstrap_role}, "*", {path}, {METHOD}`（Method 空则为 `*`），并绑定 `bootstrap_users` 为 `g, user, {bootstrap_role}, "*"`。
+`dom="*"` 表示全局策略/全局角色，可跨租户生效；租户专属策略/绑定需显式写 domain。
 权限目录（`GET /authz/permissions`）是**运行时派生**的：把 `HTTPRoute` 的 `OperationID`/`Summary`/`Description`/`Tags` 与 Casbin 策略合并展示，不落库。内置 `/huma/openapi*`、`/schemas` 不刮取、不鉴权。
 
 ```go
@@ -831,8 +871,8 @@ authz.ProvideHTTPRoutes(func() []authz.HTTPRoute {
 })
 ```
 
-Casbin 策略示例：`p, admin, /users, *` + `p, admin, /users/:id, *` + `g, alice, admin`。
-`{id}` 会写成 `:id`（keyMatch2）。`Permission` 字段仅在 Casbin 关闭时使用。
+Casbin 策略示例：`p, admin, *, /users, *` + `p, admin, *, /users/:id, *` + `g, alice, admin, *`。
+`{id}` 会写成 `:id`（keyMatch2）。路由上没有单独的 Permission 字符串；Casbin 关闭时登录即可。
 
 ### RBAC 管理 API（管理平台）
 
@@ -860,13 +900,13 @@ subj, ok := authz.SubjectFromContext(ctx)
 
 ### 本地联调
 
-`auth.dev_header_user: true` 时可用 `X-User: alice` 代替 Bearer。未配置 JWT validator 时，残留的 `Authorization: Bearer` 不会挡住 `X-User`。启用时进程会打 **WARN**。生产务必关闭。
+`auth.dev_header_user: true` 时可用 `X-User: alice` + `X-Org: demo` 代替 Bearer（`X-Org` 缺失时回退 `auth.dev_org_id`；两者都空则 403）。未配置 JWT validator 时，残留的 `Authorization: Bearer` 不会挡住 `X-User`。启用时进程会打 **WARN**。生产务必关闭。
 
 ```bash
-curl -H "X-User: alice" http://localhost:8090/users
+curl -H "X-User: alice" -H "X-Org: demo" http://localhost:8090/users
 curl -H "Authorization: Bearer <access_token>" http://localhost:8090/users
 # 查看已登记权限（含 Huma Summary）
-curl -H "X-User: alice" http://localhost:8090/authz/permissions
+curl -H "X-User: alice" -H "X-Org: demo" http://localhost:8090/authz/permissions
 ```
 
 ---
@@ -874,6 +914,10 @@ curl -H "X-User: alice" http://localhost:8090/authz/permissions
 ## 8. 数据库 gormx
 
 配置 `db.driver` + `db.dsn` 后 DI 提供 `*gormx.Client`。
+
+> 未配置时 DI 提供的是 `nil`（可选依赖）。需要数据库的模块应在启动期检查
+> `client == nil || !client.Enabled()`；`Conn` 在禁用时会 panic（fail-fast），
+> 不要用它来探测依赖是否存在。
 
 ```go
 func (s *Svc) Save(ctx context.Context, u *User) error {
@@ -893,8 +937,8 @@ func (s *Svc) Save(ctx context.Context, u *User) error {
 
 ### 迁移：外部 SQL 平台 + Atlas
 
-框架**不在应用启动时执行 DDL**（`db.auto_migrate` 默认 `false`）。它只拥有 5 张表，
-并提供两个只读命令：
+框架**不在应用启动时执行 DDL**（`db.auto_migrate` 默认 `false`）。它拥有 4 张核心表；
+启用 opt-in 模块时再加 2 张（`idempotency` / `audit`），并提供两个只读命令：
 
 ```bash
 myapp migrate print --dialect postgres            # 导出 DDL，交给上线平台审批执行
@@ -907,6 +951,8 @@ myapp migrate check -c configs/config.yaml        # 连库校验表/列是否存
 | `outbox_events` / `outbox_inbox_events` | outbox |
 | `casbin_rule` | authz（表名可配） |
 | `authz_role` | authz |
+| `idempotency_keys` | idempotency（opt-in） |
+| `audit_events` | audit（opt-in，sink=db） |
 
 DDL 在 [`gormx/migrations`](./gormx/migrations)（postgres / mysql / sqlite，含 `.rollback.sql`），
 已 `//go:embed` 进二进制。业务表不归框架管，用同一套平台流程即可。
@@ -920,11 +966,12 @@ DDL 在 [`gormx/migrations`](./gormx/migrations)（postgres / mysql / sqlite，�
 
 ### 缓存 cachex
 
-`cachex.Module`（已在 `Default`）提供内存 / Redis 两种实现，统一 `Cache` 接口：
+`cachex.Module`（已在 `Default`）只提供 Redis（分布式）实现，统一 `Cache` 接口。
+框架不内置进程内缓存；需要本地缓存请在宿主应用内自行实现。
 
 ```yaml
 cache:
-  driver: "redis"              # "" = 禁用 | memory | redis
+  driver: "redis"              # "" = 禁用 | redis（分布式）
   prefix: "catalog:"           # 键名前缀（建议带环境/服务名）
   default_ttl: 30m             # 默认过期
   null_ttl: 1m                 # 空结果缓存（防穿透）；0 = 不缓存空值
@@ -955,9 +1002,11 @@ order, err := cachex.GetOrSet(ctx, c, "order:"+id,
 
 语义要点：
 
-- **负缓存**：loader 返回「未找到」时写入空值占位；命中后仍满足
-  `errors.Is(err, gorm.ErrRecordNotFound)` 与 `fxerrors.Is(err, fxerrors.KindNotFound)`，
-  并用 `errors.Is(err, cachex.ErrNegativeHit)` 区分“命中负缓存”。
+- **负缓存**：loader 返回 gorm / database/sql / pgx 的「未找到」，或 `fxerrors.NotFound` 时写入空值占位。
+  命中后只认 `errors.Is(err, cachex.ErrNegativeHit)`，不再伪装成 gorm、sql、pgx 的哨兵。
+  loader 当时是 `fxerrors.NotFound` 时，命中结果仍能 `fxerrors.Is(err, fxerrors.KindNotFound)`（Huma 404）。
+  gorm、sql、pgx 的未找到第一次经 `fxerrors.Wrap` 是 500，命中后也是 500。
+  纯字符串 `"record not found"` 不会写入负缓存。
 - **singleflight**：同一实例 + 同一 key + 同一泛型类型并发时只回源一次；
   loader 用 `context.WithoutCancel` 执行，首个调用者取消不影响其他等待者。
 - **类型隔离**：缓存 payload 带类型指纹，同一 key 被不同类型读取时视为脏缓存并回源。
@@ -1030,6 +1079,10 @@ var userListSpec = crudx.ListSpec{
 
 未出现在 `Fields` 的列一律拒绝过滤；`sortBy` 接受 `SortFields` ∪ `Fields` ∪ `Relations` 路径（点号形式，如 `article.title`）。`SortFields` 用于排序键与过滤键不同名、或需要自定义排序表达式的情况。
 
+> **标识符校验**：`Fields.Column`、`SortFields` 的值、`ListInput.Select`
+> 都只允许普通 SQL 标识符（`[A-Za-z_][A-Za-z0-9_.]*`，`*`/`table.*` 除外）。
+> 含空格、引号、括号、运算符的值会在查询前被拒绝，避免 spec 来自管理端/租户配置时成为注入面。
+
 ---
 
 ## 10. 统一错误 fxerrors
@@ -1058,13 +1111,22 @@ outbox:
   batch_size: 50
   max_retries: 10
   claim_timeout: 30s
-  publish_concurrency: 1   # 默认 1（严格顺序）；>1 提吞吐，但不保证批内顺序
-  partition_field: ""      # 设了它则「同 key 串行、不同 key 并行」（见下）
+  publish_concurrency: 1   # 默认 1：按 id 串行；未分组时失败不挡住同批后续事件
+  partition_field: ""      # 设了它则「同 key 串行且失败即停、不同 key 并行」（见下）
+  publish_timeout: 30s     # 单条投递超时
+  retry_base: 2s           # 指数退避基数
+  retry_max: 5m            # 退避上限
+  retry_jitter_percent: 20 # 退避抖动
+  inbox_claim_timeout: 5m  # Inbox 认领租约
 ```
 
-### 高吞吐 + 同一 actor 保序
+### 高吞吐 + 同一批内按 key 分组
 
-`publish_concurrency > 1` 能提吞吐，但会让同一批内的事件乱序——对语义 actor 是致命的（同一 actorId 的命令会乱执行）。用 `partition_field` 解决：
+`publish_concurrency > 1` 且不设分组时，同一批内的事件会乱序。语义 actor 用 `partition_field` 把同一个 key 收进一组：
+
+> `attempts` 只在**真实投递失败**时递增；租约过期被其他副本重领不计入重试预算，
+> 避免 relay 崩溃/发布超时把消息误判为 failed。已发布的历史行由业务侧用
+> `Store.PurgePublished(ctx, cutoff)` 清理（框架不自动删除，保留期由合规决定）。
 
 ```yaml
 outbox:
@@ -1078,14 +1140,15 @@ outbox:
 ```
 claimBatch (ORDER BY id ASC)
   └─ 按 partition_field 分组：a=[e1,e3,e5] b=[e2] c=[e4]
-       └─ 组内串行（保序）· 组间并行（最多 publish_concurrency 个）
+       └─ 组内串行 · 组间并行（最多 publish_concurrency 个）
 ```
 
-- **同一 key** 的事件按产生顺序投递；**不同 key** 并行。
+- **同一 key** 在单个 relay 的同一批内按 id 顺序投递；当前这条没成功，该 key 本批剩下的不发。**不同 key** 并行。
+- 跨批重试不保证同 key 顺序：失败的组头会进入退避，同组还没发的尾部在租约到期后可能先被发出。
 - 取不到该字段的事件归入同一个串行组（宁可牺牲并发，也不打乱顺序）。
 - 支持 `gjson` 路径：payload 是 `{"input":{"actorId":"x"}}` 时写 `partition_field: "input.actorId"`。
-- 跨批次顺序由「`claimBatch` 按 id 排序 + 整批完成后才取下一批」保证，所以端到端按 key 有序。
-- 只影响**投递顺序**，不影响 `at-least-once` 语义；重试仍可能乱序（与是否分片无关）。
+- 多副本各自 `SKIP LOCKED` 认领，不保证同 key 的全序。没设分组时，失败也不挡住同批后面的事件。
+- 只影响**投递顺序**，不影响 `at-least-once` 语义。
 - 不改变表结构，无需迁移。
 
 > 典型配置：actor 命令用 `partition_field: "actorId"`；普通领域事件不设该字段，保持全局并行即可。
@@ -1112,20 +1175,43 @@ return client.Transaction(ctx, func(txCtx context.Context) error {
 - Producer：同一 `IdempotencyKey` 重复 Enqueue 为 no-op
 - 崩溃：`processing` + `LockedAt`，超时后可被 reclaim
 
-### 消费端 at-most-once
+### 消费端幂等（两阶段认领）
 
 ```go
 err := inbox.Once(ctx, outbox.OnceInput{
 	Key:   "user-created:" + id,
 	Topic: "user-created",
 	Fn: func(ctx context.Context) error {
-		// 业务处理；与 inbox insert 同事务
+		// 业务处理；在短事务之外执行，可以是远程调用
 		return nil
 	},
 })
 ```
 
-`Once` 以 **先 insert 唯一键再执行 Fn** 实现并发安全；冲突方跳过 Fn。
+`Once` 的执行顺序：
+
+1. 插入 `processing` 认领行（或抢占已过期的认领）；
+2. **事务外**执行 `Fn`；
+3. 成功后标记 `done`；失败则删除认领行，让下一次投递可以重试。
+
+已经 `done` 时返回 nil。别的投递还拿着未过期认领时返回 `outbox.ErrInboxBusy`，
+调用方应把这个错误交回 broker 重试，不要当成成功。处理中崩溃超过
+`inbox_claim_timeout` 后可被重新认领。语义是「至少一次投递 + 幂等键去重」，
+`Fn` 应可重入或配合业务幂等。
+
+新表结构见 `gormx/migrations/*/0003_outbox_retry_inbox_claim.sql`。
+
+### 失败重放（DLQ）
+
+`failed` 是终态。修复下游/配置后，用 `Store.RequeueFailed` 批量重置：
+
+```go
+n, err := store.RequeueFailed(ctx, outbox.RequeueFilter{
+	Topics: []string{"user-created"},
+	Before: time.Now().Add(-time.Hour),
+	Limit:  1000,
+})
+```
 
 ---
 
@@ -1177,7 +1263,7 @@ hatchetx.ProvideRegistrarLazy(func(i di.Injector) (hatchetx.Registrar, error) {
 
 按 `input.actorId` 并发键（`MaxRuns=1` + `GROUP_ROUND_ROBIN`）实现**邮箱串行**，不是完整 Dapr Actor：无跨 run sticky、无进程内激活，状态请外置（DB / appkv）。
 
-入参必须能 JSON 序列化出 `"actorId"`（嵌 `ActorRef` 或 `json:"actorId"`）。仅实现 `GetActorID()` 不够——Hatchet concurrency CEL 读的是 JSON。
+入参必须**直接匿名嵌入 `hatchetx.ActorRef`**（不能是指针、命名嵌入或间接嵌入）。`NewActor` 会在装配期校验，失败直接返回错误；自定义 JSON 序列化不得改变顶层 `actorId`。
 
 ```go
 type IncInput struct {
@@ -1185,10 +1271,13 @@ type IncInput struct {
 	Delta int64 `json:"delta"`
 }
 
-actor := hatchetx.NewActor("fxkit-counter", func(ctx context.Context, in IncInput) (Out, error) {
+actor, err := hatchetx.NewActor("fxkit-counter", func(ctx context.Context, in IncInput) (Out, error) {
 	// 同一 actorId 串行；状态外置
 	return Out{}, nil
 })
+if err != nil {
+	panic(err) // 装配期失败
+}
 
 // 模块
 hatchetx.ProvideRegistrar(actor.Registrar())
@@ -1310,6 +1399,13 @@ Runtime metrics 挂在全局 MeterProvider 上，随 `mp.Shutdown` 一起结束�
 所以 `/docs` 看到的就是当前真实 API（早期版本总是返回占位骨架）。
 未引入 huma 时退化为内嵌静态骨架。
 
+> Huma 自带的 `/huma/openapi.{yaml,json}`（含 `-3.0` 变体）默认**关闭**，
+> 因为 spec 会暴露全部路由与字段结构。需要时显式配置 `huma.public_spec: true`；
+> `docs` 与 `mcpx` 读取的是内存中的 spec，不依赖该端点。
+>
+> 响应 JSON 里的 `$schema` 字段 / `Link` 头默认也**关闭**（`huma.schema_links: false`）；
+> 需要 Huma 的 schema link 行为时显式开启。
+
 需要自定义 base spec 时用 `docs.MergedModule(embedOpenAPI)` **替换** `docs.Module`
 （两者注册相同端点，不要同时引入）。
 
@@ -1325,7 +1421,7 @@ myapp openapi --base docs/base.yaml -o merged.yaml
 
 需要 `huma.Module`。会启动同一张 DI 容器（DB 等 OnStart 仍会跑），只跳过 HTTP listen。
 
-调用方：`fxkit gen client --spec spec.yaml --out ./internal/clients/<svc>` 写出 `client.gen.go`（oapi-codegen）、`reqx.go`（`NewFromFactory`）和 `//go:generate`。
+调用方：`fxkit gen client --spec spec.yaml --out ./internal/clients/<svc>` 写出 `client.gen.go`（oapi-codegen）、`reqx.go`（`NewFromFactory`）、`spec.go`（源 spec 的 SHA-256 + `info.version`）和 `//go:generate`。
 
 ### MCP 服务器（可选）
 
@@ -1333,6 +1429,17 @@ myapp openapi --base docs/base.yaml -o merged.yaml
 
 - **stdio**：`myapp mcp`（Claude Desktop / Cursor 作为子进程直连）。
 - **SSE**：必须显式开启 `mcp.enabled: true`；端点是 `<path>/sse` 与 `<path>/message`。
+
+生产环境建议用 `mcp.include_tools` / `mcp.exclude_tools`（按 operationId）做工具白名单，
+至少排除 `authz` 管理接口；`/mcp` 本身也应放在网关鉴权之后。
+
+MCP 调用会走同一套 mux/authz（Casbin）：
+
+- **SSE**：入站 `Authorization` / `X-User` / `X-Org` 注入 tool handler context，
+  并透传到进程内 HTTP 请求；`Config.Headers` 的静态值只作为服务级凭据，
+  **不能覆盖调用者身份**。
+- **stdio**：用 `MCP_AUTHORIZATION` / `MCP_USER` / `MCP_ORG` 环境变量提供身份；
+  未提供时，需要授权的工具调用会被拒绝。
 
 ```yaml
 mcp:
@@ -1410,11 +1517,18 @@ func (s *OrderService) Process(ctx context.Context, orderID string) error {
 - `Lock(ctx)`：阻塞等待并获取锁（支持基于 Consul Blocking Query 的快速唤醒）
 - `TryLock(ctx)`：非阻塞尝试获取，若已被占用立即返回 `consulx.ErrLockHeld`
 - `WithLock`：闭包式安全持有，保证自动释放
+- `Lock.FencingToken()`：最近一次成功获取的单调 token（Consul 用 `X-Consul-Index`，
+  内存锁用进程内序号）。下游写路径应把它带到存储层，并拒绝小于当前值的旧持有者写入。
 - `NewMemoryLocker()`：单机/单测内存锁实现，脱离 Consul 亦可测试互斥语义
 
 ### 出站 HTTP：reqx
 
 `reqx` 封装 `imroc/req`，已包含在 `fxkit.Default()`：填 Consul 服务名即可 watch **healthy** 实例（从 `Service.Address` / `Node.Address` 读 IP 或域名），相对路径发请求，失败换节点重试，并经 `otelhttp` 传播 trace。
+
+> **重试语义**：GET/HEAD/OPTIONS/TRACE/PUT/DELETE 失败会换端点重试；
+> POST/PATCH 默认**不重放**（上游可能已处理），只有调用方显式带 `Idempotency-Key`
+> 请求头时才允许 failover。preserveHost 模式在 failover 时会关闭 idle 连接，
+> 避免复用刚失败 endpoint 的 keep-alive 连接。
 
 ```go
 // Factory 由 Default() 注入
@@ -1478,7 +1592,7 @@ fxkit gen resource Article \
 fxkit gen client --spec services/orders/openapi.yaml --out ./internal/clients/orders
 ```
 
-`init` 产出根 Makefile：`make run SVC=orders`、`make openapi SVC=orders`、`make build`、`make infra`（本地 Postgres / Hatchet / Consul / OTel）。`gen resource` 用 `crudx.List` 做列表（含 cursor），写方法显式生成并用 `RegisterResource` 挂上；生成的表名/列名与 GORM `NamingStrategy` 一致（`Person` → `people`、`APIKey` → `api_key`），并为模型生成 `TableName()`；`--search` 列会打上 GORM index（TEXT 除外）并把 ListSpec `Indexed` 设为 true。生成后从 `services/<svc>/cmd/main.go` 接入。`gen client` 在调用方生成 oapi-codegen SDK，并用 `reqx.TransportClient` 发请求；默认不覆盖已存在的 `reqx.go`/`generate.go`（需 `--force`），生成失败不会留下半成品。
+`init` 产出根 Makefile：`make run SVC=orders`、`make openapi SVC=orders`、`make build`、`make infra`（本地 Postgres / Hatchet / Consul / OTel）。`gen resource` 用 `crudx.List` 做列表（含 cursor），写方法显式生成并用 `RegisterResource` 挂上；生成的表名/列名与 GORM `NamingStrategy` 一致（`Person` → `people`、`APIKey` → `api_key`），并为模型生成 `TableName()`；`--search` 列会打上 GORM index（TEXT 除外）并把 ListSpec `Indexed` 设为 true。生成后从 `services/<svc>/cmd/main.go` 接入。`gen client` 在调用方生成 oapi-codegen SDK，并用 `reqx.TransportClient` 发请求；默认不覆盖已存在的 `reqx.go`/`generate.go`（需 `--force`），同时生成 `spec.go` 记录源 spec 的 hash/version，生成失败不会留下半成品。
 
 ---
 
@@ -1501,8 +1615,14 @@ make run SVC=hello
 ## 18. 安全与运维清单
 
 - [ ] 生产 `auth.dev_header_user: false`
+- [ ] 鉴权挂在 chi 上，Huma 和裸路由一起过
+- [ ] JWT 必须包含 org claim；缺失 org 的请求会被拒绝（租户 domain）
+- [ ] 匿名接口写进 `auth.public_paths`
+- [ ] 不要把高权限 service token 放在 `mcp.headers`：所有 MCP 客户端会继承它
+- [ ] 生产保持 `huma.public_spec: false`（默认），或由网关保护 spec 端点
+- [ ] 启用 MCP 时配置 `mcp.include_tools` 白名单，并保护 `/mcp` 端点
 - [ ] 生产收紧 `server.cors_allowed_origins`（不要用 `*`）
-- [ ] 生产打开 Casbin 后未匹配策略即 403；匿名访问任意 Huma op 均为 401（`OpPublic` 除外）
+- [ ] 生产打开 Casbin 后未匹配策略即 403；匿名访问受保护接口为 401（`public_paths` 除外）
 - [ ] 非 Huma 的 chi 路由若需鉴权：在宿主自行加中间件
 - [ ] `auth.enabled=true` 时配置正确的 `issuer` / `audience` / JWKS
 - [ ] Outbox / Hatchet：消费端用 `Inbox.Once` 或业务幂等键
@@ -1578,8 +1698,7 @@ Consul watch、健康检查并发聚合），非并发测试发现不了问题�
 - 路由由**服务自己**在 Consul tag 里声明（`traefik.http.routers.<name>.rule`），加服务不改网关
 - 四个必配中间件：安全头、边缘限流、熔断、body 上限
 - SSE / MCP 路由要**单独建 router**：不挂 `buffering`，entryPoint 的 `writeTimeout` 为 0
-- 框架侧的 `server.rate_limit` 在网关后应**关闭**：它按 `RemoteAddr` 计数且不信任 XFF，
-  网关后所有请求同 IP，会退化成整站单桶
+- 框架**不再内置限流**：统一在网关做全局限流（跨副本），框架只保留安全头/CSRF/超时等
 - 三处超时要按「网关 ≥ 框架 ≥ 业务」排列，否则会出现网关 504 但服务日志显示成功
 - `/docs`、`/openapi.*`、`/mcp`、`/authz/*` 不要配公网路由
 
@@ -1648,6 +1767,133 @@ flowchart TB
 `Indexed` **不再**隐含 `Likeable` —— 需要 `~` 的列必须显式写 `Likeable: true`。
 这是刻意的：模糊匹配的授权应当是显式决定。
 
+### `gormx.Client.Conn` 改为 fail-fast
+
+**症状**：未配置数据库却调用 `Conn` 时 panic，而不是拿到 nil 后在更远的位置 nil deref。
+
+**原因**：`Conn` 曾返回 nil，调用方无法区分「未配置」与「查询结果为空」，
+错误日志也定位不到根因。
+
+**迁移**：需要数据库的模块在启动期用 `client == nil || !client.Enabled()` 检查；
+可选模块用 `Enabled()`/`Pool()` 探测。`outbox.enabled=true` 但没有数据库、或没有
+`EventPublisher` 时启动失败。
+
+### `reqx` 不再默认重试非幂等请求
+
+**症状**：POST/PATCH 遇到 5xx 或连接中断时不再自动换端点，调用方看到原始错误。
+
+**原因**：上游可能已处理请求，重放会制造重复订单/支付。
+
+**迁移**：需要 failover 时在请求头带 `Idempotency-Key`：
+
+```go
+req.Header.Set("Idempotency-Key", orderID)
+```
+
+### `outbox.attempts` 只统计真实失败
+
+**症状**：`attempts` 不再在每次认领时 +1；租约过期重领不会消耗重试预算。
+
+**原因**：认领只是「换人执行」，不是业务失败；旧行为会让 relay 重启/发布超时
+直接把消息打成 `failed`。
+
+**迁移**：无需改动；`max_retries` 语义仍是「总失败次数上限」。已发布行可用
+`Store.PurgePublished` 做保留期清理。
+
+### outbox 失败后指数退避
+
+**症状**：失败行不再每秒重试，而是按 `retry_base * 2^(attempts-1)` 退避（上限 `retry_max`，默认 2s/5m，含抖动）。
+
+**原因**：旧行为下 `max_retries=10` + `poll_interval=1s` 会在下游 10s 抖动内把消息打成 `failed`。
+
+**迁移**：新表需要 `gormx/migrations/*/0003_outbox_retry_inbox_claim.sql` 的 `next_attempt_at` 列。想恢复旧行为设 `retry_base: 0`。
+
+### `Store.RequeueFailed`：失败消息重放
+
+**用途**：修复下游/配置后，把 `failed` 行按 topic/时间/数量重置为 `pending`（`attempts=0`、清空 `last_error`/`next_attempt_at`）。
+
+**注意**：这是显式运维操作，需要调用方做权限控制；框架不自动重放。
+
+### `Inbox.Once` 改为两阶段认领
+
+**症状**：`Fn` 不再在数据库事务内执行；长 handler 不占连接/行锁。
+
+**原因**：旧实现先 insert 再在同一个事务里执行 handler，长事务会耗尽连接池、阻塞重复消息，且无法让外部副作用与 DB 提交原子。
+
+**语义**：至少一次投递 + 幂等键去重。处理中崩溃超过 `outbox.inbox_claim_timeout` 后可被重新认领；`Fn` 失败会删除认领行以便重试，因此 **`Fn` 必须可重入**。
+
+**迁移**：执行 0003 迁移（inbox 表新增 `status/claimed_at/lease_id`）。
+
+### `cachex` 移除 memory 驱动
+
+**症状**：`cache.driver: memory` 启动失败；`NewMemoryCache` 不再存在。
+
+**原因**：cachex 的定位是分布式缓存；进程内缓存无上界、无法跨副本失效，
+不适合作为框架能力。需要 L1 本地缓存请在宿主应用内实现。
+
+**迁移**：改用 `driver: redis`，或删掉 cachex 配置（`driver: ""` 返回 `DisabledCache`）。
+
+### authz 默认 mux 鉴权 + 多租户 domain
+
+**症状**：受保护请求需要 `X-Org`（dev）或 JWT `organization_id`；缺失的一律 403。
+
+**原因**：鉴权在 chi 上统一处理；Casbin 模型是 `(sub, dom, obj, act)`，缺失 domain 不能获得全局身份。匿名路径用 `auth.public_paths`。
+
+**迁移**：
+- 本地：设 `auth.dev_org_id`，或请求带 `X-Org`。
+- 匿名接口：写进 `auth.public_paths`（health/version/docs/spec 已内置公开）。
+- 跨租户管理员：给角色绑定/策略使用 `dom: "*"`（全局角色 + 全局策略）。
+- 执行 `gormx/migrations/*/0004_casbin_domain.sql`（旧策略自动转换为 `dom="*"`）。
+
+### Huma 重复 operationId 启动失败
+
+**症状**：启动时 panic，信息包含重复的 operationId、method、path。
+
+**原因**：不再自动加 `_2` 后缀——静默改名会让已生成的 typed client 与运行时契约漂移。
+
+**迁移**：给资源设置显式且唯一的 `OperationID`，或修正冲突的路径。
+
+### Consul 自注册失败直接启动失败
+
+**症状**：`discovery.register=true` 且 Consul 不可达时，进程启动失败。
+
+**原因**：注册失败意味着实例拿不到流量；带病运行只会隐藏故障。
+
+**迁移**：保证 Consul 在启动时可用，或临时关闭 `discovery.register`。
+
+### CORS 中间件不再为任意 OPTIONS 返回 200
+
+**症状**：无 `Origin` 的 `OPTIONS` 请求现在交给路由（可能 404/405）；
+不允许的 Origin 的预检不再得到 200。
+
+**迁移**：如需自定义 OPTIONS 行为，在路由层处理即可；CORS 只处理真正的
+跨域请求与预检。
+
+### `ProvideHealthCheckerLazy` 改用显式 `ok` 表达跳过
+
+**症状**：编译失败（函数签名变化）。
+
+**原因**：`nil` 曾同时表示「本环境跳过」和「构造失败」，且 typed-nil
+（接口里装着 nil 指针）无法用 `hc != nil` 识别，最终会在排序/调用时 panic。
+
+**迁移**：
+
+```go
+server.ProvideHealthCheckerLazy(func(i di.Injector) (server.HealthChecker, bool, error) {
+    hc, err := ...
+    if err != nil {
+        return nil, false, err
+    }
+    if !applicable {
+        return nil, false, nil // 显式跳过
+    }
+    return hc, true, nil
+})
+```
+
+同时：`ProvideHealthChecker(nil)` 会在装配期 panic；`RegisterHealth` 收到 nil
+（含 typed nil）会返回错误；lazy 返回 `(nil, true, nil)` 会让启动失败。
+
 ### `server` 不再提供 `/readyz` 的 `gormx` 直连检查
 
 **症状**：自定义了 `server.RegisterHealth(HealthParams{Client: ...})` 的代码编译失败。
@@ -1682,7 +1928,7 @@ server.RegisterHealth(server.HealthParams{
 | `fxkit.Service` / `fxkit.Provide` | `func(dep...) T`、`func(dep...) (T, error)`、参数结构体 `func(P)` |
 | `huma.ProvideRegistrar` | `Registrar`、`func(huma.API)`、`func() Registrar`、`func(dep...) Registrar` |
 | `server.ProvideRoutes` | `[]Route`、`Route`、`func() []Route`、`func(dep...) []Route` |
-| `server.ProvideHealthChecker` | `HealthChecker`、`func() HealthChecker`、`func(dep...) HealthChecker` |
+| `server.ProvideHealthChecker` | 直接传 `HealthChecker` 值；条件注册用 `ProvideHealthCheckerLazy(func(i di.Injector) (HealthChecker, bool, error))` |
 
 ### 路由注册时机改变（修复 `/docs` 404）
 
@@ -1694,21 +1940,14 @@ server.RegisterHealth(server.HealthParams{
 **影响**：如果依赖了旧时序（例如在某个 `OnStart` 里读 `*chi.Mux` 并期望路由已就绪），
 应改用 `PhaseMountHTTP+1` 的 PreStart 钩子。
 
-### `cachex.GetOrSet` 命中负缓存时返回专用错误
+### `cachex.GetOrSet` 命中负缓存时返回 `ErrNegativeHit`
 
-**症状**：`errors.Is(err, gorm.ErrRecordNotFound)` 在「首次访问」和「命中负缓存」两处
-行为不一致（早期命中负缓存后变成 false，导致本来该 404 的请求变成 500）。
+**症状**：命中负缓存后 `errors.Is(err, gorm.ErrRecordNotFound)` 为 false。
+loader 返回 gorm、sql 或 pgx 的未找到时，第一次和命中后经 Huma 都是 500。
 
-**迁移**：负缓存命中现在返回 `*cachex.NegativeHitError`，同时满足：
-
-```go
-cachex.IsNegativeHit(err)                    // 或 errors.Is(err, cachex.ErrNegativeHit)
-errors.Is(err, gorm.ErrRecordNotFound)       // loader 当时返回的就是它
-fxerrors.Is(err, fxerrors.KindNotFound)      // loader 返回 gorm/sql/fxerrors NotFound 时
-```
-
-注意 `ErrNegativeHit` 已从**函数**改为**哨兵值**：旧的 `cachex.ErrNegativeHit(err)` 写法需改成
-`cachex.IsNegativeHit(err)` 或 `errors.Is(err, cachex.ErrNegativeHit)`。
+**迁移**：用 `errors.Is(err, cachex.ErrNegativeHit)` 判断命中。
+需要 404 时让 loader 返回 `fxerrors.NotFound`；这种命中仍满足 `fxerrors.Is(err, fxerrors.KindNotFound)`。
+`ErrNegativeHit` 是哨兵值，不是函数：用 `errors.Is` 或 `cachex.IsNegativeHit`。
 
 ### `gormx.AfterCommit` 回调改为接收 `context.Context`
 
@@ -1738,6 +1977,58 @@ gormx.AfterCommit(ctx, func(cbCtx context.Context) { _ = db.Conn(cbCtx).Create(&
 **迁移**：每个 `Locker.Lock(ctx, key)` 调用都是独立实例；不要跨 goroutine 复用一个 `*Lock`。
 另外 `WithTTL(<10s)` 会 clamp 到 10s 并 `Warn`；`Unlock` 可能返回 `ErrLockLost` 或清理错误，
 比较错误请用 `errors.Is`。
+
+### `huma` 不再默认暴露 `/huma/openapi*`
+
+**症状**：升级后 `GET /huma/openapi.yaml` 返回 404。
+
+**原因**：spec 会暴露全部路由与字段结构，现在与 `docs` 一样默认关闭。
+`docs` 与 `mcpx` 读取的是内存中的 spec，不受影响。
+
+**迁移**：确实需要该端点时显式开启（生产建议放在网关鉴权之后）：
+
+```yaml
+huma:
+  public_spec: true
+```
+
+### `huma` 响应不再默认注入 `$schema`
+
+**症状**：升级后响应 JSON 里没有 `$schema` 字段，也没有 `Link` 头；OpenAPI 的
+`components.schemas` 里也不再出现 `$schema` 属性。
+
+**原因**：Huma 的 `SchemaLinkTransformer` 默认会给响应注入 `$schema`/`Link`。
+多数 API 不需要这些字段，且会污染 DTO；fxkit 现在默认关闭。
+
+**迁移**：需要时显式开启：
+
+```yaml
+huma:
+  schema_links: true
+```
+
+### `crudx` 游标分页必须指定排序
+
+**症状**：`UseCursor: true` 但未配置 `DefaultSort`/`SortBy` 时返回 400 `INVALID_SORT_FIELD`
+（以前是首页无序、次页 400）。
+
+**迁移**：给 `ListSpec.DefaultSort` 设一个确定排序（如 `created_at desc`），
+或让调用方显式传 `sortBy`。
+
+### `hatchetx` actor reminder 的默认 cron 名格式变更
+
+**症状**：升级后旧的 actor reminder 不再被 `FindActorReminder`/`DeleteActorReminder` 命中。
+
+**原因**：`reminderName-actorId` 存在歧义（`("a-b","c")` 与 `("a","b-c")` 碰撞），
+改为 `reminderName-<len>-actorId`。
+
+**迁移**：用旧名删除后重建，或显式传 `CreateReminderInput.Name`。
+
+### `fxkit gen resource` 的 optional 字段在 UpdateReq 中变为指针
+
+**原因**：只有指针能区分「未提供」与「显式零值」；旧模板会把未传字段写成零值。
+
+**迁移**：`--force` 重新生成；调用方对 optional 字段取地址（`&v`）。
 
 ### `mcpx` 的 HTTP 端点默认关闭
 
@@ -1847,14 +2138,13 @@ MySQL 语义也不确定。
 **迁移**：把该关联声明为 `Cardinality: crudx.RelationToOne`（多对一），或改按根表列排序。
 错误原因码：`DISTINCT_RELATION_SORT_UNSUPPORTED`。
 
-### 新增：限流、mux 级鉴权、业务指标
+### 新增：mux 级鉴权、业务指标
 
 非破坏性，默认关闭/无副作用：
 
-- `server.rate_limit`：按客户端 IP 的令牌桶限流（超限 429 + Retry-After）。
-- `auth.mux_middleware: true`：在 chi/mux 层统一鉴权（覆盖裸 chi / docs / MCP），
-  此时 Huma 层中间件不再安装；匿名路径用 `auth.public_paths`。
+- 鉴权在 chi 上统一处理（Huma、裸路由、docs、MCP）；匿名路径用 `auth.public_paths`。
 - cachex / outbox / authz / mcpx 会向全局 MeterProvider 上报业务指标（见 §13）。
+- 限流请在网关/边缘处理；框架不再内置进程内限流。
 
 ### `db.auto_migrate` 默认改为 `false`
 

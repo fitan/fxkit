@@ -51,8 +51,8 @@ func TestClaimBatch_ClaimsPendingAndExpiredOnly(t *testing.T) {
 		t.Fatalf("claimed=%d, want 2 (pending + expired; fresh processing must be skipped)", len(claimed))
 	}
 	for _, ev := range claimed {
-		if ev.Attempts == 0 || ev.LeaseID == "" || ev.Status != StatusProcessing {
-			t.Fatalf("claimed row not marked: %+v", ev)
+		if ev.Attempts != 0 || ev.LeaseID == "" || ev.Status != StatusProcessing {
+			t.Fatalf("claimed row not marked (attempts must stay 0): %+v", ev)
 		}
 	}
 }

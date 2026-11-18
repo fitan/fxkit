@@ -19,6 +19,9 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `server.log_payloads` | 记录请求/响应体（含脱敏启发式）；生产慎开 |
 | `server.cors_allowed_origins` | 空 = 无 CORS（默认）；`["*"]` 才任意源 |
 | `server.shutdown_timeout` | 优雅停机超时时间；默认 `10s` |
+| `server.pprof.enabled` / `prefix` | 默认 false；开启后仍走 authz |
+| `server.security_headers.enabled` / `hsts` / `csp` | 默认开启 nosniff/frame/referrer；HSTS/CSP 显式配置 |
+| `server.csrf.enabled` / `cookie_name` / `header_name` | 仅 cookie 认证场景；double-submit |
 
 ## app / db
 
@@ -38,8 +41,9 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `outbox.enabled` | 事务性 outbox relay |
 | `outbox.poll_interval` | 默认 `1s`；必须 > 0 |
 | `outbox.batch_size` / `max_retries` / `claim_timeout` | 批大小、重试、租约 |
-| `outbox.publish_concurrency` | 并行投递数，默认 `1`（严格顺序）；>1 不保证批内顺序 |
-| `outbox.partition_field` | 按 payload 字段分组保序（如 `"actorId"`）；同 key 串行、不同 key 并行；空 = 不分组 |
+| `outbox.publish_concurrency` | 并行投递数，默认 `1`（按 id 串行）；未分组时失败不挡住同批后续事件；>1 不保证批内顺序 |
+| `outbox.partition_field` | 按 payload 字段分组（如 `"actorId"`）。单个 relay 的同一批内同 key 串行且失败即停，不同 key 并行。跨批重试和多副本都不保证同 key 全序。空 = 不分组 |
+| `outbox.purge_interval` / `purge_before` / `inbox_purge_before` | 自动清理 published/failed + inbox done；`purge_interval: 0` = 关闭；阈值默认 168h |
 | `hatchet.enabled` | 启用 client（有 registrar 时启 worker） |
 | `hatchet.token` / `HATCHET_CLIENT_TOKEN` | 必填（启用时；SDK 环境变量） |
 | `hatchet.host_port` | 如 `localhost:7077`；loopback 默认 TLS `none` |
@@ -53,9 +57,10 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 
 | 键 | 说明 |
 |----|------|
-| `auth.enabled` | 鉴权总开关（仅 Huma） |
+| `auth.enabled` | 鉴权总开关。中间件在 chi 上，覆盖 Huma 和裸路由 |
 | `auth.issuer` / `audience` / `jwks_url` | JWT；jwks 默认 `{issuer}/jwks` |
-| `auth.org_claim` / `require_org` | 写入 `Subject.OrgID`；Enforce 不按组织隔离 |
+| `auth.org_claim` / `require_org` | 写入 `Subject.OrgID`，作为 Casbin domain。空 domain 拒绝 |
+| `auth.public_paths` | 匿名路径，精确或前缀。health/version/docs/spec 另有内置放行 |
 | `auth.casbin.enabled` | path/method RBAC |
 | `auth.casbin.table_name` | 默认 `casbin_rule` |
 | `auth.casbin.auto_register_routes` | 启动写入策略（HTTPRoute + OpenAPI 刮取） |
@@ -63,7 +68,38 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `auth.casbin.reload_interval` | 多副本重载策略；默认 `5s`；`0s` 关闭 |
 | `auth.dev_header_user` | 允许 `X-User`；生产必须 false |
 | `auth.tls_insecure` | 跳过 JWKS TLS 校验；仅本地自签 IdP |
-| `auth.deny_unregistered` | 仅 Casbin 关闭：未登记路由是否 403。默认 false 仍要登录 |
+| `auth.deny_unregistered` | 已删除。写成 true 会启动失败。Casbin 关闭时登录即可；按路由拒绝请开 Casbin |
+
+## audit
+
+| 键 | 说明 |
+|----|------|
+| `audit.enabled` | 默认 false |
+| `audit.sink` | `slog` / `db` / `outbox` |
+| `audit.include_body` / `include_headers` | 默认 false；body 截断 8 KiB |
+| `audit.redact_headers` | 默认 `Authorization` / `Cookie` / `Set-Cookie` |
+| `audit.retention` | 默认 `720h` |
+
+## idempotency
+
+| 键 | 说明 |
+|----|------|
+| `idempotency.enabled` | 默认 false；只对带 `Idempotency-Key` 的 mutating 请求生效 |
+| `idempotency.header` / `ttl` / `methods` / `max_body_bytes` | 默认 `Idempotency-Key` / `24h` / POST… / 1 MiB |
+| `idempotency.purge_interval` | 过期 key 清理间隔；默认 `1h`，0 = 关闭 |
+| `idempotency.store` | 当前只支持 `db` |
+
+## mcp
+
+| 键 | 说明 |
+|----|------|
+| `mcp.enabled` | 默认 false；开启后在 `mcp.path` 下挂 `GET /sse` + `POST /message` |
+| `mcp.path` | 默认 `/mcp` |
+| `mcp.include_tools` / `exclude_tools` | 按 operationId 白/黑名单；生产建议白名单 |
+| `mcp.max_response_bytes` | 单次 tool 返回上限，默认 1 MiB |
+| `mcp.headers` | 固定透传 header |
+
+开启 Casbin 时，`/mcp/*` 不经过 Huma，需显式登记到 `authz.ProvideHTTPRoutes`，否则 admin 也会 403。
 
 ## otel
 
@@ -86,3 +122,13 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | `discovery.register` | `true` 时自注册（TTL） |
 | `discovery.advertise_address` | 空 = 自动本机 IP |
 | `discovery.tags` | 额外 Consul 标签（与内置 `fxkit`/`http` 合并；Traefik Catalog 用） |
+
+## config watch
+
+| 用法 | 说明 |
+|------|------|
+| `config.ProvideWatch[T](key)` | opt-in 注入 `*config.Watch[T]`；只 watch Consul KV |
+| `config.Dynamic[T]` | 只读接口；消费方依赖它，不依赖具体 Watch |
+| `(*config.Config).Watch[T](key)` | 手动构造；`Get()` 读当前快照，`Close()` 停止 |
+
+`ProvideConfig[T]` 仍是启动快照；框架配置（server/db/auth/otel）不建议热更新。

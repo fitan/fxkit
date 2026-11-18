@@ -1,17 +1,10 @@
 package authz
 
 import (
-	"fmt"
-	"net/http"
 	"testing"
 )
 
-func TestFindRouteTrailingSlash(t *testing.T) {
-	routes := []HTTPRoute{{Method: http.MethodGet, Path: "/users", Permission: "users:list"}}
-	got, ok := indexRoutes(routes).find(http.MethodGet, "/users/")
-	if !ok || got.Permission != "users:list" {
-		t.Fatalf("got=%+v ok=%v", got, ok)
-	}
+func TestNormalizeRequestPath(t *testing.T) {
 	if got := normalizeRequestPath("/users/"); got != "/users" {
 		t.Fatalf("normalize=%q", got)
 	}
@@ -20,72 +13,58 @@ func TestFindRouteTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestFindRoutePrefersSpecific(t *testing.T) {
-	routes := []HTTPRoute{
-		{Method: "", Path: "/users/{id}", Permission: "users:get"},
-		{Method: http.MethodGet, Path: "/users/{id}", Permission: "users:read"},
-		{Method: http.MethodGet, Path: "/users/me", Permission: "users:me"},
-	}
-	got, ok := indexRoutes(routes).find(http.MethodGet, "/users/me")
-	if !ok || got.Permission != "users:me" {
-		t.Fatalf("got=%+v ok=%v", got, ok)
-	}
-	got, ok = indexRoutes(routes).find(http.MethodGet, "/users/42")
-	if !ok || got.Permission != "users:read" {
-		t.Fatalf("got=%+v ok=%v", got, ok)
-	}
-	got, ok = indexRoutes(routes).find(http.MethodDelete, "/users/42")
-	if !ok || got.Permission != "users:get" {
-		t.Fatalf("got=%+v ok=%v", got, ok)
-	}
-}
-
-func TestSubjectHasWildcard(t *testing.T) {
-	s := Subject{Permissions: []string{"orders:*"}}
-	if !s.Has("orders:read") {
-		t.Fatal("orders:* should match orders:read")
-	}
-	if s.Has("orders:a:b") {
-		t.Fatal("orders:* should not match multi-segment orders:a:b")
-	}
-	if s.Has("users:read") {
-		t.Fatal("orders:* should not match users:read")
-	}
-}
-
 func TestSkipAuthzPath(t *testing.T) {
 	if !skipAuthzPath("/huma/openapi.json") || !skipAuthzPath("/schemas/Foo") || !skipAuthzPath("/openapi.json") {
 		t.Fatal("builtin spec paths should skip authz")
 	}
-	if skipAuthzPath("/users") {
-		t.Fatal("/users should not skip authz")
+	if !skipAuthzPath("/openapi-3.0.json") || !skipAuthzPath("/openapi.yaml") || !skipAuthzPath("/huma/openapi-3.0.yaml") || !skipAuthzPath("/healthz") || !skipAuthzPath("/docs") {
+		t.Fatal("spec filenames, probes, and docs should skip authz")
+	}
+	for _, p := range []string{"/users", "/docs-admin", "/docs-evil", "/version-history", "/healthz-internal", "/schemas-private", "/openapix", "/readyz.x", "/openapi/v1/pets", "/openapi-apps", "/openapi.admin"} {
+		if skipAuthzPath(p) {
+			t.Fatalf("%s should not skip authz", p)
+		}
 	}
 }
 
-func TestAdminHTTPRoutesRequirePermission(t *testing.T) {
+func TestAdminHTTPRoutes(t *testing.T) {
 	routes := adminHTTPRoutes()
 	if len(routes) == 0 {
 		t.Fatal("expected admin routes")
 	}
 	for _, r := range routes {
-		if r.Permission != AdminPermission {
-			t.Fatalf("route %s %s permission=%q want %q", r.Method, r.Path, r.Permission, AdminPermission)
+		if r.Method == "" || r.Path == "" {
+			t.Fatalf("route missing method or path: %+v", r)
 		}
 	}
 }
 
-// BenchmarkRouteFind 验证预编译路由匹配的分配情况（应接近 0 allocs/op）。
-func BenchmarkRouteFind(b *testing.B) {
-	routes := make([]HTTPRoute, 0, 64)
-	for i := 0; i < 60; i++ {
-		routes = append(routes, HTTPRoute{Method: http.MethodGet, Path: fmt.Sprintf("/res%d/{id}", i)})
+func TestSubjectHas(t *testing.T) {
+	s := Subject{Permissions: []string{"users:list", "orders:*"}}
+	if !s.Has("users:list") || s.Has("users:create") {
+		t.Fatalf("exact match failed: %+v", s.Permissions)
 	}
-	idx := indexRoutes(routes)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, ok := idx.find(http.MethodGet, "/res59/42"); !ok {
-			b.Fatal("route not found")
-		}
+	if !s.Has("orders:read") || !s.Has("orders:write") {
+		t.Fatalf("prefix wildcard failed")
+	}
+	admin := Subject{Permissions: []string{"*"}}
+	if !admin.Has("anything") {
+		t.Fatal("star wildcard failed")
+	}
+}
+
+func TestHumaPathToCasbin(t *testing.T) {
+	if got := HumaPathToCasbin("/users/{id}"); got != "/users/:id" {
+		t.Fatalf("got %q", got)
+	}
+	if got := HumaPathToCasbin("/users"); got != "/users" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestConfigRejectsRemovedDenyUnregistered(t *testing.T) {
+	cfg := Config{DenyUnregistered: true, OrgClaim: "organization_id"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("deny_unregistered: true must fail startup")
 	}
 }

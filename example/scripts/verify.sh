@@ -586,30 +586,20 @@ else
     log "logs: $TMP/catalog.log $TMP/storefront.log"
     exit 1
   fi
-  if wait_http "$EDGE_URL/" 40; then
-    ok "frontend via Traefik $EDGE_URL/"
+  if probe_tcp "127.0.0.1" 3000; then
+    if wait_http "$EDGE_URL/" 40; then
+      ok "Nuxt frontend via Traefik $EDGE_URL/"
+    else
+      fail "frontend $EDGE_URL/"
+      docker compose logs --tail 40 traefik || true
+    fi
+    if curl -sS -m 8 "$EDGE_URL/" | grep -q "fxkit showcase"; then
+      ok "frontend HTML"
+    else
+      fail "frontend HTML missing title"
+    fi
   else
-    fail "frontend $EDGE_URL/"
-    docker compose logs --tail 40 traefik || true
-  fi
-  if curl -sS -m 8 "$EDGE_URL/" | grep -q "fxkit showcase"; then
-    ok "frontend HTML"
-  else
-    fail "frontend HTML missing title"
-  fi
-  css="$(http_code "$EDGE_URL/styles.css")"
-  js="$(http_code "$EDGE_URL/app.js")"
-  sdk="$(http_code "$EDGE_URL/logto.js")"
-  if [[ "$css" == "200" && "$js" == "200" && "$sdk" == "200" ]]; then
-    ok "frontend CSS/JS/Logto SDK via Traefik"
-  else
-    fail "frontend assets CSS=$css JS=$js SDK=$sdk"
-  fi
-  cb_html="$(curl -sS -m 8 "$EDGE_URL/callback" || true)"
-  if echo "$cb_html" | grep -q "fxkit showcase" && echo "$cb_html" | grep -q "/app.js"; then
-    ok "Logto /callback serves SPA"
-  else
-    fail "Logto /callback missing SPA HTML (restart Traefik after plugin change)"
+    skip "Nuxt dev server not running (:3000) — run make web-dev"
   fi
 
   edge_ok=0

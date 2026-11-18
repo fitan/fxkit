@@ -69,10 +69,10 @@ func TestGormAdapter_Persist(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.EnableAutoSave(true)
-	if _, err := e.AddPolicy("admin", "/users", "GET"); err != nil {
+	if _, err := e.AddPolicy("admin", "*", "/users", "GET"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.AddGroupingPolicy("alice", "admin"); err != nil {
+	if _, err := e.AddGroupingPolicy("alice", "admin", "*"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,7 +87,7 @@ func TestGormAdapter_Persist(t *testing.T) {
 	if err := e2.LoadPolicy(); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := e2.Enforce("alice", "/users", "GET")
+	ok, err := e2.Enforce("alice", "*", "/users", "GET")
 	if err != nil || !ok {
 		t.Fatalf("reload enforce=%v err=%v", ok, err)
 	}
@@ -104,7 +104,7 @@ func TestEnforcer_ReloadSeesOtherReplica(t *testing.T) {
 	if err := a.AddRoleBindings([]RoleBinding{{User: "carol", Role: "admin"}}); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := b.Enforce(ctx, EnforceInput{Sub: "carol", Obj: "/orders", Act: "GET"})
+	ok, err := b.Enforce(ctx, EnforceInput{Dom: "*", Sub: "carol", Obj: "/orders", Act: "GET"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestEnforcer_ReloadSeesOtherReplica(t *testing.T) {
 	if err := b.ReloadPolicies(); err != nil {
 		t.Fatal(err)
 	}
-	ok, err = b.Enforce(ctx, EnforceInput{Sub: "carol", Obj: "/orders", Act: "GET"})
+	ok, err = b.Enforce(ctx, EnforceInput{Dom: "*", Sub: "carol", Obj: "/orders", Act: "GET"})
 	if err != nil || !ok {
 		t.Fatalf("after reload enforce=%v err=%v", ok, err)
 	}
@@ -134,7 +134,7 @@ func TestGormAdapter_LongPath(t *testing.T) {
 	if err := other.ReloadPolicies(); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := other.Enforce(t.Context(), EnforceInput{Sub: "admin", Obj: path, Act: "GET"})
+	ok, err := other.Enforce(t.Context(), EnforceInput{Dom: "*", Sub: "admin", Obj: path, Act: "GET"})
 	if err != nil || !ok {
 		t.Fatalf("long path enforce=%v err=%v len=%d", ok, err, len(path))
 	}
@@ -202,7 +202,7 @@ func TestSetSubjectRoles_PersistsForReload(t *testing.T) {
 	if len(roles) != 1 || roles[0] != "admin" {
 		t.Fatalf("roles=%v", roles)
 	}
-	ok, err := other.Enforce(ctx, EnforceInput{Sub: "dave", Obj: "/users", Act: "GET"})
+	ok, err := other.Enforce(ctx, EnforceInput{Dom: "*", Sub: "dave", Obj: "/users", Act: "GET"})
 	if err != nil || !ok {
 		t.Fatalf("enforce=%v err=%v", ok, err)
 	}
@@ -224,26 +224,26 @@ func TestGormAdapter_RemoveFilteredPolicy(t *testing.T) {
 	}
 	e.EnableAutoSave(true)
 
-	if _, err := e.AddPolicy("admin", "/users", "GET"); err != nil {
+	if _, err := e.AddPolicy("admin", "*", "/users", "GET"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.AddPolicy("editor", "/orders", "GET"); err != nil {
+	if _, err := e.AddPolicy("editor", "*", "/orders", "GET"); err != nil {
 		t.Fatal(err)
 	}
 
 	// 用 fieldIndex = 1 删除（匹配 obj="/users"）
-	if _, err := e.RemoveFilteredPolicy(1, "/users"); err != nil {
+	if _, err := e.RemoveFilteredPolicy(2, "/users"); err != nil {
 		t.Fatal(err)
 	}
 
 	// admin, /users, GET 应被删除
-	ok, err := e.Enforce("admin", "/users", "GET")
+	ok, err := e.Enforce("admin", "*", "/users", "GET")
 	if err != nil || ok {
 		t.Fatalf("expected admin /users removed, got ok=%v err=%v", ok, err)
 	}
 
 	// editor, /orders, GET 必须仍然存在
-	ok, err = e.Enforce("editor", "/orders", "GET")
+	ok, err = e.Enforce("editor", "*", "/orders", "GET")
 	if err != nil || !ok {
 		t.Fatalf("expected editor /orders preserved, got ok=%v err=%v", ok, err)
 	}

@@ -5,8 +5,9 @@ description: >-
   whitelist), ListQueryInput, and optional RegisterResource. Use when the user
   asks for REST list APIs, q= filters, cursor pagination, fxkit gen resource,
   or JSON get/create/update/delete on an fxkit service. Pair with fxkit for
-  module wiring and fxkit-authz for permissions. Do not introduce a generic
-  repository layer; keep writes explicit in the service.
+  module wiring and fxkit-authz for permissions. Do not wrap CRUD in a generic
+  Repo[T]; if the project needs a shared repository layer, follow fxkit-layout
+  and keep writes orchestrated in the service.
 ---
 
 # fxkit Huma + crudx
@@ -53,9 +54,10 @@ page, err := crudx.List(ctx, crudx.ListInput[User, UserRow]{
 
 HTTP 入参嵌入 `fxhuma.ListQueryInput`，再 `ListParamsFromInput`。Huma 级中间件：`fxhuma.ProvideMiddleware(...)`（与 `server.ProvideMiddleware` 不同层）。
 
-### Go 1.27+ 泛型方法（Fluent API 与 Repo 增强）
+### 分页结果投影
 - **`ListResult[T].Map[R](fn)`**：直接在分页结果信封上进行类型投影，保留 `Total`、`Start`、`Limit`、`NextCursor` 分页元数据。
-- **`Repo[T].ListTo[R]` / `Repo[T].GetByIDTo[R]` / `Repo[T].FirstTo[R]`**：面向对象式领域仓储查询，一步完成过滤分页并投影到目标 DTO。
+- 推荐分层：**repo 返回 `ListResult[entity.X]`**（`ToRow` 用显式 identity：`func(m entity.X) entity.X { return m }`，零反射、编译期校验），**service 用 `Map` 转成 `ListResult[XxxRow]`**。这样 repo 不绑定 HTTP 契约。
+- 只有当读模型需要 entity 装不下的字段（JOIN 输出/聚合）时，才在 repository/query 层投影。
 
 ### 单个 list operation 示例
 
@@ -84,6 +86,8 @@ fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
 ```
 
 读一条：`crudx.GetByID` / `FirstByID`。写：`ZeroPrimaryKey`、`Select` 列更新、`MapDBError`。不要对 `ApplyList` 的返回值做 `Count`（Limit 已加上，total 会被截断）；需要 count / `nextCursor` 时用 `crudx.List`。
+
+并发更新：模型实现 `GetVersion/SetVersion`，用 `gormx.UpdateWithVersion(ctx, db, &m, "title", "body")`；冲突返回 409。
 
 ## 可选：RegisterResource
 
@@ -127,9 +131,9 @@ fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
 
 给其它服务生成 typed 客户端：先 `<svc> openapi` dump 3.0 spec，再 `fxkit gen client`（见 `fxkit-docs` / `fxkit-reqx`）。不要在本服务再生存一份自己的 Go SDK。
 
-## 可选：Repo[T]
+## 仓储层
 
-兼容薄封装（Create/GetByID/List/Update/Delete）。新代码不必嵌入 `*crudx.Repo[T]`；领域查询直接 `Conn(ctx).Where(...)`。已有 Repo 代码可继续用。
+`crudx` 不提供泛型 `Repo[T]`。需要进程内共享仓储时，按 `fxkit-layout` 的 `internal/repository` 组织：一聚合一文件，仓储只依赖 `entity`，写操作和事务边界仍留在 service。
 
 ## 错误
 
@@ -139,7 +143,7 @@ fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
 
 ## 鉴权挂钩
 
-受保护路由：`auto_register_routes` 会刮取 OpenAPI（含 `RegisterResource`）；也可 `authz.ProvideHTTPRoutes` 或 `fxhuma.ResourceOperations` + `HTTPRoutesFromOperations`。细节见 `fxkit-authz`。裸 chi handler **不经** authz。
+受保护路由：`auto_register_routes` 会刮取 OpenAPI（含 `RegisterResource`）；也可 `authz.ProvideHTTPRoutes` 或 `fxhuma.ResourceOperations` + `HTTPRoutesFromOperations`。细节见 `fxkit-authz`。裸 chi 同样经过 authz，匿名路径写 `auth.public_paths`。
 
 ## Agent 检查清单
 
@@ -147,8 +151,9 @@ fxhuma.ProvideRegistrarLazy(func(i di.Injector) (fxhuma.Registrar, error) {
 - [ ] Registrar 经 `fxhuma.ProvideRegistrar`。
 - [ ] 列表走 `crudx.List` + `ListSpec` 白名单，不要自写 q= parser。
 - [ ] 预加载使用 `Preloads: []string{...}` 或 `Preload` 钩子，防范 N+1 查询。
-- [ ] LIKE 字段 `Indexed: true`；`fxkit gen resource --search` 会给非 TEXT 列加 GORM index。
+- [ ] LIKE 字段 `Indexed: true`；`fxkit gen resource --search` 会给非 TEXT 列追加 GORM `index`，并标记 `Indexed: true` + `Likeable: true`。
 - [ ] 不要对 `ApplyList` 结果 `Count`；JOIN 列表会自动 Distinct。
 - [ ] 写操作显式 `Select` 列，避免 `Save` 全列更新。
+- [ ] 不要使用已移除的 `crudx.Repo[T]`；需要仓储层时按 `fxkit-layout`。
 - [ ] 需要五条 REST 时才用 `RegisterResource`；Update 路径 id 经 `BindUpdate` 写入 body。
 - [ ] 需要权限时同步登记 `authz.HTTPRoute`，或依赖 OpenAPI 刮取。

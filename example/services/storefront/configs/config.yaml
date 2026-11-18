@@ -15,19 +15,52 @@ server:
     - "Content-Type"
     - "Authorization"
     - "X-User"
+  pprof:
+    enabled: false
+    prefix: "/debug/pprof/"
+  security_headers:
+    enabled: true
+    hsts: false
+    csp: ""
+  csrf:
+    enabled: false
+    cookie_name: "csrf_token"
+    header_name: "X-CSRF-Token"
 
-# 3. 用户认证 (JWT / X-User)
+# 3. 数据库（storefront 自身不落业务数据；Casbin 策略与 catalog 共用同一个库）
+db:
+  driver: "postgres"
+  dsn: "postgres://fxkit:fxkit@localhost:5432/fxkit?sslmode=disable"
+  log_level: "warn"
+  auto_migrate: true
+
+# 4. 用户认证 (JWT / X-User)
+# 本地 dev_header_user 模式要求同时开启 casbin（框架的启动校验）。
 auth:
   enabled: true
+  issuer: "https://10.170.34.223:3001/oidc"
+  audience: "https://fxkit.showcase/api"
+  jwks_url: "https://10.170.34.223:3001/oidc/jwks"
+  tls_insecure: true              # Logto 在裸 IP 上用自签证书
   dev_header_user: true           # 联调允许 X-User 传递身份 (透传至下游服务)
+  dev_org_id: "demo"              # Casbin domain（不是数据隔离）
+  casbin:
+    enabled: true
+    table_name: "casbin_rule"
+    auto_register_routes: true    # 把 /digest 自动注册给 admin
+    bootstrap_role: "admin"
+    bootstrap_users:
+      - "alice"
+    auto_bind_bootstrap: false
+    reload_interval: 5s           # 与 catalog 共用策略表时定期同步
 
-# 4. OpenTelemetry 遥测套件
+# 5. OpenTelemetry 遥测套件
 otel:
   enabled: true
   service_name: "storefront"
-  endpoint: "localhost:4317"
+  endpoint: "10.170.34.223:4317"  # OTLP gRPC 采集端
   protocol: "grpc"
-  insecure: true
+  insecure: true                  # 非 TLS 明文传输
   traces:
     enabled: true
     exporter: "otlp"
@@ -38,7 +71,7 @@ otel:
     enabled: true
     exporter: "otlp"
 
-# 5. 服务发现 (通过 Consul 动态寻址并调用下游服务)
+# 6. 服务发现 (通过 Consul 动态寻址并调用下游服务)
 discovery:
   consul_address: "http://localhost:8500" # Consul 注册中心地址
   consul_passing_only: true               # 仅路由至健康的节点
@@ -46,8 +79,17 @@ discovery:
   tags:
     - "traefik.enable=true"
     - "traefik.http.routers.storefront.rule=PathPrefix(`/digest`) || PathPrefix(`/storefront`)"
+    - "traefik.http.routers.storefront.middlewares=storefront-strip@file"
 
-# 6. 业务私有配置段
+# 7. 业务私有配置段
 storefront:
   catalog_name: "catalog"         # 下游目标服务名称 (由 reqx 通过 Consul 自动发现并负载均衡)
   catalog_seed: "127.0.0.1:8081"  # 当 Consul 不可用时的备选回退种子地址
+
+# 8. 审计（opt-in）
+audit:
+  enabled: false
+  sink: "slog"
+  include_body: false
+  include_headers: false
+  retention: 720h

@@ -46,8 +46,6 @@ type Config struct {
 	WriteTimeout time.Duration `yaml:"write_timeout"`
 	// IdleTimeout keep-alive 空闲超时，默认 120s。
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
-	// RateLimit 按客户端 IP 的令牌桶限流。默认关闭。
-	RateLimit RateLimitConfig `yaml:"rate_limit"`
 	// AccessLog 为 true 时输出结构化访问日志（method/route/status/duration/bytes）。
 	// route 用 chi 路由模板（避免高基数），默认关闭。
 	AccessLog bool `yaml:"access_log"`
@@ -61,15 +59,32 @@ type Config struct {
 	// 此值只作用于通过 [ProvideRoutes] 挂载的裸 handler。
 	// 0 = 不限制；单条路由可用 [Route.MaxBodyBytes] 覆盖（<0 也不限制）。
 	MaxBodyBytes int64 `yaml:"max_body_bytes"`
+	// Pprof 暴露 /debug/pprof/*（默认关闭）。生产只在内网/临时开启。
+	Pprof PprofConfig `yaml:"pprof"`
+	// SecurityHeaders 默认开启的安全响应头。
+	SecurityHeaders SecurityHeadersConfig `yaml:"security_headers"`
+	// CSRF 仅用于 cookie 认证场景；Bearer token API 不需要。
+	CSRF CSRFConfig `yaml:"csrf"`
 }
 
-// RateLimitConfig 按客户端 IP 限流（令牌桶）。
-type RateLimitConfig struct {
-	Enabled bool `yaml:"enabled"`
-	// RPS 每秒补充的令牌数，默认 20。
-	RPS float64 `yaml:"rps"`
-	// Burst 桶容量（允许的瞬时突发），默认 40。
-	Burst int `yaml:"burst"`
+// PprofConfig 控制 net/http/pprof 端点。
+type PprofConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Prefix  string `yaml:"prefix"`
+}
+
+// SecurityHeadersConfig 控制安全响应头。
+type SecurityHeadersConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	HSTS    bool   `yaml:"hsts"`
+	CSP     string `yaml:"csp"`
+}
+
+// CSRFConfig 是 double-submit cookie 校验配置。
+type CSRFConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	CookieName string `yaml:"cookie_name"`
+	HeaderName string `yaml:"header_name"`
 }
 
 // SetDefaults 填入编译期默认值。
@@ -84,11 +99,13 @@ func (c *Config) SetDefaults() {
 	c.ReadTimeout = defaultReadTimeout
 	c.WriteTimeout = defaultWriteTimeout
 	c.IdleTimeout = defaultIdleTimeout
-	c.RateLimit.RPS = 20
-	c.RateLimit.Burst = 40
 	c.AccessLog = false
 	c.SSEPathPrefixes = []string{"/sse/"}
 	c.MaxBodyBytes = 1 << 20 // 1 MiB，与 Huma 默认一致
+	c.Pprof.Prefix = "/debug/pprof/"
+	c.SecurityHeaders.Enabled = true
+	c.CSRF.CookieName = "csrf_token"
+	c.CSRF.HeaderName = "X-CSRF-Token"
 }
 
 // Validate 检查端口与超时。非法值启动失败。
@@ -116,12 +133,12 @@ func (c Config) Validate() error {
 	if c.CORSMaxAge < 0 {
 		return fmt.Errorf("server.cors_max_age must be >= 0")
 	}
-	if c.RateLimit.Enabled {
-		if c.RateLimit.RPS <= 0 {
-			return fmt.Errorf("server.rate_limit.rps must be > 0 when enabled")
-		}
-		if c.RateLimit.Burst <= 0 {
-			return fmt.Errorf("server.rate_limit.burst must be > 0 when enabled")
+	if c.Pprof.Enabled && strings.TrimSpace(c.Pprof.Prefix) == "" {
+		return fmt.Errorf("server.pprof.prefix is required when pprof is enabled")
+	}
+	if c.CSRF.Enabled {
+		if strings.TrimSpace(c.CSRF.CookieName) == "" || strings.TrimSpace(c.CSRF.HeaderName) == "" {
+			return fmt.Errorf("server.csrf.cookie_name/header_name are required when csrf is enabled")
 		}
 	}
 	return nil

@@ -7,8 +7,8 @@ server:
 app:
   name: "{{.AppName}}"         # Consul 注册名 / Huma 标题 / otel.service_name 回退
 
-docs:                          # fxkit/docs；默认关闭，生产请配合网关/鉴权再开
-  enabled: true
+docs:                          # fxkit/docs；默认关闭（与框架默认值一致），本地调试可改为 true
+  enabled: false
 {{if not .Minimal}}
 db:                            # fxkit/gormx；driver 或 dsn 空 = 不连库
   driver: ""                   # mysql | postgres | sqlite
@@ -45,7 +45,7 @@ auth:                          # fxkit/authz，仅覆盖 Huma
   jwks_url: ""                 # 默认 {issuer}/jwks
   org_claim: "organization_id"
   require_org: false
-  deny_unregistered: false     # Casbin 关闭时：true = 未登记路由 403；false = 登录即可
+  deny_unregistered: false     # 已删除；写成 true 会启动失败。Casbin 关闭时登录即可
   dev_header_user: false       # true 允许 X-User；生产务必 false
   tls_insecure: false          # 跳过 JWKS 证书校验；仅本地自签 IdP
   casbin:
@@ -85,7 +85,7 @@ discovery:                     # consulx 注册 + reqx 发现
   tags: []                     # 额外 Consul 标签；Traefik：traefik.enable=true 等
 
 cache:                         # fxkit/cachex 缓存系统与防击穿/穿透/雪崩封装
-  driver: ""                   # "" (禁用) | memory (纯内存) | redis (分布式)
+  driver: ""                   # "" (禁用) | redis (分布式)
   prefix: ""                   # 统一键名前缀，如 svc_app:
   default_ttl: 30m             # 默认过期时间
   null_ttl: 1m                 # 空值占位缓存时间 (防穿透，0 表示不缓存)

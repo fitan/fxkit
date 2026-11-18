@@ -1,16 +1,30 @@
 name: fxkit-example
 
 services:
+  consul:
+    image: ${CONSUL_IMAGE:-docker.m.daocloud.io/hashicorp/consul:1.20}
+    restart: unless-stopped
+    command: ["agent", "-dev", "-client=0.0.0.0", "-ui"]
+    ports:
+      - "8500:8500"
+
   traefik:
     image: ${TRAEFIK_IMAGE:-docker.m.daocloud.io/library/traefik:v3.7.12}
     restart: unless-stopped
+    depends_on:
+      - consul
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8880:80"    # 浏览器入口
       - "8881:8080"  # Traefik dashboard / API
     volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-      - ./traefik/plugins-local:/plugins-local:ro
-      - ./web:/web:ro
+      - ./deploy/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+
+  redis:
+    image: ${REDIS_IMAGE:-docker.m.daocloud.io/library/redis:7-alpine}
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]

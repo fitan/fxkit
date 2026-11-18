@@ -34,12 +34,15 @@ func NewMux(p MuxParams) *chi.Mux {
 	// recover 必须位于最外层，这样 CORS/OTel/body-log 中的 panic 才能被捕获。
 	r.Use(recoverMiddleware)
 	r.Use(sseWriteDeadlineMiddleware(ssePrefixes))
+	if p.Server != nil {
+		r.Use(securityHeadersMiddleware(p.Server.SecurityHeaders))
+	}
 	if p.Server != nil && p.Server.AccessLog {
 		r.Use(accessLogMiddleware)
 	}
 	r.Use(corsMiddleware(p.Server))
 	if p.Server != nil {
-		r.Use(rateLimitMiddleware(p.Server.RateLimit))
+		r.Use(csrfMiddleware(p.Server.CSRF))
 	}
 	if p.Otel != nil && p.Otel.HTTPEnabled() {
 		r.Use(otelMiddleware(ssePrefixes))
@@ -55,6 +58,11 @@ func NewMux(p MuxParams) *chi.Mux {
 
 	if p.Server != nil && p.Server.LogPayloads {
 		r.Use(requestBodyLogMiddleware(ssePrefixes))
+	}
+
+	// pprof 是路由，必须在所有 r.Use 之后挂载（chi 限制）。
+	if p.Server != nil && p.Server.Pprof.Enabled {
+		mountPprof(r, p.Server.Pprof.Prefix)
 	}
 
 	return r
@@ -288,7 +296,9 @@ var Module = di.Module("fxkit/server",
 					}
 
 					// 健康检查走 HealthChecker 接口，server 不再反向依赖 gormx。
-					registerHealthRoutes(i, mux)
+					if err := registerHealthRoutes(i, mux); err != nil {
+						return err
+					}
 					return nil
 				},
 			})

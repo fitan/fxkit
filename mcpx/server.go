@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -19,7 +22,7 @@ type ServerConfig struct {
 	Version string            // 服务版本 (例如 "1.0.0")
 	Handler http.Handler      // 进程内直接分发请求的 HTTP Handler (如 chi.Mux，0 网络开销原生直通 Huma)
 	Headers map[string]string // 转发请求时附带的请求头 (如 Authorization, X-API-Key 等)
-	// MaxResponseBytes 限制单次 tool 调用返回的字符数（避免撑爆模型上下文）。
+	// MaxResponseBytes 限制单次 tool 调用返回的字节数（避免撑爆模型上下文）。
 	// 0 = 默认 1 MiB；负数 = 不限制。
 	MaxResponseBytes int
 }
@@ -140,18 +143,72 @@ func (s *Server) executeToolCall(ctx context.Context, tool Tool, args map[string
 	}
 	if s.maxResp > 0 && len(result) > s.maxResp {
 		orig := len(result)
-		result = result[:s.maxResp] + fmt.Sprintf("\n…(truncated, %d bytes total)", orig)
+		// 按字节截断可能切断 UTF-8 多字节字符，产生非法字符串
+		// （JSON 编码时会被替换成 U+FFFD）。回退到最近的字符边界。
+		cut := s.maxResp
+		for cut > 0 && !utf8.RuneStart(result[cut]) {
+			cut--
+		}
+		result = result[:cut] + fmt.Sprintf("\n…(truncated, %d bytes total)", orig)
 	}
 	return result, false
 }
 
-// ServeStdio 在标准输入输出上启动 MCP Server (供 Claude Desktop, Cursor 等 IDE 作为子进程直连)。
+// identityHeadersKey 携带 MCP 调用者身份（从入站 HTTP header / stdio env 注入）。
+type identityHeadersKey struct{}
+
+var identityHeaderNames = []string{"Authorization", "X-User", "X-Org"}
+
+func withIdentityHeaders(ctx context.Context, h http.Header) context.Context {
+	if len(h) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, identityHeadersKey{}, h)
+}
+
+func identityHeadersFromContext(ctx context.Context) http.Header {
+	h, _ := ctx.Value(identityHeadersKey{}).(http.Header)
+	return h
+}
+
+func identityContextFromRequest(ctx context.Context, r *http.Request) context.Context {
+	h := http.Header{}
+	for _, k := range identityHeaderNames {
+		if v := strings.TrimSpace(r.Header.Get(k)); v != "" {
+			h.Set(k, v)
+		}
+	}
+	return withIdentityHeaders(ctx, h)
+}
+
+func stdioIdentityContext(ctx context.Context) context.Context {
+	h := http.Header{}
+	for _, kv := range []struct{ env, header string }{
+		{"MCP_AUTHORIZATION", "Authorization"},
+		{"MCP_USER", "X-User"},
+		{"MCP_ORG", "X-Org"},
+	} {
+		if v := strings.TrimSpace(os.Getenv(kv.env)); v != "" {
+			h.Set(kv.header, v)
+		}
+	}
+	return withIdentityHeaders(ctx, h)
+}
+
+// ServeStdio 在标准输入输出上启动 MCP Server (Claude Desktop / Cursor 作为子进程直连)。
+//
+// 身份可通过 MCP_AUTHORIZATION / MCP_USER / MCP_ORG 环境变量注入；
+// 未提供时，走 Casbin 的调用会被拒绝（除非 authz 关闭）。
 func (s *Server) ServeStdio() error {
-	return mcpserver.ServeStdio(s.mcpServer)
+	return mcpserver.ServeStdio(s.mcpServer, mcpserver.WithStdioContextFunc(stdioIdentityContext))
 }
 
 // SSEServer 返回符合官方规范的 MCP Server-Sent Events (SSE) HTTP 处理器。
 // 客户端通过 GET 连接建立 SSE 事件流，通过 POST 发送 RPC 消息。
+//
+// 入站 Authorization / X-User / X-Org 会注入 tool handler 的 context，
+// 并透传到进程内 HTTP 请求，供 authz（Casbin）按调用者身份授权。
 func (s *Server) SSEServer(opts ...mcpserver.SSEOption) *mcpserver.SSEServer {
+	opts = append([]mcpserver.SSEOption{mcpserver.WithSSEContextFunc(identityContextFromRequest)}, opts...)
 	return mcpserver.NewSSEServer(s.mcpServer, opts...)
 }

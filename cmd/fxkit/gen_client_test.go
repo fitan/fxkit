@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,17 @@ func TestGenerateClientKeepsUserEdits(t *testing.T) {
 	// 生成物仍然刷新。
 	if got := fileContents(t, filepath.Join(out, "openapi.yaml")); !strings.Contains(got, "openapi: 3.0.3") {
 		t.Errorf("openapi.yaml not refreshed:\n%s", got)
+	}
+	// spec.go 记录源 spec 的版本与 hash，便于发现漂移。
+	specInfo := fileContents(t, filepath.Join(out, "spec.go"))
+	if !strings.Contains(specInfo, `OpenAPISpecVersion = "1.0.0"`) {
+		t.Errorf("spec.go missing version:\n%s", specInfo)
+	}
+	if !strings.Contains(specInfo, `OpenAPISpecOpenAPI = "3.0.3"`) {
+		t.Errorf("spec.go missing openapi version:\n%s", specInfo)
+	}
+	if !regexp.MustCompile(`OpenAPISpecSHA256\s*= "[0-9a-f]{64}"`).MatchString(specInfo) {
+		t.Errorf("spec.go missing sha256:\n%s", specInfo)
 	}
 
 	// --force 才覆盖。

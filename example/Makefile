@@ -1,4 +1,4 @@
-.PHONY: help build run tidy clean verify verify-local openapi gen-client gen-web edge edge-down down
+.PHONY: help build run tidy clean check verify verify-local openapi gen-client gen-web web-install web-dev web-dev-direct web-check demo demo-down edge edge-down down atlas-status atlas-lint atlas-apply migrate-baseline
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo showcase)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -19,8 +19,14 @@ help:
 	@echo "make build             # build catalog + storefront into bin/"
 	@echo "make run SVC=catalog   # run one service"
 	@echo "make openapi SVC=catalog"
-	@echo "make gen-client        # fxkit gen client from services/catalog/openapi.yaml"
-	@echo "make gen-web           # OpenAPI → web/src/*.d.ts + bundle app.js"
+	@echo "make gen-client        # fxkit gen client from services/catalog/api/openapi.yaml"
+	@echo "make gen-web           # OpenAPI → web/app/types/{catalog,storefront}.d.ts"
+	@echo "make web-install       # pnpm install for web/"
+	@echo "make web-dev           # Nuxt dev :3000，API 经 Traefik :8880（先 make demo）"
+	@echo "make web-dev-direct    # Nuxt dev :3000，API 直连 8081/8082"
+	@echo "make web-check         # Nuxt typecheck + lint"
+	@echo "make demo              # SQLite catalog + storefront for the dashboard"
+	@echo "make demo-down         # stop the SQLite demo services"
 	@echo "make edge              # docker compose: Traefik 3.7.12 (static + Consul)"
 	@echo "make edge-down"
 	@echo "make verify            # start services, probe, then leave them running"
@@ -40,16 +46,28 @@ run:
 
 openapi:
 	@test -n "$(SVC)" || (echo "usage: make openapi SVC=catalog"; exit 1)
-	go run -ldflags "$(GO_LDFLAGS)" ./services/$(SVC)/cmd openapi --config services/$(SVC)/configs/config.yaml -o services/$(SVC)/openapi.yaml
+	go run -ldflags "$(GO_LDFLAGS)" ./services/$(SVC)/cmd openapi --config services/$(SVC)/configs/config.yaml -o services/$(SVC)/api/openapi.yaml
 
 gen-client:
-	@test -f services/catalog/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
-	go run ../cmd/fxkit gen client --spec services/catalog/openapi.yaml --out services/storefront/internal/clients/catalog
+	@test -f services/catalog/api/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
+	go run ../cmd/fxkit gen client --spec services/catalog/api/openapi.yaml --out services/storefront/internal/clients/catalog
 
 gen-web:
-	@test -f services/catalog/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
-	@test -f services/storefront/openapi.yaml || (echo "run: make openapi SVC=storefront"; exit 1)
-	cd web && npm run gen && npm run check && npm run build
+	@test -f services/catalog/api/openapi.yaml || (echo "run: make openapi SVC=catalog"; exit 1)
+	@test -f services/storefront/api/openapi.yaml || (echo "run: make openapi SVC=storefront"; exit 1)
+	cd web && corepack pnpm gen
+
+web-install:
+	cd web && corepack pnpm install
+
+web-dev:
+	cd web && NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost NUXT_CATALOG_BASE=http://127.0.0.1:8880/catalog NUXT_STOREFRONT_BASE=http://127.0.0.1:8880/storefront corepack pnpm dev --host 0.0.0.0 --port 3000
+
+web-dev-direct:
+	cd web && NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost corepack pnpm dev --host 0.0.0.0 --port 3000
+
+web-check:
+	cd web && corepack pnpm typecheck && corepack pnpm lint
 
 edge:
 	docker compose up -d --remove-orphans
@@ -67,6 +85,28 @@ tidy:
 clean:
 	rm -rf bin/ tmp/
 
+demo:
+	bash scripts/demo-local.sh
+
+demo-down:
+	-pkill -f 'catalog serve -c .*catalog-demo.yaml'
+	-pkill -f 'storefront serve -c .*storefront-demo.yaml'
+	-docker compose stop consul traefik redis
+
+# Atlas 迁移（需要安装 atlas CLI：https://atlasgo.io）
+atlas-status:
+	atlas migrate status --env local
+
+atlas-lint:
+	atlas migrate lint --env local --latest 1
+
+atlas-apply:
+	atlas migrate apply --env local
+
+# 把 fxkit 框架表写成第一份迁移；之后业务迁移追加到同一目录
+migrate-baseline: build
+	./bin/catalog migrate baseline --dialect postgres --dir migrations/postgres
+
 verify: tidy build
 	bash scripts/verify.sh
 
@@ -76,9 +116,8 @@ verify-local:
 
 # 配置与装配自检（不监听端口，可在 CI 中运行）
 #
-# storefront 的 example 配置开了 auth.enabled 但没配 issuer/audience
-# （它依赖 dev_header_user + 下游服务鉴权），validate 会如实报错，
-# 因此这里只对 catalog 做 --strict 校验，storefront 仅报告。
+# storefront 用 dev_header_user + casbin（不配 issuer/audience），
+# 两个服务都做 --strict 校验。
 #
 # --di-graph 需要能完成 PreStart（casbin 需要数据库），所以用自包含的
 # sqlite 临时配置，而不是依赖 postgres 的开发配置。
@@ -90,8 +129,8 @@ $(SELFCHECK_CFG):
 check: build $(SELFCHECK_CFG)
 	@echo "== config validate (catalog, strict) =="
 	./bin/catalog validate --config services/catalog/configs/config.yaml --strict
-	@echo "== config validate (storefront, report only) =="
-	-./bin/storefront validate --config services/storefront/configs/config.yaml
+	@echo "== config validate (storefront, strict) =="
+	./bin/storefront validate --config services/storefront/configs/config.yaml --strict
 	@echo "== DI graph sanity (catalog) =="
 	rm -f /tmp/fxkit-selfcheck.db
 	./bin/catalog serve --config $(SELFCHECK_CFG) --di-graph > /tmp/fxkit-di.txt 2>/dev/null

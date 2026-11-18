@@ -7,6 +7,7 @@ import (
 	"github.com/fitan/fxkit/fxerrors"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func setupUsersDB(t *testing.T) *gorm.DB {
@@ -508,7 +509,27 @@ func TestApplyList_cursorRejectsRelationSort(t *testing.T) {
 	assertInvalid(t, err, ReasonCursorRelationSort)
 }
 
-// TestApplyList_distinctOnlyForToManyJoins 基数已知的多对一关联不需要 DISTINCT。
+// TestApplyList_toManyJoinUsesGroupByPK 回归：一对多 JOIN 去重不用 DISTINCT *，
+// 而是按主键 GROUP BY（PostgreSQL 对 json/jsonb 列的 DISTINCT * 会报错）。
+func TestApplyList_toManyJoinUsesGroupByPK(t *testing.T) {
+	db := setupUsersDB(t)
+	spec := testSpec()
+	spec.Relations["cluster"].Cardinality = RelationToMany
+	tx := db.Session(&gorm.Session{DryRun: true}).Model(&struct{}{}).Table("users")
+	out, _, err := applyList(tx, spec, &ListParams{Limit: 10, Q: []string{"cluster.name=prod-cluster"}}, listApplyOpts{PKColumn: "users.id"})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if out.Statement.Distinct {
+		t.Fatal("must not use SELECT DISTINCT *")
+	}
+	if len(out.Statement.Clauses) == 0 {
+		t.Fatal("expected GROUP BY primary key")
+	}
+	if _, ok := out.Statement.Clauses[clause.GroupBy{}.Name()]; !ok {
+		t.Fatal("expected GROUP BY primary key")
+	}
+}
 func TestApplyList_distinctOnlyForToManyJoins(t *testing.T) {
 	db := setupUsersDB(t)
 

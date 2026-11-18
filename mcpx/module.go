@@ -21,8 +21,14 @@ type Config struct {
 	Name    string            `yaml:"name"`
 	Path    string            `yaml:"path"` // 默认 "/mcp"
 	Headers map[string]string `yaml:"headers"`
-	// MaxResponseBytes 单次 tool 调用返回的最大字符数；默认 1 MiB，负数不限制。
+	// MaxResponseBytes 单次 tool 调用返回的最大字节数；默认 1 MiB，负数不限制。
 	MaxResponseBytes int `yaml:"max_response_bytes"`
+	// IncludeTools 非空时只暴露列出的 operationId（白名单）。
+	// 未配置时暴露全部 Huma operation（包括 authz 管理接口）——
+	// 生产环境建议显式配置白名单，或由网关对 /mcp 做鉴权。
+	IncludeTools []string `yaml:"include_tools"`
+	// ExcludeTools 排除列出的 operationId；优先级高于 IncludeTools。
+	ExcludeTools []string `yaml:"exclude_tools"`
 }
 
 func provideConfig(cfg *config.Config) (Config, error) {
@@ -88,11 +94,32 @@ func provideRoutes(srv *Server, cfg Config) []server.Route {
 	}
 }
 
+// toolEnabled 按配置的白/黑名单过滤工具（按 operationId 精确匹配）。
+func toolEnabled(cfg Config, name string) bool {
+	for _, ex := range cfg.ExcludeTools {
+		if strings.TrimSpace(ex) == name {
+			return false
+		}
+	}
+	if len(cfg.IncludeTools) == 0 {
+		return true
+	}
+	for _, in := range cfg.IncludeTools {
+		if strings.TrimSpace(in) == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Module 是 MCP 的 Fx 模块。
+//
 // 引入后自动从 Huma 提取所有业务路由对象、绑定进程内 chi.Mux 实现 0 网络开销直通反序列化，
 // 并可选挂载 SSE HTTP 路由。
 var Module = di.Module("mcpx",
 	func(i di.Injector) {
+		// 登记配置消费方，使 --strict 不会把 mcp 段误报为死配置。
+		config.RegisterConsumer[Config]("mcp")
 		di.Provide(i, func(i di.Injector) (Config, error) {
 			cfg, err := di.Invoke[*config.Config](i)
 			if err != nil {
@@ -114,18 +141,21 @@ var Module = di.Module("mcpx",
 				OnStart: func(context.Context) error {
 					srv, _ := di.Invoke[*Server](i)
 					api, _ := di.Invoke[huma.API](i)
+					c, err := di.Invoke[Config](i)
+					if err != nil {
+						return fmt.Errorf("mcpx: resolve config: %w", err)
+					}
 					if srv != nil && api != nil {
 						tools, err := ParseHuma(api)
 						if err != nil {
 							slog.Error("mcpx: parse huma operations failed", "error", err)
 						}
 						for _, t := range tools {
+							if !toolEnabled(c, t.Name) {
+								continue
+							}
 							srv.RegisterTool(t)
 						}
-					}
-					c, err := di.Invoke[Config](i)
-					if err != nil {
-						return fmt.Errorf("mcpx: resolve config: %w", err)
 					}
 					if srv != nil {
 						server.ProvideRoutes(provideRoutes(srv, c)...)(i)

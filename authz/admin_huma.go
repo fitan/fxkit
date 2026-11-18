@@ -3,7 +3,6 @@ package authz
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	fxhuma "github.com/fitan/fxkit/huma"
@@ -73,10 +72,6 @@ var (
 	}
 )
 
-// AdminPermission 是 Casbin 关闭时 /authz/* 回退使用的 Subject.Has 键。
-// Casbin 开启时仍走 Enforce(sub, path, method)，忽略此项。
-const AdminPermission = "authz:admin"
-
 func adminHTTPRoutes() []HTTPRoute {
 	routes := HTTPRoutesFromOperations(
 		opListPermissions,
@@ -85,9 +80,6 @@ func adminHTTPRoutes() []HTTPRoute {
 		opListSubjectRoles, opSetSubjectRoles, opAddSubjectRole, opRemoveSubjectRole,
 		opListBindings, opListPolicies,
 	)
-	for i := range routes {
-		routes[i].Permission = AdminPermission
-	}
 	return routes
 }
 
@@ -119,29 +111,6 @@ type listPermissionsIn struct {
 	Start          int    `query:"start" default:"0" minimum:"0"`
 	Limit          int    `query:"limit" default:"20" minimum:"1" maximum:"1000"`
 	ReplyWithCount bool   `query:"replyWithCount" default:"true"`
-}
-
-type permissionDetailOut struct {
-	Body permissionView
-}
-
-type permissionBody struct {
-	Method      string   `json:"method" minLength:"1" doc:"HTTP 方法，如 GET"`
-	Path        string   `json:"path" minLength:"1" doc:"Huma 路径，如 /users/{id}"`
-	OperationID string   `json:"operation_id,omitempty"`
-	Summary     string   `json:"summary,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-}
-type createPermissionIn struct {
-	Body permissionBody
-}
-type updatePermissionIn struct {
-	ID   uint `path:"id"`
-	Body permissionBody
-}
-type permissionIDIn struct {
-	ID uint `path:"id"`
 }
 
 func toPermissionView(r APIPermission) permissionView {
@@ -184,7 +153,8 @@ type rolePermissionsOut struct {
 }
 
 type setRolePermissionsBody struct {
-	Items []RolePermission `json:"items"`
+	Domain string           `json:"domain,omitempty" default:"*"`
+	Items  []RolePermission `json:"items"`
 }
 type setRolePermissionsIn struct {
 	Role string `path:"role"`
@@ -192,6 +162,7 @@ type setRolePermissionsIn struct {
 }
 
 type addRolePermissionBody struct {
+	Domain string `json:"domain,omitempty" default:"*"`
 	Path   string `json:"path" minLength:"1"`
 	Method string `json:"method" minLength:"1"`
 }
@@ -202,6 +173,7 @@ type addRolePermissionIn struct {
 
 type removeRolePermissionIn struct {
 	Role   string `path:"role"`
+	Domain string `query:"domain" default:"*"`
 	Path   string `query:"path" minLength:"1"`
 	Method string `query:"method" minLength:"1"`
 }
@@ -214,11 +186,13 @@ type subjectRolesOut struct {
 }
 
 type subjectPathIn struct {
-	ID string `path:"id"`
+	ID     string `path:"id"`
+	Domain string `query:"domain" default:"*"`
 }
 
 type setSubjectRolesBody struct {
-	Roles []string `json:"roles"`
+	Domain string   `json:"domain,omitempty" default:"*"`
+	Roles  []string `json:"roles"`
 }
 type setSubjectRolesIn struct {
 	ID   string `path:"id"`
@@ -226,7 +200,8 @@ type setSubjectRolesIn struct {
 }
 
 type addSubjectRoleBody struct {
-	Role string `json:"role" minLength:"1"`
+	Domain string `json:"domain,omitempty" default:"*"`
+	Role   string `json:"role" minLength:"1"`
 }
 type addSubjectRoleIn struct {
 	ID   string `path:"id"`
@@ -234,8 +209,9 @@ type addSubjectRoleIn struct {
 }
 
 type removeSubjectRoleIn struct {
-	ID   string `path:"id"`
-	Role string `path:"role"`
+	ID     string `path:"id"`
+	Role   string `path:"role"`
+	Domain string `query:"domain" default:"*"`
 }
 
 type listBindingsBody struct {
@@ -328,7 +304,7 @@ func registerRoleAdmin(api huma.API, e *Enforcer) {
 		return &rolePermissionsOut{Body: rolePermissionsBody{Items: items}}, nil
 	})
 	fxhuma.Register(api, opSetRolePermissions, func(ctx context.Context, in *setRolePermissionsIn) (*rolePermissionsOut, error) {
-		if err := e.SetRolePermissions(ctx, SetRolePermissionsInput{Role: in.Role, Items: in.Body.Items}); err != nil {
+		if err := e.SetRolePermissions(ctx, SetRolePermissionsInput{Role: in.Role, Domain: in.Body.Domain, Items: in.Body.Items}); err != nil {
 			return nil, err
 		}
 		items, err := e.ListRolePermissions(ctx, in.Role)
@@ -339,7 +315,7 @@ func registerRoleAdmin(api huma.API, e *Enforcer) {
 	})
 	fxhuma.Register(api, opAddRolePermission, func(ctx context.Context, in *addRolePermissionIn) (*struct{}, error) {
 		if err := e.AddRolePermission(ctx, AddRolePermissionInput{
-			Role: in.Role, Path: in.Body.Path, Method: in.Body.Method,
+			Role: in.Role, Domain: in.Body.Domain, Path: in.Body.Path, Method: in.Body.Method,
 		}); err != nil {
 			return nil, err
 		}
@@ -347,7 +323,7 @@ func registerRoleAdmin(api huma.API, e *Enforcer) {
 	})
 	fxhuma.Register(api, opRemoveRolePermission, func(ctx context.Context, in *removeRolePermissionIn) (*struct{}, error) {
 		if err := e.RemoveRolePermission(ctx, AddRolePermissionInput{
-			Role: in.Role, Path: in.Path, Method: in.Method,
+			Role: in.Role, Domain: in.Domain, Path: in.Path, Method: in.Method,
 		}); err != nil {
 			return nil, err
 		}
@@ -357,30 +333,30 @@ func registerRoleAdmin(api huma.API, e *Enforcer) {
 
 func registerSubjectAdmin(api huma.API, e *Enforcer) {
 	fxhuma.Register(api, opListSubjectRoles, func(ctx context.Context, in *subjectPathIn) (*subjectRolesOut, error) {
-		roles, err := e.ListSubjectRoles(ctx, in.ID)
+		roles, err := e.ListSubjectRolesInDomain(ctx, in.ID, in.Domain)
 		if err != nil {
 			return nil, err
 		}
 		return &subjectRolesOut{Body: subjectRolesBody{Roles: roles}}, nil
 	})
 	fxhuma.Register(api, opSetSubjectRoles, func(ctx context.Context, in *setSubjectRolesIn) (*subjectRolesOut, error) {
-		if err := e.SetSubjectRoles(ctx, SubjectRolesInput{Subject: in.ID, Roles: in.Body.Roles}); err != nil {
+		if err := e.SetSubjectRoles(ctx, SubjectRolesInput{Subject: in.ID, Domain: in.Body.Domain, Roles: in.Body.Roles}); err != nil {
 			return nil, err
 		}
-		roles, err := e.ListSubjectRoles(ctx, in.ID)
+		roles, err := e.ListSubjectRolesInDomain(ctx, in.ID, in.Body.Domain)
 		if err != nil {
 			return nil, err
 		}
 		return &subjectRolesOut{Body: subjectRolesBody{Roles: roles}}, nil
 	})
 	fxhuma.Register(api, opAddSubjectRole, func(ctx context.Context, in *addSubjectRoleIn) (*struct{}, error) {
-		if err := e.AddSubjectRole(ctx, AddSubjectRoleInput{Subject: in.ID, Role: in.Body.Role}); err != nil {
+		if err := e.AddSubjectRole(ctx, AddSubjectRoleInput{Subject: in.ID, Domain: in.Body.Domain, Role: in.Body.Role}); err != nil {
 			return nil, err
 		}
 		return &struct{}{}, nil
 	})
 	fxhuma.Register(api, opRemoveSubjectRole, func(ctx context.Context, in *removeSubjectRoleIn) (*struct{}, error) {
-		if err := e.RemoveSubjectRole(ctx, AddSubjectRoleInput{Subject: in.ID, Role: in.Role}); err != nil {
+		if err := e.RemoveSubjectRole(ctx, AddSubjectRoleInput{Subject: in.ID, Domain: in.Domain, Role: in.Role}); err != nil {
 			return nil, err
 		}
 		return &struct{}{}, nil
@@ -402,19 +378,4 @@ func registerOverview(api huma.API, e *Enforcer) {
 		}
 		return &listPoliciesOut{Body: listPoliciesBody{Items: items}}, nil
 	})
-}
-
-func splitTags(s string) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			out = append(out, t)
-		}
-	}
-	return out
 }

@@ -13,14 +13,14 @@
 |---|---|---|
 | TLS 终止 / 证书轮换 | ✅ ACME 或前置 LB | ❌ |
 | 路由 / 灰度 / 权重 | ✅ Consul Catalog + 标签 | ❌（服务只声明自己的路由） |
-| 全局限流（跨副本） | ✅ rateLimit 中间件 | ⚠️ 单实例内存桶，只作自保 |
+| 全局限流（跨副本） | ✅ rateLimit 中间件 | ❌（统一在网关做） |
 | 真实客户端 IP | ✅（信任链由 `forwardedHeaders` 决定） | ⚠️ 刻意不信任 `X-Forwarded-For` |
 | 熔断 / 重试 | ✅ circuitBreaker / retry | ❌（reqx 只做故障转移） |
 | 鉴权 / 授权 | ❌ 不适合承载业务 RBAC | ✅ JWT + Casbin |
 | 请求校验 | ❌ | ✅ Huma schema |
 | 观测 | ✅ access log / metrics / tracing | ✅ OTel（含 trace 传播） |
 
-**结论**：不要试图用框架的 `server.rate_limit` 承担边缘限流，也不要让网关做业务鉴权。
+**结论**：限流统一放在网关/边缘，框架不内置进程内限流；也不要让网关做业务鉴权。
 
 ---
 
@@ -224,9 +224,9 @@ http:
 
 | fxkit 配置 | 生产建议 | 原因 |
 |---|---|---|
-| `auth.enabled` | `true` + `deny_unregistered: true` | 网关不做业务鉴权 |
+| `auth.enabled` | `true`，按路由拒绝再开 `casbin.enabled` | 网关不做业务鉴权 |
 | `auth.dev_header_user` | `false` | 否则 `X-User` 可绕过 JWT |
-| `server.rate_limit.enabled` | `false`（或调大后仅作自保） | 框架按 `RemoteAddr` 计数且不信任 XFF，网关后所有请求同 IP，会退化成整站单桶 |
+| 限流 | 全部在网关/边缘做 | 框架不再内置进程内限流，避免多副本按副本数放大 |
 | `server.max_body_bytes` | 与网关 `maxRequestBodyBytes` 一致 | 两侧不一致时较小的生效，返回码不同易误判 |
 | `server.cors_allowed_origins` | 显式白名单 | 空 = 不开放 CORS；`*` 仅内部工具 |
 | `server.sse_path_prefixes` | 与实际流式路径一致 | 否则 SSE 会被 120s `write_timeout` 掐断 |
@@ -329,7 +329,7 @@ curl -N -H 'Accept: text/event-stream' "$GW/mcp/sse"
 |---|---|---|
 | 502 Bad Gateway | 后端未就绪 / Consul 未 passing / 端口不匹配 | Traefik dashboard 看 service 的 servers 列表；`curl` 服务 `/readyz` |
 | 504 Gateway Timeout | `responseHeaderTimeout` 小于业务耗时 | 对齐第 8.2 节的三处超时 |
-| 全部请求 429 | 框架限流在网关后按同一 IP 计数 | 关掉 `server.rate_limit`，改由网关限流 |
+| 全部请求 429 | 网关限流配置过严 | 调整网关 rateLimit 规则 |
 | SSE 一次性吐出 | 路由挂了 `buffering` | 给流式路由单独建 router，去掉 buffering |
 | SSE 120s 断开 | `server.sse_path_prefixes` 未覆盖 | 补前缀，或调大 `write_timeout` |
 | 路由 404 | Consul tag 未生效 / `exposedByDefault: false` 且缺 `traefik.enable=true` | `consul catalog services` 看标签是否带上了 |

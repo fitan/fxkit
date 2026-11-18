@@ -16,6 +16,9 @@ cp -R skills/fxkit \
       skills/fxkit-discovery \
       skills/fxkit-reqx \
       skills/fxkit-docs \
+      skills/fxkit-mcp \
+      skills/fxkit-layout \
+      skills/fxkit-payments \
       <other-project>/.cursor/skills/
 
 # 或一次拷贝全部
@@ -39,8 +42,15 @@ Claude Code：同样目录放到 `<project>/.claude/skills/`。
 | `fxkit-discovery` | consulx | Consul **自注册**、advertise、TTL |
 | `fxkit-reqx` | reqx | **出站** HTTP、按服务名调下游、failover |
 | `fxkit-docs` | docs, openapi | Scalar、base+Huma 合并、`openapi` dump、`gen client` |
+| `fxkit-mcp` | mcpx | MCP / Function Calling / OpenAPI→Tool |
+| `fxkit-layout` | 工程结构（非包） | 多服务/多模型目录拆分、`entity`/`repository`、文件命名、依赖方向、跨服务边界 |
+| `fxkit-payments` | money, ledger, payment, webhook, reconciliation | 支付正确性：幂等、状态机、复式记账、Webhook、对账 |
 
 每个目录下有独立 `SKILL.md`，按任务触发；不必把整个 README 塞进一个 skill。
+
+> 框架自身的维护 skill 在 [`.agents/skills/fxkit-maintain/SKILL.md`](../.agents/skills/fxkit-maintain/SKILL.md)；本目录只放消费方使用 skill。
+
+> `skills/system/` 下是非 fxkit 的通用 system skill（例如 `run-workflow`），不在上表，也不会被 `cp -R skills/fxkit*` 复制。
 
 ## 依赖约定
 

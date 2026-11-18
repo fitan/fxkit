@@ -37,7 +37,7 @@ description: >-
               ┌────────────────────┴────────────────────┐
               ▼                                         ▼
    模式 1：命令行原生 Stdio                      模式 2：HTTP / SSE 远程
-   `mysvc mcp` (供 Cursor/Claude 直连)          `GET/POST /mcp` (供远程 Agent)
+   `mysvc mcp` (供 Cursor/Claude 直连)          `GET /mcp/sse` + `POST /mcp/message`
               │                                         │
               └────────────────────┬────────────────────┘
                                    │ 内存直调 (0 网络开销)
@@ -86,10 +86,26 @@ description: >-
 mcp:
   enabled: true
   name: "catalog-service"
-  path: "/mcp" # 默认 /mcp
+  path: "/mcp" # SSE 基路径，默认 /mcp
+  headers: {}                 # 固定透传 header
+  include_tools: []           # 非空时只暴露这些 operationId（生产建议白名单）
+  max_response_bytes: 1048576 # 单次 tool 调用返回上限，默认 1 MiB
 ```
 
-当服务以常规 `serve` 命令运行时，将自动在 `/mcp` 端点挂载符合官方规范的 SSE 双向事件流，内部同样通过 `InProcessDispatcher` 内存直通。
+`include_tools` 未配置时会暴露全部 Huma operation（包括 authz 管理接口）；生产环境建议显式白名单，或由网关对 `/mcp` 前缀做鉴权。
+
+当服务以常规 `serve` 命令运行时，会在 `mcp.path`（默认 `/mcp`）下挂载 `GET {path}/sse` 与 `POST {path}/message`，内部同样通过 `InProcessDispatcher` 内存直通。
+
+> 开启 Casbin（`auth.casbin.enabled: true`）时，MCP 不经过 Huma，必须显式登记到 authz 路由目录，否则 admin 也会 403：
+>
+> ```go
+> authz.ProvideHTTPRoutes(
+>     authz.HTTPRoute{Method: http.MethodGet, Path: "/mcp/*", OperationID: "mcpSSE"},
+>     authz.HTTPRoute{Method: http.MethodPost, Path: "/mcp/*", OperationID: "mcpMessage"},
+> )
+> ```
+>
+> 不要为了方便把 `/mcp` 放进 `auth.public_paths`（会暴露所有 tool）。pprof 同理。
 
 ---
 

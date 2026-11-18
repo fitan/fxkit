@@ -17,7 +17,7 @@ var defaultSFGroup singleflight.Group
 
 // singleflightGroup 返回 (group, keyPrefix)。
 //
-// 内置实现（MemoryCache / RedisCache / prefixedCache）通过内嵌 [sfHolder]
+// 内置实现（RedisCache / prefixedCache）通过内嵌 [sfHolder]
 // 各自持有 group，随实例回收；自定义实现退化为共享 group + 实例标识前缀，
 // 既不会把不同实例的结果串在一起，也不会泄漏注册表条目。
 func singleflightGroup(c Cache) (*singleflight.Group, string) {

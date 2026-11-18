@@ -76,7 +76,7 @@ func TestRenderResource_listEngine(t *testing.T) {
 	t.Parallel()
 	data, err := parseResourceArgs(
 		"Article", "",
-		[]string{"title:string:required", "body:text", "author_id:int64:index"},
+		[]string{"title:string:required", "body:text:optional", "author_id:int64:index,optional"},
 		[]string{"title", "body"},
 		[]string{"author_id"},
 		"created_at desc",
@@ -102,7 +102,13 @@ func TestRenderResource_listEngine(t *testing.T) {
 		`"title":`, "Column: \"articles.title\", Kind: crudx.FieldString",
 		"SortFields: map[string]string{",
 		"DefaultSort:",
-		`Select("title", "body", "author_id")`,
+		`updates["title"] = req.Title`,
+		`if req.Body != nil {`,
+		`updates["body"] = *req.Body`,
+		`updates["author_id"] = *req.AuthorId`,
+		"Model(&next).Updates(updates)",
+		// optional 字段用指针区分「未提供」与「显式零值」
+		"*string",
 		"crudx.ListResult[ArticleListRow]",
 		`gorm:"size:255;not null;index"`,
 		"s.client.WithTxResult",

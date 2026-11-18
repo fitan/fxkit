@@ -2,6 +2,8 @@ package docs
 
 import (
 	_ "embed"
+	"fmt"
+	"strings"
 
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
@@ -10,7 +12,22 @@ import (
 //go:embed openapi.yaml
 var openAPIYAML []byte
 
-const scalarHTML = `<!DOCTYPE html>
+const defaultScalarURL = "https://cdn.jsdelivr.net/npm/@scalar/api-reference"
+
+// scalarHTML 生成 Scalar UI 页面。base path 与脚本地址均可配置，
+// 以适配网关前缀、内网自托管与 SRI 校验。
+func scalarHTML(opts RouteOptions) string {
+	base := normalizeBasePath(opts.BasePath)
+	specURL := joinURLPath(base, "/openapi.yaml")
+	script := strings.TrimSpace(opts.ScalarURL)
+	if script == "" {
+		script = defaultScalarURL
+	}
+	integrity := ""
+	if sri := strings.TrimSpace(opts.ScalarSRI); sri != "" {
+		integrity = fmt.Sprintf(` integrity=%q crossorigin="anonymous"`, sri)
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
   <title>API Reference</title>
@@ -18,10 +35,32 @@ const scalarHTML = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 </head>
 <body>
-  <script id="api-reference" data-url="/openapi.yaml"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <script id="api-reference" data-url=%q></script>
+  <script src=%q%s></script>
 </body>
-</html>`
+</html>`, specURL, script, integrity)
+}
+
+func normalizeBasePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return strings.TrimRight(p, "/")
+}
+
+func joinURLPath(base, p string) string {
+	if base == "" {
+		return p
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return base + p
+}
 
 // Config 控制 /docs 与 /openapi.{yaml,json} 是否暴露（yaml: docs）。
 //
@@ -30,11 +69,18 @@ const scalarHTML = `<!DOCTYPE html>
 // （它是显式调用，不受本开关影响）。
 type Config struct {
 	Enabled bool `yaml:"enabled"`
+	// BasePath 挂载前缀（例如 "/api"）。默认空，表示直接挂在根路径。
+	BasePath string `yaml:"base_path"`
+	// ScalarURL Scalar UI 脚本地址；默认 jsdelivr CDN。内网可指向自托管资源。
+	ScalarURL string `yaml:"scalar_url"`
+	// ScalarSRI 可选的 Subresource Integrity hash（如 "sha384-..."）。
+	ScalarSRI string `yaml:"scalar_sri"`
 }
 
 // SetDefaults 默认不暴露文档端点。
 func (c *Config) SetDefaults() {
 	c.Enabled = false
+	c.ScalarURL = defaultScalarURL
 }
 
 // Module 在 docs.enabled=true 时提供 /docs 与 /openapi.{yaml,json}

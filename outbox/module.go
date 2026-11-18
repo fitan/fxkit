@@ -2,10 +2,13 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/fitan/fxkit/config"
+	"github.com/fitan/fxkit/consulx"
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/gormx"
 )
@@ -22,7 +25,12 @@ var Module = di.Module("fxkit/outbox",
 		})
 		di.Provide(i, func(i di.Injector) (*Inbox, error) {
 			client, _ := di.Invoke[*gormx.Client](i)
-			return NewInbox(client), nil
+			cfg, _ := di.Invoke[*Config](i)
+			timeout := defaultInboxClaimTimeout
+			if cfg != nil && cfg.InboxClaimTimeout > 0 {
+				timeout = cfg.InboxClaimTimeout
+			}
+			return NewInboxWithTimeout(client, timeout), nil
 		})
 		di.Provide(i, func(i di.Injector) (*Relay, error) {
 			client, _ := di.Invoke[*gormx.Client](i)
@@ -40,9 +48,11 @@ var Module = di.Module("fxkit/outbox",
 		if cfg, err := di.Invoke[*Config](i); err == nil && cfg != nil && cfg.Enabled {
 			gormx.RegisterSchemaContract("outbox_events",
 				"id", "pubsub", "topic", "payload", "idempotency_key", "status",
-				"attempts", "last_error", "lease_id", "locked_at", "created_at", "published_at",
+				"attempts", "last_error", "lease_id", "locked_at", "next_attempt_at",
+				"created_at", "published_at",
 			)
-			gormx.RegisterSchemaContract("outbox_inbox_events", "id", "topic", "processed_at")
+			gormx.RegisterSchemaContract("outbox_inbox_events",
+				"id", "topic", "status", "claimed_at", "lease_id", "processed_at")
 		}
 
 		lc := di.MustInvoke[*di.Lifecycle](i)
@@ -56,6 +66,7 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 	}
 
 	var relay *Relay
+	var purgeCancel context.CancelFunc
 
 	lc.Append(di.Hook{
 		OnStart: func(ctx context.Context) error {
@@ -66,7 +77,7 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 			if err != nil {
 				return fmt.Errorf("outbox: resolve config: %w", err)
 			}
-			if cfg == nil || !cfg.Enabled {
+			if cfg == nil {
 				return nil
 			}
 
@@ -74,9 +85,30 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 			if err != nil {
 				return fmt.Errorf("outbox: resolve db client: %w", err)
 			}
-			if client == nil {
-				slog.Warn("outbox enabled but gormx client is nil; relay not started")
+
+			if cfg.PurgeInterval > 0 {
+				if client == nil || !client.Enabled() {
+					return fmt.Errorf("outbox.purge_interval requires a configured database (db.driver/db.dsn)")
+				}
+				store, err := di.Invoke[*Store](inj)
+				if err != nil {
+					return fmt.Errorf("outbox: resolve store: %w", err)
+				}
+				inbox, _ := di.Invoke[*Inbox](inj)
+				var locker consulx.Locker
+				if l, lerr := di.Invoke[consulx.Locker](inj); lerr == nil {
+					locker = l
+				}
+				pctx, cancel := context.WithCancel(context.Background())
+				purgeCancel = cancel
+				go runPurgeLoop(pctx, store, inbox, cfg, locker)
+			}
+
+			if !cfg.Enabled {
 				return nil
+			}
+			if client == nil || !client.Enabled() {
+				return fmt.Errorf("outbox.enabled=true requires a configured database (db.driver/db.dsn)")
 			}
 
 			r, err := di.Invoke[*Relay](inj)
@@ -87,8 +119,7 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 				return nil
 			}
 			if r.Publisher() == nil {
-				slog.Warn("outbox enabled but no EventPublisher (enable hatchet.outbox_publisher or outbox.ProvidePublisher); relay not started")
-				return nil
+				return fmt.Errorf("outbox.enabled=true requires an EventPublisher (hatchet.outbox_publisher or outbox.ProvidePublisher)")
 			}
 
 			if client.AutoMigrate() {
@@ -115,6 +146,9 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 			return r.Start(context.Background())
 		},
 		OnStop: func(_ context.Context) error {
+			if purgeCancel != nil {
+				purgeCancel()
+			}
 			if relay == nil {
 				return nil
 			}
@@ -123,4 +157,67 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 			return nil
 		},
 	})
+}
+
+func runPurgeLoop(ctx context.Context, store *Store, inbox *Inbox, cfg *Config, locker consulx.Locker) {
+	if cfg == nil || cfg.PurgeInterval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(cfg.PurgeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runPurgeOnce(ctx, store, inbox, cfg, locker)
+		}
+	}
+}
+
+// runPurgeOnce 优先用 Consul 锁保证同一时刻只有一个副本清理；没有锁时退化为单进程执行。
+func runPurgeOnce(ctx context.Context, store *Store, inbox *Inbox, cfg *Config, locker consulx.Locker) {
+	if store == nil {
+		return
+	}
+	purge := func(ctx context.Context) error {
+		now := time.Now().UTC()
+		if cfg.PurgeBefore > 0 {
+			if n, err := store.PurgePublished(ctx, now.Add(-cfg.PurgeBefore)); err != nil {
+				slog.Warn("outbox purge published", "error", err)
+			} else if n > 0 {
+				slog.Info("outbox purged published", "rows", n)
+			}
+			if n, err := store.PurgeFailed(ctx, now.Add(-cfg.PurgeBefore)); err != nil {
+				slog.Warn("outbox purge failed", "error", err)
+			} else if n > 0 {
+				slog.Info("outbox purged failed", "rows", n)
+			}
+		}
+		if inbox != nil && cfg.InboxPurgeBefore > 0 {
+			if n, err := inbox.PurgeDone(ctx, now.Add(-cfg.InboxPurgeBefore)); err != nil {
+				slog.Warn("outbox purge inbox", "error", err)
+			} else if n > 0 {
+				slog.Info("outbox purged inbox", "rows", n)
+			}
+		}
+		return nil
+	}
+	if locker != nil {
+		lockCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := locker.WithLock(lockCtx, "fxkit:outbox:purge", purge); err != nil {
+			if errors.Is(err, consulx.ErrConsulDisabled) {
+				if perr := purge(ctx); perr != nil {
+					slog.Warn("outbox purge", "error", perr)
+				}
+				return
+			}
+			slog.Debug("outbox purge skipped", "error", err)
+		}
+		return
+	}
+	if err := purge(ctx); err != nil {
+		slog.Warn("outbox purge", "error", err)
+	}
 }

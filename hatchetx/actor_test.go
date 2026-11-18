@@ -3,7 +3,6 @@ package hatchetx
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -13,31 +12,23 @@ type embedInput struct {
 	Delta int `json:"delta"`
 }
 
-type methodOnlyInput struct {
-	ID string
+type indirectInner struct {
+	ActorRef
 }
 
-func (m methodOnlyInput) GetActorID() string { return m.ID }
-
-type methodAndJSONInput struct {
-	ID string `json:"actorId"`
+type indirectEmbedInput struct {
+	indirectInner
+	Delta int `json:"delta"`
 }
 
-func (m methodAndJSONInput) GetActorID() string { return m.ID }
-
-type fieldInput struct {
-	ActorID string `json:"actorId"`
-	Delta   int    `json:"delta"`
+type namedRefEmbedInput struct {
+	ActorRef `json:"ref"`
+	Delta    int `json:"delta"`
 }
 
-type structFieldNoTagInput struct {
-	ActorID string
-	Delta   int `json:"delta"`
-}
-
-type namedRefInput struct {
-	Ref   ActorRef `json:"ref"`
-	Delta int      `json:"delta"`
+type ptrRefEmbedInput struct {
+	*ActorRef
+	Delta int `json:"delta"`
 }
 
 type customMarshalInput struct {
@@ -46,158 +37,101 @@ type customMarshalInput struct {
 }
 
 func (c customMarshalInput) MarshalJSON() ([]byte, error) {
-	return []byte(`{"data":"custom"}`), nil
+	return json.Marshal(map[string]any{"data": c.Data})
 }
 
-type unexportedInnerRef struct {
-	ActorRef
-}
+type stringInput string
 
-type unexportedEmbedInput struct {
-	unexportedInnerRef
-	Data string `json:"data"`
-}
+func (s stringInput) ActorRefValue() ActorRef { return ActorRef{} }
 
-type ptrReceiverInput struct {
-	ID string `json:"actorId"`
-}
-
-func (p *ptrReceiverInput) GetActorID() string {
-	if p == nil {
-		return ""
-	}
-	return p.ID
-}
-
-type nilPtrEmbedInput struct {
-	*ActorRef
-	Data string `json:"data"`
-}
-
-func TestExtractActorID(t *testing.T) {
+func TestNewActor_RequiresDirectActorRef(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
+
+	tests := []struct {
 		name string
-		in   any
+		run  func() error
 		want string
 	}{
-		{"embed", embedInput{ActorRef: ActorRef{ActorID: " a1 "}, Delta: 1}, "a1"},
-		{"method", methodOnlyInput{ID: "m1"}, ""}, // GetActorID 不再参与提取
-		{"field", fieldInput{ActorID: "f1"}, "f1"},
-		{"unexported_embed", unexportedEmbedInput{unexportedInnerRef: unexportedInnerRef{ActorRef: ActorRef{ActorID: "u1"}}, Data: "d"}, "u1"},
-		{"nil_ptr_embed", nilPtrEmbedInput{ActorRef: nil, Data: "d"}, ""},
-		{"ptr_receiver_val", ptrReceiverInput{ID: "ptr1"}, "ptr1"},
-		{"ptr_receiver_ptr", &ptrReceiverInput{ID: "ptr2"}, "ptr2"},
-		{"empty", embedInput{}, ""},
-		{"nil", nil, ""},
-		{"raw_json", json.RawMessage(`{"actorId":"raw-1","x":1}`), "raw-1"},
-		{"bytes_json", []byte(`{"actorId":"bytes-1"}`), "bytes-1"},
-		{"map_any", map[string]any{"actorId": "map-any-1"}, ""}, // map 输入已不支持
-		{"map_string", map[string]string{"actorId": "map-str-1"}, ""},
+		{
+			name: "indirect embed",
+			run: func() error {
+				_, err := NewActor[indirectEmbedInput, int]("x", func(context.Context, indirectEmbedInput) (int, error) { return 0, nil })
+				return err
+			},
+			want: "anonymous value field",
+		},
+		{
+			name: "named embed",
+			run: func() error {
+				_, err := NewActor[namedRefEmbedInput, int]("x", func(context.Context, namedRefEmbedInput) (int, error) { return 0, nil })
+				return err
+			},
+			want: "must not have a json name",
+		},
+		{
+			name: "pointer embed",
+			run: func() error {
+				_, err := NewActor[ptrRefEmbedInput, int]("x", func(context.Context, ptrRefEmbedInput) (int, error) { return 0, nil })
+				return err
+			},
+			want: "anonymous value field",
+		},
+		{
+			name: "custom marshaler drops actorId",
+			run: func() error {
+				_, err := NewActor[customMarshalInput, int]("x", func(context.Context, customMarshalInput) (int, error) { return 0, nil })
+				return err
+			},
+			want: "top-level",
+		},
+		{
+			name: "non-struct",
+			run: func() error {
+				_, err := NewActor[stringInput, int]("x", func(context.Context, stringInput) (int, error) { return 0, nil })
+				return err
+			},
+			want: "must be a struct",
+		},
+		{
+			name: "nil handler",
+			run: func() error {
+				_, err := NewActor[embedInput, int]("x", nil)
+				return err
+			},
+			want: "handler is nil",
+		},
+		{
+			name: "empty name",
+			run: func() error {
+				_, err := NewActor[embedInput, int]("  ", func(context.Context, embedInput) (int, error) { return 0, nil })
+				return err
+			},
+			want: "name is required",
+		},
 	}
-	for _, tc := range cases {
-		tt := tc
-		t.Run(tt.name, func(t *testing.T) {
-			got := actorIDOf(tt.in)
-			if got != tt.want {
-				t.Fatalf("got %q want %q", got, tt.want)
-			}
-		})
-	}
-}
 
-func TestExtractActorIDDynamic_UnexportedEmbed(t *testing.T) {
-	t.Parallel()
-	in := unexportedEmbedInput{unexportedInnerRef: unexportedInnerRef{ActorRef: ActorRef{ActorID: "dyn-1"}}, Data: "d"}
-	got := actorIDOf(in)
-	if got != "dyn-1" {
-		t.Fatalf("expected dyn-1, got %q", got)
-	}
-}
-
-func TestTypeHasJSONActorID(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		typ  reflect.Type
-		want bool
-	}{
-		{"embed ActorRef", reflect.TypeFor[embedInput](), true},
-		{"explicit json tag", reflect.TypeFor[fieldInput](), true},
-		{"ptr type", reflect.TypeFor[*fieldInput](), true},
-		// 只有 ActorID 字段、没有 json 标签：能被读出，但不会序列化成 actorId。
-		{"no json tag", reflect.TypeFor[structFieldNoTagInput](), false},
-		// 非匿名嵌入的 ActorRef 不能当作根级 actorId。
-		{"named ref", reflect.TypeFor[namedRefInput](), false},
-		// 自定义 Marshaler 不在静态分析范围内，保守返回 false。
-		{"custom marshaler", reflect.TypeFor[customMarshalInput](), false},
-	}
-	for _, tc := range cases {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := typeHasJSONActorID(tc.typ); got != tc.want {
-				t.Fatalf("typeHasJSONActorID(%s) = %v, want %v", tc.typ, got, tc.want)
+			t.Parallel()
+			err := tc.run()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v, want substring %q", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestRequireActorID(t *testing.T) {
-	t.Parallel()
-	if _, err := requireActorID(embedInput{}); err == nil {
-		t.Fatal("expected error")
-	}
-	id, err := requireActorID(embedInput{ActorRef: ActorRef{ActorID: "x"}})
-	if err != nil || id != "x" {
-		t.Fatalf("id=%q err=%v", id, err)
-	}
-	id, err = requireActorID(fieldInput{ActorID: "f1"})
-	if err != nil || id != "f1" {
-		t.Fatalf("field id=%q err=%v", id, err)
-	}
-	id, err = requireActorID(methodAndJSONInput{ID: "m2"})
-	if err != nil || id != "m2" {
-		t.Fatalf("method+json id=%q err=%v", id, err)
-	}
-	id, err = requireActorID(unexportedEmbedInput{unexportedInnerRef: unexportedInnerRef{ActorRef: ActorRef{ActorID: "u1"}}})
-	if err != nil || id != "u1" {
-		t.Fatalf("unexported id=%q err=%v", id, err)
-	}
-}
-
-func TestRequireActorID_RejectsStructFieldWithoutJSON(t *testing.T) {
-	t.Parallel()
-	_, err := requireActorID(structFieldNoTagInput{ActorID: "s1"})
-	if err == nil {
-		t.Fatal("expected error for ActorID field without json actorId")
-	}
-	if !strings.Contains(err.Error(), "JSON-serialize") {
-		t.Fatalf("unexpected err: %v", err)
-	}
-}
-
-func TestRequireActorID_RejectsNonActorInput(t *testing.T) {
-	t.Parallel()
-	// 只有 GetActorID 方法、没有 json:"actorId" 的类型不能作为 actor 输入。
-	_, err := requireActorID(methodOnlyInput{ID: "m1"})
-	if err == nil {
-		t.Fatal("expected error for input without json actorId")
-	}
-}
-
-func TestAssertActorIDInJSON_RawMessage(t *testing.T) {
-	t.Parallel()
-	raw := json.RawMessage(`{"actorId":"raw-1","x":1}`)
-	if err := assertActorIDInJSON(raw, "raw-1"); err != nil {
-		t.Fatal(err)
 	}
 }
 
 func TestNewActor_DefaultConcurrencyMailbox(t *testing.T) {
 	t.Parallel()
-	a := NewActor[embedInput, int](" mailbox ",
+	a, err := NewActor[embedInput, int](" mailbox ",
 		func(ctx context.Context, in embedInput) (int, error) { return in.Delta, nil },
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a.Name() != "mailbox" {
 		t.Fatalf("name should be trimmed, got %q", a.Name())
 	}
@@ -210,16 +144,20 @@ func TestNewActor_DefaultConcurrencyMailbox(t *testing.T) {
 }
 
 type tenantInput struct {
+	ActorRef
 	TenantID string `json:"tenantId"`
 	Data     string `json:"data"`
 }
 
 func TestNewActor_CustomConcurrencyExpr(t *testing.T) {
 	t.Parallel()
-	a := NewActor[tenantInput, int]("tenant-queue",
+	a, err := NewActor[tenantInput, int]("tenant-queue",
 		func(ctx context.Context, in tenantInput) (int, error) { return len(in.Data), nil },
 		WithActorConcurrencyExpr("input.tenantId"),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a.requiresActorID() {
 		t.Fatal("custom concurrency expr input.tenantId should not require actorId")
 	}
@@ -227,12 +165,15 @@ func TestNewActor_CustomConcurrencyExpr(t *testing.T) {
 
 func TestNewActor_Options(t *testing.T) {
 	t.Parallel()
-	a := NewActor[embedInput, int]("fxkit-counter",
+	a, err := NewActor[embedInput, int]("fxkit-counter",
 		func(ctx context.Context, in embedInput) (int, error) { return in.Delta, nil },
 		WithActorDescription("demo"),
 		WithActorConcurrencyExpr("input.customId"),
 		WithActorMaxRuns(2),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a.Name() != "fxkit-counter" {
 		t.Fatalf("name=%q", a.Name())
 	}
@@ -247,19 +188,14 @@ func TestNewActor_Options(t *testing.T) {
 	}
 }
 
-func TestActor_Register_NilHandler(t *testing.T) {
-	t.Parallel()
-	a := NewActor[embedInput, int]("x", nil)
-	if _, err := a.Register(&Client{}); err == nil {
-		t.Fatal("expected error for nil handler")
-	}
-}
-
 func TestActor_Register_DisabledClient(t *testing.T) {
 	t.Parallel()
-	a := NewActor[embedInput, int]("x",
+	a, err := NewActor[embedInput, int]("x",
 		func(ctx context.Context, in embedInput) (int, error) { return 0, nil },
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ws, err := a.Register(&Client{})
 	if err != nil {
 		t.Fatal(err)
@@ -269,48 +205,33 @@ func TestActor_Register_DisabledClient(t *testing.T) {
 	}
 }
 
-func TestActor_Call_EmptyName(t *testing.T) {
+func TestActor_ValidateActorID(t *testing.T) {
 	t.Parallel()
-	a := NewActor[embedInput, int]("",
+	a, err := NewActor[embedInput, int]("x",
 		func(ctx context.Context, in embedInput) (int, error) { return 0, nil },
 	)
-	if _, err := a.Call(context.Background(), &Client{}, embedInput{}); err == nil || !strings.Contains(err.Error(), "actor name is required") {
-		t.Fatalf("expected actor name required error, got: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := a.CallAsync(context.Background(), &Client{}, embedInput{}); err == nil || !strings.Contains(err.Error(), "actor name is required") {
-		t.Fatalf("expected actor name required error, got: %v", err)
+	if err := a.validateActorID(embedInput{}); err == nil {
+		t.Fatal("expected actorId error")
 	}
-}
-
-func TestActor_Call_RequiresActorID(t *testing.T) {
-	t.Parallel()
-	a := NewActor[embedInput, int]("x",
-		func(ctx context.Context, in embedInput) (int, error) { return 0, nil },
-	)
-	// 禁用的 client 会先失败。
-	if _, err := a.Call(context.Background(), &Client{}, embedInput{}); err == nil {
-		t.Fatal("expected error")
+	if err := a.validateActorID(embedInput{ActorRef: ActorRef{ActorID: "a1"}}); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func BenchmarkExtractActorID_Cached(b *testing.B) {
-	a := NewActor[embedInput, int]("bench", func(ctx context.Context, in embedInput) (int, error) { return in.Delta, nil })
+	a, err := NewActor[embedInput, int]("bench", func(ctx context.Context, in embedInput) (int, error) { return in.Delta, nil })
+	if err != nil {
+		b.Fatal(err)
+	}
 	in := embedInput{ActorRef: ActorRef{ActorID: "bench-actor-1"}, Delta: 42}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		id := a.extractActorID(in)
 		if id == "" {
 			b.Fatal("empty id")
-		}
-	}
-}
-
-func BenchmarkAssertActorIDInJSON_GJSON(b *testing.B) {
-	in := embedInput{ActorRef: ActorRef{ActorID: "bench-actor-1"}, Delta: 42}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := assertActorIDInJSON(in, "bench-actor-1"); err != nil {
-			b.Fatal(err)
 		}
 	}
 }

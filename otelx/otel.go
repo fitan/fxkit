@@ -123,23 +123,31 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 		}
 	}
 
-	slog.SetDefault(slog.New(&traceHandler{
-		inner: rootHandler,
-	}))
+	// 库嵌入场景可以用 logs.replace_slog_default=false 保留宿主 handler。
+	replaceDefault := true
+	if cfg.Logs.ReplaceSlogDefault != nil {
+		replaceDefault = *cfg.Logs.ReplaceSlogDefault
+	}
+	if replaceDefault {
+		slog.SetDefault(slog.New(&traceHandler{
+			inner: rootHandler,
+		}))
+	}
 
 	if lc != nil {
 		lc.Append(di.Hook{
 			OnStop: func(ctx context.Context) error {
 				slog.Info("otel shutting down")
-				// 不要直接用共享的 stop-timeout ctx：前面的 HTTP shutdown 可能已把它耗尽，
-				// 导致这里拿到已过期的 deadline 而丢弃批处理中的 span/log。
-				flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				defer cancel()
 
 				var errs []error
 				// LIFO：先关 logs（最先产生），最后关 traces。
+				// 每个 exporter 独立预算：共享一个 5s 时，日志 flush 慢会把
+				// metrics/traces 的 ctx 提前耗尽，恰恰丢掉最需要的链路数据。
 				for i := len(shutdowns) - 1; i >= 0; i-- {
-					if err := shutdowns[i](flushCtx); err != nil {
+					flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					err := shutdowns[i](flushCtx)
+					cancel()
+					if err != nil {
 						errs = append(errs, err)
 					}
 				}

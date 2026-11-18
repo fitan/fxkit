@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Config 身份（JWT / X-User）与 Casbin 授权（yaml: auth）。只覆盖 Huma，不覆盖裸 chi。
+// Config 身份（JWT / X-User）与 Casbin 授权（yaml: auth）。中间件挂在 chi 上，覆盖 Huma 和裸路由。
 type Config struct {
 	// Enabled 鉴权总开关。默认 false。
 	Enabled bool `yaml:"enabled"`
@@ -22,20 +22,15 @@ type Config struct {
 	RequireOrg bool `yaml:"require_org"`
 	// DevHeaderUser 允许 X-User 代替 JWT（仅本地；生产务必 false）。
 	DevHeaderUser bool `yaml:"dev_header_user"`
+	// DevOrgID 是 DevHeaderUser 模式下 X-Org 缺失时的默认 Casbin domain（不是数据隔离）。
+	// 为空时，开发请求必须显式带 X-Org，否则授权拒绝。
+	DevOrgID string `yaml:"dev_org_id"`
 	// TLSInsecure 跳过 JWKS HTTPS 证书校验（仅本地自签 IdP）。
 	TLSInsecure bool `yaml:"tls_insecure"`
-	// DenyUnregistered 仅在 Casbin 关闭时生效：未出现在 HTTPRoute 表中的
-	// Huma 路由返回 403。默认 false：未登记路由仍需登录（不再匿名放行）。
-	// Casbin 启用时一律 Enforce，未匹配策略即 403。
+	// DenyUnregistered 已删除。配置里写成 true 会启动失败。
+	// 未登记路由在 Casbin 关闭时登录即可，在 Casbin 开启时未匹配策略即 403。
 	DenyUnregistered bool `yaml:"deny_unregistered"`
-	// MuxMiddleware 在 chi/mux 层统一鉴权（覆盖 Huma + 裸 chi + docs + MCP）。
-	//
-	// 开启后不再安装 Huma 层中间件（避免重复判定），Subject 写入 request context，
-	// 因此裸 chi handler 也能用 authz.SubjectFromContext 取身份。
-	// 注意：Huma operation 的 authz.public 元数据仅在 Huma 层中间件生效；
-	// mux 模式下请把匿名路径写进 PublicPaths。
-	MuxMiddleware bool `yaml:"mux_middleware"`
-	// PublicPaths 在 MuxMiddleware 模式下完全放行的路径（精确匹配或前缀）。
+	// PublicPaths 完全放行的路径（精确匹配或前缀）。
 	PublicPaths []string `yaml:"public_paths"`
 	// Casbin path/method RBAC。
 	Casbin CasbinConfig `yaml:"casbin"`
@@ -71,6 +66,9 @@ func (c *Config) SetDefaults() {
 
 // Validate 检查 Casbin 间隔，以及启用鉴权时的 issuer/audience。
 func (c Config) Validate() error {
+	if c.DenyUnregistered {
+		return fmt.Errorf("auth.deny_unregistered was removed; enable casbin for per-route checks, or leave it false (login is enough)")
+	}
 	if c.Casbin.ReloadInterval < 0 {
 		return fmt.Errorf("auth.casbin.reload_interval must be >= 0")
 	}

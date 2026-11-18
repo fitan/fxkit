@@ -24,6 +24,7 @@ func getFreePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
+// TestStack_WithMergedDocs_Wiring 验证示例 stack 的装配能完成。
 func TestStack_WithMergedDocs_Wiring(t *testing.T) {
 	port := strconv.Itoa(getFreePort(t))
 

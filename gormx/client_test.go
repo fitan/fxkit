@@ -18,11 +18,21 @@ func newTestClient(t *testing.T) *Client {
 	return NewTestClient(db)
 }
 
-// TestClient_ConnNilSafe nil client / nil ctx 不应 panic。
-func TestClient_ConnNilSafe(t *testing.T) {
+// TestClient_DisabledConnPanics 禁用客户端是「可选依赖」的探测点，不能用于查询。
+func TestClient_DisabledConnPanics(t *testing.T) {
 	var c *Client
-	assert.Nil(t, c.Conn(context.Background()))
+	assert.False(t, c.Enabled())
 	assert.Nil(t, c.Pool())
+	assert.Panics(t, func() { c.Conn(context.Background()) })
+}
+
+// TestClient_EnabledFalseWhenDBNotConfigured 未配置 db.driver/db.dsn 时 New 返回 nil（可选依赖）。
+func TestClient_EnabledFalseWhenDBNotConfigured(t *testing.T) {
+	c, err := New(&Config{})
+	require.NoError(t, err)
+	require.Nil(t, c)
+	assert.False(t, c.Enabled())
+	assert.Panics(t, func() { c.Conn(context.Background()) })
 }
 
 // TestClient_ConnUsesTxFromContext ctx 携带事务时，Conn 必须复用该事务，

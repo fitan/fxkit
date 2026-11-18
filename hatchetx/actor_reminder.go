@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 //   - Upsert 为 true 时，替换同一 workflow 和 Name 下已存在的定时提醒
 type CreateReminderInput struct {
 	WorkflowName string // actor / standalone task 名称
-	Name         string // cron 触发器名称；默认 reminderName-actorId
+	Name         string // cron 触发器名称；默认 reminderName-<len>-actorId（无歧义）
 	ActorType    string
 	ActorID      string // 必填；作为 actorId 写入输入，用于并发
 	ReminderName string
@@ -64,13 +65,7 @@ func CreateReminder(ctx context.Context, client *Client, in CreateReminderInput)
 
 	cronName := strings.TrimSpace(in.Name)
 	if cronName == "" {
-		cronName = reminder + "-" + actorID
-	}
-
-	if in.Upsert {
-		if err := DeleteReminderByName(ctx, client, workflow, cronName); err != nil {
-			return "", fmt.Errorf("hatchetx: upsert delete existing reminder: %w", err)
-		}
+		cronName = reminderCronName(reminder, actorID)
 	}
 
 	payload := in.Input
@@ -102,17 +97,47 @@ func CreateReminder(ctx context.Context, client *Client, in CreateReminderInput)
 		meta[k] = v
 	}
 
-	created, err := client.Crons().Create(ctx, workflow, features.CreateCronTrigger{
-		Name:               cronName,
-		Expression:         expr,
-		Input:              payload,
-		AdditionalMetadata: meta,
-	})
+	create := func() (*rest.CronWorkflows, error) {
+		return client.Crons().Create(ctx, workflow, features.CreateCronTrigger{
+			Name:               cronName,
+			Expression:         expr,
+			Input:              payload,
+			AdditionalMetadata: meta,
+		})
+	}
+
+	var superseded *rest.CronWorkflows
+	if in.Upsert {
+		old, ferr := FindReminder(ctx, client, workflow, cronName)
+		if ferr != nil {
+			return "", fmt.Errorf("hatchetx: upsert lookup existing reminder: %w", ferr)
+		}
+		superseded = old
+	}
+
+	created, err := create()
+	if err != nil && superseded != nil && superseded.Metadata.Id != "" {
+		// 服务端通常拒绝同名 cron：删掉旧的重试一次。
+		// 这是唯一需要「先删后建」的路径（仅当同名项确实存在）。
+		if derr := DeleteReminder(ctx, client, superseded.Metadata.Id); derr != nil {
+			return "", fmt.Errorf("hatchetx: upsert replace existing reminder: %w", derr)
+		}
+		superseded = nil
+		created, err = create()
+	}
 	if err != nil {
 		return "", fmt.Errorf("hatchetx: create reminder: %w", err)
 	}
 	if created == nil {
 		return "", fmt.Errorf("hatchetx: create reminder: empty response")
+	}
+	// 新提醒已生效后再删旧 ID：删除与创建之间不再有「无提醒」窗口。
+	if superseded != nil && superseded.Metadata.Id != "" && superseded.Metadata.Id != created.Metadata.Id {
+		if derr := DeleteReminder(ctx, client, superseded.Metadata.Id); derr != nil {
+			slog.WarnContext(ctx, "hatchetx: delete superseded reminder failed",
+				"workflow", workflow, "cron", cronName,
+				"old_id", superseded.Metadata.Id, "new_id", created.Metadata.Id, "error", derr)
+		}
 	}
 	return created.Metadata.Id, nil
 }
@@ -142,7 +167,12 @@ func FindReminder(ctx context.Context, client *Client, workflowName, cronName st
 	if err != nil {
 		return nil, err
 	}
-	if res == nil || res.Rows == nil || len(*res.Rows) == 0 {
+	// Hatchet Go SDK 的 List 在 401/403/500 时返回 (nil, nil)：
+	// 把它当成「不存在」会让删除/更新静默失效，必须显式报错。
+	if res == nil {
+		return nil, fmt.Errorf("hatchetx: list crons returned an empty response (the SDK hides non-200 statuses)")
+	}
+	if res.Rows == nil || len(*res.Rows) == 0 {
 		return nil, nil
 	}
 	for _, row := range *res.Rows {
@@ -161,7 +191,7 @@ func FindActorReminder(ctx context.Context, client *Client, workflowName, remind
 	if reminder == "" || id == "" {
 		return nil, fmt.Errorf("hatchetx: reminderName and actorID are required")
 	}
-	cronName := reminder + "-" + id
+	cronName := reminderCronName(reminder, id)
 	return FindReminder(ctx, client, workflowName, cronName)
 }
 
@@ -172,7 +202,7 @@ func DeleteActorReminder(ctx context.Context, client *Client, workflowName, remi
 	if reminder == "" || id == "" {
 		return fmt.Errorf("hatchetx: reminderName and actorID are required")
 	}
-	cronName := reminder + "-" + id
+	cronName := reminderCronName(reminder, id)
 	return DeleteReminderByName(ctx, client, workflowName, cronName)
 }
 
@@ -274,6 +304,14 @@ func cronState(ctx context.Context, client *Client, cronID string) (cronPresence
 		return cronUnknown, nil
 	}
 	return cronAbsent, nil
+}
+
+// reminderCronName 构造无歧义的 cron 名。
+//
+// 直接拼 `reminder + "-" + actorID` 会让 ("job-a","b") 与 ("job","a-b") 碰撞，
+// 导致查到/删掉别人的提醒。长度前缀消除了歧义。
+func reminderCronName(reminder, actorID string) string {
+	return fmt.Sprintf("%s-%d-%s", reminder, len(actorID), actorID)
 }
 
 func toInputMap(v any) (map[string]any, error) {

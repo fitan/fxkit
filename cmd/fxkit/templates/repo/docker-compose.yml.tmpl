@@ -8,7 +8,7 @@
 # 停止：make infra-down
 # 鉴权 IdP 不在此栈；本地用 auth.dev_header_user / X-User。
 
-name: {{.AppName}}
+name: {{composeName .AppName}}
 
 services:
   postgres:

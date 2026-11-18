@@ -24,10 +24,6 @@ server:
   log_payloads: false             # 生产必须 false
   access_log: true                # 建议开启（route 用模板，不高基数）
   cors_allowed_origins: ["https://your-console.example.com"]   # 不要用 "*"
-  rate_limit:
-    enabled: true                 # 网关限流之外再加一层
-    rps: 50
-    burst: 100
 
 db:
   driver: "postgres"              # 或 mysql
@@ -45,8 +41,8 @@ auth:
   issuer: "<oidc issuer>"
   audience: "<api resource>"
   dev_header_user: false          # 生产必须 false
-  deny_unregistered: false        # 或按需 true
-  # mux_middleware: true          # 需要覆盖裸 chi / docs / mcp 时开启
+  # 鉴权在 chi 上，Huma 和裸路由一起过。按路由拒绝请开 casbin.enabled
+  # deny_unregistered: true 会启动失败
   public_paths: ["/public"]       # 只留真正匿名端点
 
 docs:
@@ -98,9 +94,9 @@ HTTP 层超时解决不了这个问题——它只能让客户端早点收到 50
 ④ 滚动发布        新副本启动时 check_schema 会再校验一次
 ```
 
-- 框架只拥有 4 张表：`outbox_events`、`outbox_inbox_events`、`casbin_rule`、`authz_role`。
+- 框架拥有 4 张核心表：`outbox_events`、`outbox_inbox_events`、`casbin_rule`、`authz_role`；启用 `idempotency.Module` / `audit.Module(sink=db)` 时再加 `idempotency_keys` / `audit_events`。
 - 业务表由业务迁移管理，建议与框架表使用**不同的版本表**。
-- 回滚脚本：`gormx/migrations/*/0001_init.rollback.sql`（仅开发/预发使用；生产回滚优先前向修复）。
+- 回滚脚本：`gormx/migrations/*/*.rollback.sql`（仅开发/预发使用；生产回滚优先前向修复）。
 
 ---
 
@@ -161,7 +157,7 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 - [ ] SSE/MCP 路由：不挂 buffering，entryPoint `writeTimeout: 0`
 - [ ] `/docs`、`/openapi.*`、`/mcp`、`/authz/*` 无公网路由
 - [ ] 超时链路：网关 ≥ `server.write_timeout` ≥ 业务耗时
-- [ ] `server.rate_limit.enabled=false`（网关后它失去按客户端限流的意义）
+- [ ] 限流只在网关做（框架不再内置 `server.rate_limit`）
 
 ---
 
@@ -170,8 +166,8 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 - [ ] Consul 锁：确认 `TTL`（默认 15s）大于一次续租 RTT 的 3 倍以上；关注
       `consulx.lock.renew.failures` 与 `consulx.lock.lost`。
 - [ ] outbox relay：多副本会各自 claim，`publish_concurrency` 默认 1；确认 `claim_timeout` > 单批处理时间。
-      actor 事件需要高吞吐时用 `partition_field: "actorId"`（同 actor 保序、不同 actor 并行），
-      不要仅调大 `publish_concurrency`，否则同一 actor 的命令可能乱序执行。
+      `partition_field: "actorId"` 只保证单个 relay、同一批内同 key 按序且失败即停。
+      跨批重试和多副本都不保证同 key 全序。未分组时不要只靠调大 `publish_concurrency` 来提吞吐，同一批会乱序。
 - [ ] Hatchet worker：`worker_slots` 与实例数匹配；`hatchetx.actor.runs` 用于观察邮箱积压。
 - [ ] 优雅停机：`stop-timeout` 要大于最慢请求；LB 摘流要在 SIGTERM 之前完成。
 
@@ -196,3 +192,13 @@ histogram_quantile(0.95, sum(rate(fxkit_startup_duration_bucket{phase="start"}[1
 - [ ] 无 `consulx.lock.lost`
 - [ ] 无 `authz.enforce{result=error}`
 - [ ] 日志无 `unknown column` / `relation does not exist`（说明 DDL 顺序错）
+
+---
+
+## 9. 可观测与告警建议
+
+- [ ] pprof 默认关闭；需要时 `server.pprof.enabled: true`，仅内网/临时开启，并确认走 authz。
+- [ ] 建议告警：5xx 比例、P99、outbox lag、inbox busy/stale、`consulx.lock.lost`、rate limit 429、DB 连接池饱和、goroutine 数。
+- [ ] 审计：合规场景开 `audit.Module`，DB/outbox sink；默认不记 body，按需开并确认脱敏。
+- [ ] 配置热更新只用 `config.Watch` 处理业务配置；框架配置变更走重启/滚动发布。
+- [ ] 支付业务：见 [`docs/payments.md`](./payments.md)（幂等 / 状态机 / 复式记账 / 对账）。

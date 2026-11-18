@@ -45,6 +45,9 @@ type MetricsConfig struct {
 type LogsConfig struct {
 	Enabled  bool   `yaml:"enabled"`  // 默认 true；slog fanout 到 OTLP
 	Exporter string `yaml:"exporter"` // otlp | stdout
+	// ReplaceSlogDefault 是否把 slog.Default 替换为带 trace 注入的 handler。
+	// 默认 true。作为库嵌入已有服务时设为 false，避免覆盖宿主已配置的 handler。
+	ReplaceSlogDefault *bool `yaml:"replace_slog_default"`
 }
 
 // SetDefaults 填入编译期默认值。
@@ -56,8 +59,10 @@ func (c *Config) SetDefaults() {
 	c.Sampling = "always_on"
 	c.Traces = TracesConfig{Enabled: true, Exporter: "otlp"}
 	c.Metrics = MetricsConfig{Enabled: true, Exporter: "otlp", RuntimeMetrics: true}
-	c.Logs = LogsConfig{Enabled: true, Exporter: "otlp"}
+	c.Logs = LogsConfig{Enabled: true, Exporter: "otlp", ReplaceSlogDefault: boolPtr(true)}
 }
+
+func boolPtr(v bool) *bool { return &v }
 
 // HTTPEnabled 报告 chi 是否应安装 otelhttp（trace 和/或 metrics）。
 func (c Config) HTTPEnabled() bool {

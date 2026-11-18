@@ -105,10 +105,9 @@ var errNilLoader = errors.New("cache: loader cannot be nil")
 // 优先从 cache 获取并反序列化为 T；若缓存未命中，则执行 loader 从数据源加载，序列化后写入 cache。
 // 内置 Singleflight（防击穿）、空值缓存（防穿透）及 TTL 抖动（防雪崩）。
 //
-// 命中空值缓存时返回 [NegativeHitError]，它同时满足
-// errors.Is(err, ErrNegativeHit) 以及首次 loader 返回的「未找到」语义
-// （gorm.ErrRecordNotFound / sql.ErrNoRows / pgx.ErrNoRows /
-// fxerrors.Is(err, fxerrors.KindNotFound)）。
+// 命中空值缓存时返回 [NegativeHitError]，errors.Is(err, ErrNegativeHit)。
+// loader 返回 fxerrors.NotFound 时，命中结果仍是 KindNotFound（Huma 404）。
+// gorm / database/sql / pgx 的未找到第一次经 Wrap 是 500，命中后也是 500。
 //
 // singleflight 合并的 loader 使用 context.WithoutCancel(ctx) 执行，
 // 首个调用者取消不会波及其它等待者；每个等待者仍可因自己的 ctx 取消而提前返回。
@@ -183,8 +182,10 @@ func GetOrSet[T any](
 		data, loadErr := loader(loadCtx)
 		if loadErr != nil {
 			// 如果启用空值缓存且属于「未找到」，写入负缓存防穿透。
+			// TTL 同样加抖动：否则一批 404 会同时过期、同时回源。
 			if opt.NullTTL > 0 && isNotFoundError(loadErr) {
-				_ = c.Set(loadCtx, key, encodeNegative(loadErr), opt.NullTTL)
+				nullTTL := JitterTTL(opt.NullTTL, opt.JitterMaxPercent)
+				_ = c.Set(loadCtx, key, encodeNegative(loadErr), nullTTL)
 			}
 			return zero, loadErr
 		}

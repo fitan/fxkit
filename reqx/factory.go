@@ -38,10 +38,12 @@ const (
 type Factory struct {
 	cfg *config.Config
 
-	mu     sync.Mutex
-	pools  map[string]*managedPool
-	root   context.Context
-	cancel context.CancelFunc
+	mu    sync.Mutex
+	pools map[string]*managedPool
+	// clients 记录已创建的 http.Client，Close 时释放它们的 idle 连接。
+	clients []*http.Client
+	root    context.Context
+	cancel  context.CancelFunc
 	// closed 标记已 Close。关闭后 root ctx 已取消，
 	// 继续建带 Consul watch 的 client 会得到一个永不更新的空端点池。
 	closed bool
@@ -126,7 +128,6 @@ func NewFactory(lc *di.Lifecycle, cfg *config.Config) *Factory {
 // [Client] 会显式拒绝这种用法而不是静默降级。
 func (f *Factory) Close() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.cancel != nil {
 		f.cancel()
 		f.cancel = nil
@@ -137,7 +138,15 @@ func (f *Factory) Close() {
 		}
 	}
 	f.pools = make(map[string]*managedPool)
+	clients := f.clients
+	f.clients = nil
 	f.closed = true
+	f.mu.Unlock()
+
+	// 关闭 idle keep-alive 连接，避免 Factory 关闭后连接池仍被占用。
+	for _, c := range clients {
+		c.CloseIdleConnections()
+	}
 }
 
 // IsClosed 报告 Factory 是否已关闭。
@@ -251,6 +260,10 @@ func (f *Factory) Client(in ClientInput) (*req.Client, error) {
 	httpClient.Transport = rt
 	httpClient.Timeout = timeout
 
+	f.mu.Lock()
+	f.clients = append(f.clients, httpClient)
+	f.mu.Unlock()
+
 	return cli, nil
 }
 
@@ -328,29 +341,35 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 
 	key := poolKey(in.Name, passingOnly, in.Seeds)
 
+	// 快路径：只持锁做 map 查询。网络 I/O（Consul fetch）必须放到锁外，
+	// 否则一台慢 Consul 会阻塞所有服务、所有 Client() 调用，甚至 Close()。
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// 关闭后 root ctx 已取消，新建 watch 会立刻退出 —— 静默返回一个永不更新的
-	// 端点池比直接报错更难排查（业务表现为「一直连不上服务」）。
 	if f.closed {
+		f.mu.Unlock()
 		return nil, fmt.Errorf("reqx: factory is closed; create a new one (Close cancels all Consul watches)")
 	}
-
 	if m, ok := f.pools[key]; ok {
+		f.mu.Unlock()
 		return m.pool, nil
 	}
+	f.mu.Unlock()
 
 	pool := newEndpointPool(in.Seeds)
 	watchCtx, watchCancel := context.WithCancel(f.root)
+	committed := false
+	defer func() {
+		if !committed {
+			watchCancel()
+		}
+	}()
 
+	var w *watchConfig
 	if in.Name != "" && consulAddr != "" {
 		base, err := normalizeConsulBase(consulAddr)
 		if err != nil {
-			watchCancel()
 			return nil, fmt.Errorf("reqx: consul address: %w", err)
 		}
-		w := watchConfig{
+		w = &watchConfig{
 			consulBase:  base,
 			service:     in.Name,
 			passingOnly: passingOnly,
@@ -371,18 +390,29 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 				"service", in.Name,
 			)
 		}
-
-		go watchConfig{
-			consulBase:  base,
-			service:     in.Name,
-			passingOnly: passingOnly,
-		}.run(watchCtx, pool)
 	} else if in.Name != "" && consulAddr == "" && len(in.Seeds) == 0 {
-		watchCancel()
 		return nil, fmt.Errorf("reqx: discovery.consul_address empty and no Seeds for service %q", in.Name)
 	}
 
+	// 双重检查：I/O 期间可能有另一个 goroutine 已插入同 key 的池。
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return nil, fmt.Errorf("reqx: factory is closed; create a new one (Close cancels all Consul watches)")
+	}
+	if m, ok := f.pools[key]; ok {
+		f.mu.Unlock()
+		return m.pool, nil
+	}
 	f.pools[key] = &managedPool{pool: pool, cancel: watchCancel}
+	f.mu.Unlock()
+	committed = true
+
+	// watch 必须在“池已登记”之后启动：否则既可能泄漏，也可能在失败分支里
+	// 留下一个指向未登记池的 goroutine。
+	if w != nil {
+		go w.run(watchCtx, pool)
+	}
 	return pool, nil
 }
 

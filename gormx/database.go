@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/XSAM/otelsql"
@@ -70,6 +71,28 @@ func New(c *Config) (*Client, error) {
 	return &Client{pool: pool, autoMigrate: cfg.AutoMigrate}, nil
 }
 
+// otelsql.Register 每次调用都会占用一个 database/sql 驱动槽（全局上限 1000）。
+// 同一进程内反复 New（测试、多库实例）会耗尽槽位，因此按 driver+db.name 复用。
+var (
+	otelDriverMu    sync.Mutex
+	otelDriverNames = map[string]string{}
+)
+
+func registerOTelDriver(driver, dbName string, opts []otelsql.Option) (string, error) {
+	key := driver + "|" + dbName
+	otelDriverMu.Lock()
+	defer otelDriverMu.Unlock()
+	if name, ok := otelDriverNames[key]; ok {
+		return name, nil
+	}
+	name, err := otelsql.Register(driver, opts...)
+	if err != nil {
+		return "", err
+	}
+	otelDriverNames[key] = name
+	return name, nil
+}
+
 func openPool(c *Config) (*gorm.DB, error) {
 	if c == nil || c.Driver == "" || c.DSN == "" {
 		slog.Info("gormx disabled: db.driver/db.dsn not set")
@@ -91,7 +114,7 @@ func openPool(c *Config) (*gorm.DB, error) {
 		otelOpts = append(otelOpts, otelsql.WithAttributes(attribute.String("db.name", dbName)))
 	}
 
-	otelDriverName, err := otelsql.Register(sqlDriver, otelOpts...)
+	otelDriverName, err := registerOTelDriver(sqlDriver, dbName, otelOpts)
 	if err != nil {
 		// 回退到裸驱动会让这条连接完全失去 span/metrics（恰恰是排障时最需要的），
 		// 且线上无法感知。宁可启动失败。
@@ -223,31 +246,38 @@ func (a *slogAdapter) Error(ctx context.Context, msg string, data ...any) {
 
 func (a *slogAdapter) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
 	elapsed := time.Since(begin)
-	sqlStr, rows := fc()
+	// fc() 会格式化整条 SQL；只在确定要输出时才调用，避免每条查询都做一次
+	// 字符串拼接（ErrRecordNotFound 是高频路径）。
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return
 		}
-		if slog.LevelError >= a.level {
-			slog.ErrorContext(ctx, "database error",
-				"error", err, "duration", elapsed, "rows", rows, "sql", sqlStr,
-			)
+		if slog.LevelError < a.level {
+			return
 		}
+		sqlStr, rows := fc()
+		slog.ErrorContext(ctx, "database error",
+			"error", err, "duration", elapsed, "rows", rows, "sql", sqlStr,
+		)
 		return
 	}
 	if a.slowThreshold > 0 && elapsed >= a.slowThreshold {
-		if slog.LevelWarn >= a.level {
-			slog.WarnContext(ctx, "database slow query",
-				"duration", elapsed, "threshold", a.slowThreshold, "rows", rows, "sql", sqlStr,
-			)
+		if slog.LevelWarn < a.level {
+			return
 		}
+		sqlStr, rows := fc()
+		slog.WarnContext(ctx, "database slow query",
+			"duration", elapsed, "threshold", a.slowThreshold, "rows", rows, "sql", sqlStr,
+		)
 		return
 	}
-	if slog.LevelInfo >= a.level {
-		slog.InfoContext(ctx, "database query",
-			"duration", elapsed, "rows", rows, "sql", sqlStr,
-		)
+	if slog.LevelInfo < a.level {
+		return
 	}
+	sqlStr, rows := fc()
+	slog.InfoContext(ctx, "database query",
+		"duration", elapsed, "rows", rows, "sql", sqlStr,
+	)
 }
 
 // Module 在配置 db.driver/db.dsn 时向 di 暴露 [*Client]。

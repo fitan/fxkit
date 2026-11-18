@@ -34,6 +34,31 @@ var fxkitModuleVersionInjected string
 // （例如服务名/表名里带引号时生成非法源码）。
 var funcs = template.FuncMap{
 	"quote": strconv.Quote,
+	// composeName 生成 docker compose 合法的项目名（[a-z0-9][a-z0-9_-]*）。
+	"composeName": composeProjectName,
+}
+
+// composeProjectName 把任意仓库/服务名规范为 Compose 接受的项目名。
+func composeProjectName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_")
+	if out == "" {
+		return "fxkit-app"
+	}
+	if out[0] < 'a' || out[0] > 'z' {
+		if out[0] < '0' || out[0] > '9' {
+			out = "fxkit-" + out
+		}
+	}
+	return out
 }
 
 // scaffoldData 填充模板文件中的 {{.Foo}} 占位符。
@@ -123,6 +148,25 @@ Provide it explicitly, one of:
   - FXKIT_MODULE_VERSION=v1.2.3 fxkit init <name>
   - fxkit init <name> --fxkit-path /path/to/fxkit   (injects a local replace)
 A binary built with -ldflags "-X main.fxkitModuleVersionInjected=vX.Y.Z" picks it up automatically.`, err)
+}
+
+// modulePathRE 匹配合法 Go module path 的字符集。
+var modulePathRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~/-]*$`)
+
+// validateModulePath 拒绝会被原样写进 go.mod 的非法 module 路径。
+func validateModulePath(p string) error {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return fmt.Errorf("module path is required")
+	}
+	if strings.Contains(p, "..") || strings.Contains(p, "//") ||
+		strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") {
+		return fmt.Errorf("module path %q must not contain '..', '//' or leading/trailing '/'", p)
+	}
+	if !modulePathRE.MatchString(p) {
+		return fmt.Errorf("module path %q contains invalid characters (allowed: letters, digits, . _ ~ - /)", p)
+	}
+	return nil
 }
 
 func validateName(kind, name string) error {

@@ -69,6 +69,9 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		return nil, 0, fxerrors.Internal("crudx.ApplyList: nil params")
 	}
 	spec.Normalize(params)
+	if err := spec.validateIdentifiers(); err != nil {
+		return nil, 0, err
+	}
 
 	groups, err := ParseQGroups(spec, params.Q)
 	if err != nil {
@@ -177,9 +180,12 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		sortBy, sortDir = ParseSort(spec.DefaultSort)
 	}
 	col, dir, ok := validatedSortPath(spec, sortBy, sortDir)
-	if !ok && (params.sortByExplicit || (hasCursor && strings.TrimSpace(sortBy) != "")) {
-		// 非白名单排序字段不再静默忽略（否则 offset 分页会重复/漏行）。
-		return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
+	if !ok {
+		// 游标分页必须有确定排序：否则首页没有 ORDER BY（顺序随机）却返回
+		// nextCursor，次页又因为 cursor 无法解析出排序列而 400。
+		if params.sortByExplicit || hasCursor || params.UseCursor {
+			return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
+		}
 	}
 	if ok {
 		if res, err := resolveFieldForSort(spec, sortBy); err == nil {
@@ -214,7 +220,11 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		if !ok {
 			return nil, joinCount, InvalidQueryCondition("", ReasonInvalidSortField)
 		}
-		sql, args, err := cursorWhereSQL(col, opts.PKColumn, dir, cursorSortVal, coerceCursorPK(cursorPK, opts.PKKind))
+		pk, err := coerceCursorPK(cursorPK, opts.PKKind)
+		if err != nil {
+			return nil, joinCount, err
+		}
+		sql, args, err := cursorWhereSQL(col, opts.PKColumn, dir, cursorSortVal, pk)
 		if err != nil {
 			return nil, joinCount, err
 		}
@@ -228,8 +238,16 @@ func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpt
 		if ok && isForeignColumn(col, opts.PKColumn) {
 			return nil, joinCount, InvalidQueryCondition("", ReasonDistinctRelationSort)
 		}
-		// 对根模型做 SELECT DISTINCT 以合并 1:N JOIN 产生的重复行。
-		tx = tx.Distinct()
+		// 对根模型去重以合并 1:N JOIN 产生的重复行。
+		//
+		// 不用 `SELECT DISTINCT *`：PostgreSQL 对 json/jsonb/array 列没有等值操作符，
+		// DISTINCT * 会直接报错。按主键 GROUP BY 在各方言上都能工作
+		// （PG/MySQL 支持主键函数依赖，SQLite 允许非聚合列）。
+		if opts.PKColumn != "" {
+			tx = tx.Group(opts.PKColumn)
+		} else {
+			tx = tx.Distinct()
+		}
 	}
 
 	if !opts.SkipPaging {
@@ -393,19 +411,23 @@ func validatedSortPath(spec ListSpec, sortBy, sortDir string) (col, dir string, 
 	return col, dir, true
 }
 
-func coerceCursorPK(pk string, kind reflect.Kind) any {
+func coerceCursorPK(pk string, kind reflect.Kind) (any, error) {
 	pk = strings.TrimSpace(pk)
 	switch kind {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if i, err := strconv.ParseInt(pk, 10, 64); err == nil {
-			return i
+		i, err := strconv.ParseInt(pk, 10, 64)
+		if err != nil {
+			return nil, InvalidQueryCondition("", ReasonInvalidCursorPK)
 		}
+		return i, nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if u, err := strconv.ParseUint(pk, 10, 64); err == nil {
-			return u
+		u, err := strconv.ParseUint(pk, 10, 64)
+		if err != nil {
+			return nil, InvalidQueryCondition("", ReasonInvalidCursorPK)
 		}
+		return u, nil
 	}
-	return pk
+	return pk, nil
 }
 
 // escapeLikePattern 转义 LIKE 的转义符 '!' 以及 % 和 _，使用户输入

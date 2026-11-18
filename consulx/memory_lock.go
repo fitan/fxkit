@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 type memoryLocker struct {
 	mu    sync.Mutex
 	locks map[string]*memLockEntry
+	seq   atomic.Uint64 // 为 fencing token 提供进程内单调序号
 }
 
 // memLockEntry 是某个（含 Prefix 的）key 在进程内的互斥令牌。
@@ -103,6 +105,11 @@ type memoryLock struct {
 	held    bool
 	pending bool
 	entry   *memLockEntry
+	fencing atomic.Uint64
+}
+
+func (l *memoryLock) FencingToken() uint64 {
+	return l.fencing.Load()
 }
 
 func (l *memoryLock) Key() string {
@@ -140,6 +147,7 @@ func (l *memoryLock) markHeld(entry *memLockEntry) {
 	l.mu.Lock()
 	l.held = true
 	l.entry = entry
+	l.fencing.Store(l.locker.seq.Add(1))
 	l.mu.Unlock()
 }
 
@@ -211,6 +219,7 @@ func (l *memoryLock) Unlock(ctx context.Context) error {
 	entry := l.entry
 	l.held = false
 	l.entry = nil
+	l.fencing.Store(0)
 	l.mu.Unlock()
 
 	// 先归还令牌，再递减引用；channel 已满说明状态错乱，丢弃而不是阻塞。

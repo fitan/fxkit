@@ -2,50 +2,38 @@ package authz
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/server"
 )
 
-// MuxMiddlewareConfig 配置 mux 层鉴权。
+// MuxMiddlewareConfig 配置 chi 鉴权中间件。
 //
-// 与 Huma 层中间件的区别：它覆盖**所有**经过 chi/mux 的请求，包括裸 chi 路由、
-// /docs、/mcp 等；并把 Subject 写入 request context，供 [SubjectFromContext] 使用。
+// 它覆盖所有经过 mux 的请求，包括 Huma、裸 chi、/docs、/mcp，
+// 并把 Subject 写入 request context，供 [SubjectFromContext] 使用。
 type MuxMiddlewareConfig struct {
-	Enabled          bool
-	DevHeaderUser    bool
-	DenyUnregistered bool
-	Validator        TokenValidator
-	Enforcer         *Enforcer
-	// Routes 惰性返回已登记的 HTTPRoute（在首次请求时读取 group，确保完整）。
-	Routes      func() []HTTPRoute
-	SubjectFunc SubjectFunc
+	Enabled       bool
+	DevHeaderUser bool
+	Validator     TokenValidator
+	Enforcer      *Enforcer
+	SubjectFunc   SubjectFunc
 	// PublicPaths 完全放行的路径（精确或前缀），用于 /public/* 这类匿名端点。
 	PublicPaths []string
+	// DevOrgID 是 DevHeaderUser 模式下 X-Org 缺失时的默认租户。
+	DevOrgID string
+	// AutoBindBootstrap 在主体于请求 domain 尚无角色时绑定 BootstrapRole。
+	AutoBindBootstrap bool
+	BootstrapRole     string
 }
 
 // NewMuxMiddleware 返回一个 net/http 中间件：认证 + Casbin 授权。
 //
 // 判定顺序：公开路径 → 解析身份（401）→ Casbin（403/500）→ 写入 Subject。
-// Casbin 关闭时退化为 HTTPRoute.Permission 校验（与 Huma 层一致）。
+// Casbin 关闭时，登录即可。
 func NewMuxMiddleware(cfg MuxMiddlewareConfig) func(http.Handler) http.Handler {
-	var (
-		idxOnce sync.Once
-		idx     routeIndex
-	)
-	index := func() routeIndex {
-		idxOnce.Do(func() {
-			if cfg.Routes == nil {
-				return
-			}
-			idx = indexRoutes(cfg.Routes())
-		})
-		return idx
-	}
-
 	return func(next http.Handler) http.Handler {
 		if !cfg.Enabled {
 			return next
@@ -63,7 +51,11 @@ func NewMuxMiddleware(cfg MuxMiddlewareConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			switch authorize(r.Context(), subj, r.Method, path, path, cfg.Enforcer, index(), cfg.DenyUnregistered) {
+			if cfg.AutoBindBootstrap && cfg.Enforcer != nil && cfg.Enforcer.Enabled() {
+				_ = cfg.Enforcer.AutoBindOnce(r.Context(), subj.ID, cfg.BootstrapRole, subj.OrgID)
+			}
+
+			switch authorize(r.Context(), subj, r.Method, path, cfg.Enforcer) {
 			case decisionInternal:
 				writeAuthzError(w, http.StatusInternalServerError, "internal error")
 				return
@@ -96,6 +88,9 @@ func resolveRequestSubject(r *http.Request, cfg MuxMiddlewareConfig) (Subject, e
 				fn = DefaultDevSubjectFunc
 			}
 			if s := fn(r.Context(), r.Header); s.ID != "" {
+				if s.OrgID == "" {
+					s.OrgID = strings.TrimSpace(cfg.DevOrgID)
+				}
 				return s, nil
 			}
 		}
@@ -126,37 +121,34 @@ func writeAuthzError(w http.ResponseWriter, status int, msg string) {
 	})
 }
 
-// provideMuxMiddleware 是 [authz.Module] 在 mux 模式下的接线。
-//
-// 注意：这里在装配期解析 config/validator/enforcer（与 Huma 层在 PreStart 解析等价，
-// 都是启动期一次性成本）；HTTPRoute 则在**首次请求**时读取，确保包含全部
-// 构造函数形式登记的路径。
+type unauthorizedError struct{}
+
+func (unauthorizedError) Error() string { return "missing or invalid credentials" }
+
+var errUnauthorized unauthorizedError
+
+// provideMuxMiddleware 在装配期解析 config/validator/enforcer。
 func provideMuxMiddleware(inj di.Injector) (server.Middleware, error) {
 	cfgPtr := mustResolve[*Config](inj, "*Config")
 	validator := mustResolve[TokenValidator](inj, "TokenValidator")
 	enforcer := mustResolve[*Enforcer](inj, "*Enforcer")
 
 	cfg := *cfgPtr
-
-	var (
-		once   sync.Once
-		cached []HTTPRoute
-	)
-	routes := func() []HTTPRoute {
-		once.Do(func() {
-			cached = di.GetGroup[HTTPRoute](inj)
-		})
-		return cached
+	if cfg.Enabled && cfg.DevHeaderUser {
+		slog.Warn("auth.dev_header_user enabled: X-User bypasses JWT — disable in production")
 	}
-
+	if cfg.Enabled && cfg.Casbin.AutoBindBootstrap {
+		slog.Warn("auth.casbin.auto_bind_bootstrap enabled: unbound subjects get bootstrap role — disable in production")
+	}
 	return NewMuxMiddleware(MuxMiddlewareConfig{
-		Enabled:          cfg.Enabled,
-		DevHeaderUser:    cfg.DevHeaderUser,
-		DenyUnregistered: cfg.DenyUnregistered,
-		Validator:        validator,
-		Enforcer:         enforcer,
-		Routes:           routes,
-		SubjectFunc:      DefaultDevSubjectFunc,
-		PublicPaths:      cfg.PublicPaths,
+		Enabled:           cfg.Enabled,
+		DevHeaderUser:     cfg.DevHeaderUser,
+		Validator:         validator,
+		Enforcer:          enforcer,
+		SubjectFunc:       DefaultDevSubjectFunc,
+		PublicPaths:       cfg.PublicPaths,
+		DevOrgID:          cfg.DevOrgID,
+		AutoBindBootstrap: cfg.Casbin.AutoBindBootstrap,
+		BootstrapRole:     strings.TrimSpace(cfg.Casbin.BootstrapRole),
 	}), nil
 }

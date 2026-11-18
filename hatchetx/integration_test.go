@@ -113,7 +113,7 @@ func TestActorIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	var current, maxConc, runs atomic.Int64
-	actor := NewActor[itestActorInput, itestActorOut](
+	actor, err := NewActor[itestActorInput, itestActorOut](
 		fmt.Sprintf("fxkit-itest-actor-%d", time.Now().UnixNano()),
 		func(_ context.Context, in itestActorInput) (itestActorOut, error) {
 			cur := current.Add(1)
@@ -130,6 +130,7 @@ func TestActorIntegration(t *testing.T) {
 			return itestActorOut{OK: true, Seq: in.Seq}, nil
 		},
 	)
+	require.NoError(t, err)
 
 	workflows, err := actor.Register(client)
 	require.NoError(t, err)
@@ -172,7 +173,7 @@ func TestActorParallelAcrossActorIDs(t *testing.T) {
 	inFlight, maxAll := 0, 0
 	var runs atomic.Int64
 
-	actor := NewActor[itestActorInput, itestActorOut](
+	actor, err := NewActor[itestActorInput, itestActorOut](
 		fmt.Sprintf("fxkit-itest-parallel-%d", time.Now().UnixNano()),
 		func(_ context.Context, in itestActorInput) (itestActorOut, error) {
 			mu.Lock()
@@ -196,6 +197,7 @@ func TestActorParallelAcrossActorIDs(t *testing.T) {
 			return itestActorOut{OK: true, Seq: in.Seq}, nil
 		},
 	)
+	require.NoError(t, err)
 
 	workflows, err := actor.Register(client)
 	require.NoError(t, err)

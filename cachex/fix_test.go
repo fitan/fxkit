@@ -22,19 +22,19 @@ import (
 
 // recordingCache 记录 Set 时使用的 TTL，用于验证 TTL 归一化。
 type recordingCache struct {
-	MemoryCache
+	*testCache
 	setTTL time.Duration
 	sets   int
 }
 
 func newRecordingCache() *recordingCache {
-	return &recordingCache{MemoryCache: *NewMemoryCache()}
+	return &recordingCache{testCache: newTestCache()}
 }
 
 func (c *recordingCache) Set(ctx context.Context, key string, val []byte, ttl time.Duration) error {
 	c.setTTL = ttl
 	c.sets++
-	return c.MemoryCache.Set(ctx, key, val, ttl)
+	return c.testCache.Set(ctx, key, val, ttl)
 }
 
 // TestGetOrSet_TTLSemantics 锁定单字段的三种语义：
@@ -99,24 +99,20 @@ func TestNormalizeRedisTTL(t *testing.T) {
 func TestNegativeCache_PreservesNotFoundSemantics(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
-		name            string
-		loadErr         error
-		wantGorm        bool
-		wantSQL         bool
-		wantPgx         bool
-		wantFxNotFound  bool
-		wantPlainErrors bool
+		name    string
+		loadErr error
+		want404 bool
 	}{
-		{"gorm", gorm.ErrRecordNotFound, true, false, false, true, true},
-		{"gorm-wrapped", fmt.Errorf("db: %w", gorm.ErrRecordNotFound), true, false, false, true, true},
-		{"sql", sql.ErrNoRows, false, true, false, false, true},
-		{"pgx", pgx.ErrNoRows, false, true, true, false, true},
-		{"fxerrors", fxerrors.NotFound("user", "id=%d", 1), false, false, false, true, true},
+		{"gorm", gorm.ErrRecordNotFound, false},
+		{"gorm-wrapped", fmt.Errorf("db: %w", gorm.ErrRecordNotFound), false},
+		{"sql", sql.ErrNoRows, false},
+		{"pgx", pgx.ErrNoRows, false},
+		{"fxerrors", fxerrors.NotFound("user", "id=%d", 1), true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mem := NewMemoryCache()
+			mem := newTestCache()
 			var loads int64
 			loader := func(context.Context) (string, error) {
 				atomic.AddInt64(&loads, 1)
@@ -136,16 +132,10 @@ func TestNegativeCache_PreservesNotFoundSemantics(t *testing.T) {
 
 			assert.True(t, errors.Is(hit, ErrNegativeHit), "negative hit sentinel")
 			assert.True(t, IsNegativeHit(hit), "legacy helper")
-			assert.Equal(t, tc.wantGorm, errors.Is(hit, gorm.ErrRecordNotFound), "gorm sentinel")
-			assert.Equal(t, tc.wantSQL, errors.Is(hit, sql.ErrNoRows), "sql sentinel")
-			assert.Equal(t, tc.wantPgx, errors.Is(hit, pgx.ErrNoRows), "pgx sentinel")
-			assert.Equal(t, tc.wantFxNotFound, fxerrors.Is(hit, fxerrors.KindNotFound), "fxerrors kind")
-
-			var fxe *fxerrors.Error
-			if tc.wantFxNotFound {
-				require.True(t, errors.As(hit, &fxe))
-				assert.Equal(t, fxerrors.KindNotFound, fxe.Kind)
-			}
+			assert.False(t, errors.Is(hit, gorm.ErrRecordNotFound), "negative hit is not the gorm sentinel")
+			assert.False(t, errors.Is(hit, sql.ErrNoRows), "negative hit is not the sql sentinel")
+			assert.False(t, errors.Is(hit, pgx.ErrNoRows), "negative hit is not the pgx sentinel")
+			assert.Equal(t, tc.want404, fxerrors.Is(hit, fxerrors.KindNotFound))
 		})
 	}
 }
@@ -162,8 +152,8 @@ func TestClassifyNotFound(t *testing.T) {
 		{"sql", sql.ErrNoRows, true},
 		{"pgx", pgx.ErrNoRows, true},
 		{"fxerrors", fxerrors.NotFound("order", ""), true},
-		{"legacy-text", errors.New("record not found"), true},
-		{"legacy-sql-text", errors.New("sql: no rows in result set"), true},
+		{"plain-text", errors.New("record not found"), false},
+		{"plain-sql-text", errors.New("sql: no rows in result set"), false},
 		{"other", errors.New("connection refused"), false},
 	}
 	for _, tc := range cases {
@@ -176,7 +166,7 @@ func TestClassifyNotFound(t *testing.T) {
 // TestGetOrSet_SingleflightDetachesCallerContext：首个调用者的 ctx 取消后，
 // 其它等待者不应收到 context canceled，loader 的结果仍应写入缓存。
 func TestGetOrSet_SingleflightDetachesCallerContext(t *testing.T) {
-	c := NewMemoryCache()
+	c := newTestCache()
 	started := make(chan struct{})
 	release := make(chan struct{})
 
@@ -246,7 +236,7 @@ type flightOrder struct {
 // TestGetOrSet_SameKeyDifferentTypes：相同 key、不同类型必须互不串数据。
 func TestGetOrSet_SameKeyDifferentTypes(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 
 	u, err := GetOrSet(ctx, c, "same", func(context.Context) (flightUser, error) {
 		return flightUser{ID: 1, Name: "alice"}, nil
@@ -287,7 +277,7 @@ func TestGetOrSet_SameKeyDifferentTypes(t *testing.T) {
 // TestGetOrSet_SingleflightKeyIncludesType：不同类型不能合并到同一个 flight。
 func TestGetOrSet_SingleflightKeyIncludesType(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	userDone := make(chan struct{})
@@ -312,40 +302,6 @@ func TestGetOrSet_SingleflightKeyIncludesType(t *testing.T) {
 
 	close(release)
 	<-userDone
-}
-
-func TestMemoryCache_DeletesExpiredOnGet(t *testing.T) {
-	ctx := context.Background()
-	c := NewMemoryCache()
-	require.NoError(t, c.Set(ctx, "expired", []byte("v"), 5*time.Millisecond))
-	time.Sleep(15 * time.Millisecond)
-
-	_, err := c.Get(ctx, "expired")
-	assert.ErrorIs(t, err, ErrCacheMiss)
-	assert.Equal(t, 0, c.Len(), "Get must delete the expired item")
-}
-
-func TestMemoryCache_SweepExpired(t *testing.T) {
-	ctx := context.Background()
-	c := NewMemoryCache()
-	for i := 0; i < 10; i++ {
-		require.NoError(t, c.Set(ctx, fmt.Sprintf("k%d", i), []byte("v"), 5*time.Millisecond))
-	}
-	time.Sleep(15 * time.Millisecond)
-	assert.Equal(t, 10, c.SweepExpired())
-	assert.Equal(t, 0, c.Len())
-}
-
-func TestMemoryCache_LazySweepOnWrites(t *testing.T) {
-	ctx := context.Background()
-	c := NewMemoryCache()
-	require.NoError(t, c.Set(ctx, "expired", []byte("v"), 5*time.Millisecond))
-	time.Sleep(15 * time.Millisecond)
-
-	for i := 0; i < memorySweepEvery; i++ {
-		require.NoError(t, c.Set(ctx, fmt.Sprintf("fresh-%d", i), []byte("v"), time.Hour))
-	}
-	assert.Less(t, c.Len(), memorySweepEvery+1, "write threshold should sweep expired keys")
 }
 
 func TestNewRedisCache_Close(t *testing.T) {
@@ -399,7 +355,7 @@ func TestModuleClosesRedisClient(t *testing.T) {
 // TestOptionsFromConfig_ZeroValueUsesDefaults 零值 Config 不能把负缓存与 singleflight 静默关掉。
 func TestOptionsFromConfig_ZeroValueUsesDefaults(t *testing.T) {
 	def := defaultOptions()
-	for _, cfg := range []*Config{{}, {Driver: "memory"}} {
+	for _, cfg := range []*Config{{}, {Driver: "redis"}} {
 		opt := OptionsFromConfig(cfg)
 		if opt.TTL != def.TTL || opt.NullTTL != def.NullTTL || opt.DisableSingleflight != def.DisableSingleflight {
 			t.Fatalf("cfg=%+v got %+v want %+v", cfg, opt, def)

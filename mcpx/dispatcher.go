@@ -116,6 +116,8 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 	queryParams := make(map[string]any)
 	bodyParams := make(map[string]any)
 	headerParams := make(map[string]string)
+	var rawBody any
+	hasRawBody := false
 
 	isGetOrDelete := strings.EqualFold(tool.Method, http.MethodGet) || strings.EqualFold(tool.Method, http.MethodDelete)
 
@@ -129,11 +131,20 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 		switch {
 		case loc == "path" || strings.Contains(targetPath, placeholder):
 			// path 参数必须转义：否则 id="a/b" 会命中另一个路由，
-			// id="x?admin=1" 会注入 query，"..%2f.." 会穿越。
+			// id="x?admin=1" 会注入 query。
 			targetPath = strings.ReplaceAll(targetPath, placeholder, url.PathEscape(fmt.Sprintf("%v", v)))
+		case loc == "body_raw":
+			// 非 object 请求体：整个值直接作为 body 序列化。
+			rawBody = v
+			hasRawBody = true
+		case loc == "body":
+			bodyParams[k] = v
+		case strings.HasPrefix(loc, "body:"):
+			// body 字段与参数同名时生成的别名，写回原始 JSON key。
+			bodyParams[strings.TrimPrefix(loc, "body:")] = v
 		case loc == "header":
 			headerParams[k] = fmt.Sprintf("%v", v)
-		case loc == "query" || (isGetOrDelete && loc != "body"):
+		case loc == "query" || isGetOrDelete:
 			queryParams[k] = v
 		default:
 			bodyParams[k] = v
@@ -167,7 +178,13 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 
 	// 组装 Body
 	var bodyReader io.Reader
-	if len(bodyParams) > 0 {
+	if hasRawBody {
+		b, err := json.Marshal(rawBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(b)
+	} else if len(bodyParams) > 0 {
 		b, err := json.Marshal(bodyParams)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
@@ -190,9 +207,14 @@ func buildHTTPRequest(ctx context.Context, tool Tool, headers map[string]string,
 	for k, v := range headerParams {
 		req.Header.Set(k, v)
 	}
-	// 静态配置的 header（如 Authorization）最后写入，避免被 tool 参数覆盖。
+	// 静态 header（服务级凭据）先写；调用者身份最后写，确保身份不被静态值覆盖。
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+	for k, vals := range identityHeadersFromContext(ctx) {
+		for _, v := range vals {
+			req.Header.Set(k, v)
+		}
 	}
 
 	return req, nil

@@ -31,8 +31,8 @@ func TestProvideHealthChecker_AllFormsShareOneGroup(t *testing.T) {
 		},
 		// 延迟构造（可访问依赖图）
 		func(i di.Injector) {
-			server.ProvideHealthCheckerLazy(func(di.Injector) (server.HealthChecker, error) {
-				return namedChecker{name: "from-injector"}, nil
+			server.ProvideHealthCheckerLazy(func(di.Injector) (server.HealthChecker, bool, error) {
+				return namedChecker{name: "from-injector"}, true, nil
 			})(i)
 		},
 	)
@@ -51,6 +51,22 @@ func TestProvideHealthChecker_AllFormsShareOneGroup(t *testing.T) {
 		"all registration forms must land in the same group")
 }
 
+// TestProvideHealthCheckerLazy_SkipIsExplicit 验证 ok=false 是显式的「跳过」语义。
+func TestProvideHealthCheckerLazy_SkipIsExplicit(t *testing.T) {
+	root := di.New(
+		server.ProvideHealthChecker(namedChecker{name: "db"}),
+		server.ProvideHealthCheckerLazy(func(di.Injector) (server.HealthChecker, bool, error) {
+			return nil, false, nil
+		}),
+	)
+	defer root.Shutdown()
+
+	require.NoError(t, di.MustInvoke[*di.Lifecycle](root).StartPreStartOnly(context.Background()))
+	checkers := di.GetGroup[server.HealthChecker](root)
+	require.Len(t, checkers, 1)
+	assert.Equal(t, "db", checkers[0].Name())
+}
+
 // TestProvideHealthChecker_ConstructorForm 验证 func(dep...) 形式延迟装配。
 func TestProvideHealthChecker_ConstructorForm(t *testing.T) {
 	type dep struct{ v string }
@@ -58,8 +74,8 @@ func TestProvideHealthChecker_ConstructorForm(t *testing.T) {
 	root := di.New(
 		func(i di.Injector) { di.ProvideValue(i, &dep{v: "injected"}) },
 		func(i di.Injector) {
-			server.ProvideHealthCheckerLazy(func(i di.Injector) (server.HealthChecker, error) {
-				return namedChecker{name: di.MustInvoke[*dep](i).v}, nil
+			server.ProvideHealthCheckerLazy(func(i di.Injector) (server.HealthChecker, bool, error) {
+				return namedChecker{name: di.MustInvoke[*dep](i).v}, true, nil
 			})(i)
 		},
 	)

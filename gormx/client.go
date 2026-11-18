@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -35,11 +36,15 @@ func (h *afterCommitHooks) run() {
 	}
 	h.mu.Lock()
 	fns := append([]func(context.Context){}, h.fns...)
-	ctx := h.ctx
+	base := h.ctx
 	h.mu.Unlock()
-	if ctx == nil {
-		ctx = context.Background()
+	if base == nil {
+		base = context.Background()
 	}
+	// 提交后的副作用（例如 outbox 入队）不应因请求 ctx 被取消而静默失败：
+	// 事务已经提交，调用方断开连接不代表副作用可以丢掉。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(base), 5*time.Second)
+	defer cancel()
 	for _, fn := range fns {
 		func() {
 			defer func() {
@@ -109,10 +114,19 @@ func (c *Client) AutoMigrate() bool {
 	return c != nil && c.autoMigrate
 }
 
-// Conn 返回绑定 ctx 的 *gorm.DB：若 ctx 上有活跃事务则用之，否则为根池的 [gorm.DB.WithContext]。ctx 不可为 nil。
+// Enabled 报告是否配置了数据库（db.driver/db.dsn）。
+// 未配置时 Module 仍会注入一个禁用的 *Client，供可选集成判断是否可用。
+func (c *Client) Enabled() bool {
+	return c != nil && c.pool != nil
+}
+
+// Conn 返回绑定 ctx 的 *gorm.DB：若 ctx 上有活跃事务则用之，否则为根池的 [gorm.DB.WithContext]。
+//
+// 未配置数据库时 panic：调用方已经从 DI 拿到了 *Client，再静默返回 nil 只会在更远的地方
+// nil panic。需要探测依赖是否存在时用 [Client.Enabled] / [Client.Pool]。
 func (c *Client) Conn(ctx context.Context) *gorm.DB {
-	if c == nil || c.pool == nil {
-		return nil
+	if !c.Enabled() {
+		panic("gormx: Conn called on a disabled Client (db.driver/db.dsn not configured); check Client.Enabled() before querying")
 	}
 	if tx, ok := TxFromContext(ctx); ok {
 		return tx.WithContext(ctx)
@@ -130,8 +144,8 @@ func (c *Client) Pool() *gorm.DB {
 
 // Transaction 在数据库事务中运行 fn。若 ctx 已由 [WithTx] 携带 tx，则直接调用 fn（嵌套 commit/rollback 由外层事务负责）。
 func (c *Client) Transaction(ctx context.Context, fn func(ctx context.Context) error) error {
-	if c == nil || c.pool == nil {
-		return fmt.Errorf("gormx: nil client")
+	if !c.Enabled() {
+		return fmt.Errorf("gormx: nil client (database not configured)")
 	}
 	if _, ok := TxFromContext(ctx); ok {
 		return fn(ctx)

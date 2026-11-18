@@ -57,7 +57,7 @@ func registerRoutesOnStart(p autoRegisterParams) {
 					if u == "" {
 						continue
 					}
-					bindings = append(bindings, RoleBinding{User: u, Role: role})
+					bindings = append(bindings, RoleBinding{User: u, Role: role, Dom: DefaultDomain})
 				}
 				if len(bindings) > 0 {
 					if err := p.Enforcer.AddRoleBindings(bindings); err != nil {
@@ -99,7 +99,7 @@ func PoliciesFromRoutes(role string, routes []HTTPRoute) []Policy {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, Policy{Sub: role, Obj: path, Act: act})
+		out = append(out, Policy{Sub: role, Dom: DefaultDomain, Obj: path, Act: act})
 	}
 	return out
 }

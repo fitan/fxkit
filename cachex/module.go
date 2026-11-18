@@ -94,9 +94,6 @@ func New(cfg *Config) (Cache, error) {
 	case "":
 		slog.Debug("cachex: disabled (driver is empty)")
 		c = &DisabledCache{}
-	case "memory":
-		slog.Info("cachex: initialized in-memory driver")
-		c = NewMemoryCache()
 	case "redis":
 		rdb := redis.NewClient(&redis.Options{
 			Addr:         cfg.Redis.Addr,
@@ -111,7 +108,7 @@ func New(cfg *Config) (Cache, error) {
 		slog.Info("cachex: initialized redis driver", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 		c = NewRedisCache(rdb)
 	default:
-		return nil, fmt.Errorf("cache: unsupported driver %q", cfg.Driver)
+		return nil, fmt.Errorf("cache: unsupported driver %q (supported: redis)", cfg.Driver)
 	}
 
 	// 若配置了前缀，自动包装

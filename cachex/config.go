@@ -8,7 +8,8 @@ import (
 
 // Config 缓存模块配置（yaml: cache）。
 type Config struct {
-	// Driver 缓存驱动类型：""（默认/禁用）、"memory"（纯内存缓存）、"redis"（Redis 分布式缓存）。
+	// Driver 缓存驱动类型：""（默认/禁用）、"redis"（分布式缓存）。
+	// cachex 不提供进程内缓存；需要本地缓存请在宿主应用内自行实现。
 	Driver string `yaml:"driver"`
 
 	// Prefix 缓存键统一命名前缀（例如 "app:catalog:"），避免多服务或多环境键名冲突。
@@ -75,12 +76,13 @@ func (c *Config) SetDefaults() {
 // Validate 校验配置合法性。
 func (c Config) Validate() error {
 	driver := strings.ToLower(strings.TrimSpace(c.Driver))
+	if c.JitterMaxPercent < 0 || c.JitterMaxPercent > 50 {
+		return fmt.Errorf("cache: jitter_max_percent must be between 0 and 50")
+	}
 	if driver == "" {
 		return nil
 	}
 	switch driver {
-	case "memory":
-		return nil
 	case "redis":
 		if strings.TrimSpace(c.Redis.Addr) == "" {
 			return fmt.Errorf("cache: redis.addr is required when driver is redis")
@@ -90,6 +92,6 @@ func (c Config) Validate() error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("cache: unknown driver %q (supported: memory, redis)", c.Driver)
+		return fmt.Errorf("cache: unknown driver %q (supported: redis)", c.Driver)
 	}
 }

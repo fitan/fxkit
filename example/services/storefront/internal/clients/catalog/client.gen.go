@@ -55,29 +55,19 @@ func (e ListCommentsParamsSortDirection) Valid() bool {
 
 // AddRolePermissionBody defines model for AddRolePermissionBody.
 type AddRolePermissionBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/AddRolePermissionBody.json
-	Schema *string `json:"$schema,omitempty"`
+	Domain *string `json:"domain,omitempty"`
 	Method string  `json:"method"`
 	Path   string  `json:"path"`
 }
 
 // AddSubjectRoleBody defines model for AddSubjectRoleBody.
 type AddSubjectRoleBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/AddSubjectRoleBody.json
-	Schema *string `json:"$schema,omitempty"`
+	Domain *string `json:"domain,omitempty"`
 	Role   string  `json:"role"`
 }
 
 // ArticleDetail defines model for ArticleDetail.
 type ArticleDetail struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ArticleDetail.json
-	Schema    *string   `json:"$schema,omitempty"`
 	Author    *string   `json:"author,omitempty"`
 	Body      *string   `json:"body,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -85,6 +75,14 @@ type ArticleDetail struct {
 	Status    string    `json:"status"`
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// ArticleFanout defines model for ArticleFanout.
+type ArticleFanout struct {
+	ArticleID int64     `json:"ArticleID"`
+	CreatedAt time.Time `json:"CreatedAt"`
+	ID        int64     `json:"ID"`
+	Title     string    `json:"Title"`
 }
 
 // ArticleListRow defines model for ArticleListRow.
@@ -97,10 +95,6 @@ type ArticleListRow struct {
 
 // CommentRow defines model for CommentRow.
 type CommentRow struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/CommentRow.json
-	Schema    *string   `json:"$schema,omitempty"`
 	ArticleId int64     `json:"articleId"`
 	Author    *string   `json:"author,omitempty"`
 	Body      string    `json:"body"`
@@ -111,20 +105,12 @@ type CommentRow struct {
 
 // CreateArticleReq defines model for CreateArticleReq.
 type CreateArticleReq struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/CreateArticleReq.json
-	Schema *string `json:"$schema,omitempty"`
-	Body   *string `json:"body,omitempty"`
-	Title  string  `json:"title"`
+	Body  *string `json:"body,omitempty"`
+	Title string  `json:"title"`
 }
 
 // CreateCommentReq defines model for CreateCommentReq.
 type CreateCommentReq struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/CreateCommentReq.json
-	Schema    *string `json:"$schema,omitempty"`
 	ArticleId int64   `json:"articleId"`
 	Body      string  `json:"body"`
 	Note      *string `json:"note,omitempty"`
@@ -132,10 +118,6 @@ type CreateCommentReq struct {
 
 // CreateRoleBody defines model for CreateRoleBody.
 type CreateRoleBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/CreateRoleBody.json
-	Schema      *string `json:"$schema,omitempty"`
 	Description *string `json:"description,omitempty"`
 	DisplayName *string `json:"display_name,omitempty"`
 
@@ -157,11 +139,6 @@ type ErrorDetail struct {
 
 // ErrorModel defines model for ErrorModel.
 type ErrorModel struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ErrorModel.json
-	Schema *string `json:"$schema,omitempty"`
-
 	// Detail A human-readable explanation specific to this occurrence of the problem.
 	//
 	// Example: Property foo is required but is missing.
@@ -191,70 +168,50 @@ type ErrorModel struct {
 	Type *string `json:"type,omitempty"`
 }
 
+// FanoutBody defines model for FanoutBody.
+type FanoutBody struct {
+	Items *[]ArticleFanout `json:"items"`
+}
+
 // HeartbeatOut defines model for HeartbeatOut.
 type HeartbeatOut struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/HeartbeatOut.json
-	Schema   *string   `json:"$schema,omitempty"`
 	LastTick time.Time `json:"lastTick"`
 	Ticks    int64     `json:"ticks"`
 }
 
 // IncInBody defines model for IncInBody.
 type IncInBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/IncInBody.json
-	Schema *string `json:"$schema,omitempty"`
-	Delta  int64   `json:"delta"`
+	Delta  int64  `json:"delta"`
+	HoldMs *int64 `json:"holdMs,omitempty"`
 }
 
 // IncOutput defines model for IncOutput.
 type IncOutput struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/IncOutput.json
-	Schema *string `json:"$schema,omitempty"`
-	Value  int64   `json:"value"`
+	ActorInflight int32 `json:"actorInflight"`
+	Inflight      int32 `json:"inflight"`
+	Value         int64 `json:"value"`
 }
 
 // ListBindingsBody defines model for ListBindingsBody.
 type ListBindingsBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ListBindingsBody.json
-	Schema *string        `json:"$schema,omitempty"`
-	Items  *[]RoleBinding `json:"items"`
+	Items *[]RoleBinding `json:"items"`
 }
 
 // ListPermissionsBody defines model for ListPermissionsBody.
 type ListPermissionsBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ListPermissionsBody.json
-	Schema *string           `json:"$schema,omitempty"`
-	Items  *[]PermissionView `json:"items"`
-	Limit  int64             `json:"limit"`
-	Start  int64             `json:"start"`
-	Total  *int64            `json:"total,omitempty"`
+	Items *[]PermissionView `json:"items"`
+	Limit int64             `json:"limit"`
+	Start int64             `json:"start"`
+	Total *int64            `json:"total,omitempty"`
 }
 
 // ListPoliciesBody defines model for ListPoliciesBody.
 type ListPoliciesBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ListPoliciesBody.json
-	Schema *string   `json:"$schema,omitempty"`
-	Items  *[]Policy `json:"items"`
+	Items *[]Policy `json:"items"`
 }
 
 // ListResultArticleListRow defines model for ListResultArticleListRow.
 type ListResultArticleListRow struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ListResultArticleListRow.json
-	Schema     *string           `json:"$schema,omitempty"`
 	Items      *[]ArticleListRow `json:"items"`
 	Limit      int64             `json:"limit"`
 	NextCursor *string           `json:"nextCursor,omitempty"`
@@ -264,10 +221,6 @@ type ListResultArticleListRow struct {
 
 // ListResultCommentRow defines model for ListResultCommentRow.
 type ListResultCommentRow struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ListResultCommentRow.json
-	Schema     *string       `json:"$schema,omitempty"`
 	Items      *[]CommentRow `json:"items"`
 	Limit      int64         `json:"limit"`
 	NextCursor *string       `json:"nextCursor,omitempty"`
@@ -277,39 +230,13 @@ type ListResultCommentRow struct {
 
 // ListRolesBody defines model for ListRolesBody.
 type ListRolesBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/ListRolesBody.json
-	Schema *string       `json:"$schema,omitempty"`
-	Items  *[]RoleRecord `json:"items"`
-}
-
-// PermissionBody defines model for PermissionBody.
-type PermissionBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/PermissionBody.json
-	Schema      *string `json:"$schema,omitempty"`
-	Description *string `json:"description,omitempty"`
-
-	// Method HTTP 方法，如 GET
-	Method      string  `json:"method"`
-	OperationId *string `json:"operation_id,omitempty"`
-
-	// Path Huma 路径，如 /users/{id}
-	Path    string    `json:"path"`
-	Summary *string   `json:"summary,omitempty"`
-	Tags    *[]string `json:"tags,omitempty"`
+	Items *[]RoleRecord `json:"items"`
 }
 
 // PermissionView defines model for PermissionView.
 type PermissionView struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/PermissionView.json
-	Schema      *string   `json:"$schema,omitempty"`
 	Description string    `json:"description"`
-	Id          int64     `json:"id"`
+	Grants      *[]string `json:"grants"`
 	Method      string    `json:"method"`
 	OperationId string    `json:"operation_id"`
 	Path        string    `json:"path"`
@@ -320,38 +247,33 @@ type PermissionView struct {
 
 // Policy defines model for Policy.
 type Policy struct {
-	Act string `json:"Act"`
-	Obj string `json:"Obj"`
-	Sub string `json:"Sub"`
+	Act string `json:"act"`
+	Dom string `json:"dom"`
+	Obj string `json:"obj"`
+	Sub string `json:"sub"`
 }
 
 // RoleBinding defines model for RoleBinding.
 type RoleBinding struct {
-	Role string `json:"Role"`
-	User string `json:"User"`
+	Dom  string `json:"dom"`
+	Role string `json:"role"`
+	User string `json:"user"`
 }
 
 // RolePermission defines model for RolePermission.
 type RolePermission struct {
+	Domain string `json:"domain"`
 	Method string `json:"method"`
 	Path   string `json:"path"`
 }
 
 // RolePermissionsBody defines model for RolePermissionsBody.
 type RolePermissionsBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/RolePermissionsBody.json
-	Schema *string           `json:"$schema,omitempty"`
-	Items  *[]RolePermission `json:"items"`
+	Items *[]RolePermission `json:"items"`
 }
 
 // RoleRecord defines model for RoleRecord.
 type RoleRecord struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/RoleRecord.json
-	Schema      *string   `json:"$schema,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	Description string    `json:"description"`
 	DisplayName string    `json:"display_name"`
@@ -361,40 +283,26 @@ type RoleRecord struct {
 
 // SetRolePermissionsBody defines model for SetRolePermissionsBody.
 type SetRolePermissionsBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/SetRolePermissionsBody.json
-	Schema *string           `json:"$schema,omitempty"`
+	Domain *string           `json:"domain,omitempty"`
 	Items  *[]RolePermission `json:"items"`
 }
 
 // SetSubjectRolesBody defines model for SetSubjectRolesBody.
 type SetSubjectRolesBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/SetSubjectRolesBody.json
-	Schema *string   `json:"$schema,omitempty"`
+	Domain *string   `json:"domain,omitempty"`
 	Roles  *[]string `json:"roles"`
 }
 
 // SubjectRolesBody defines model for SubjectRolesBody.
 type SubjectRolesBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/SubjectRolesBody.json
-	Schema *string   `json:"$schema,omitempty"`
-	Roles  *[]string `json:"roles"`
+	Roles *[]string `json:"roles"`
 }
 
 // UpdateArticleReq defines model for UpdateArticleReq.
 type UpdateArticleReq struct {
-	// Schema A URL to the JSON Schema for this object.
-	//
-	// Example: https://example.com/schemas/UpdateArticleReq.json
-	Schema *string `json:"$schema,omitempty"`
-	Body   *string `json:"body,omitempty"`
-	Id     string  `json:"id"`
-	Title  string  `json:"title"`
+	Body  *string `json:"body,omitempty"`
+	Id    string  `json:"id"`
+	Title string  `json:"title"`
 }
 
 // ListarticlesParams defines parameters for Listarticles.
@@ -436,8 +344,19 @@ type ListAuthzPermissionsParams struct {
 
 // RemoveAuthzRolePermissionParams defines parameters for RemoveAuthzRolePermission.
 type RemoveAuthzRolePermissionParams struct {
+	Domain *string `form:"domain,omitempty" json:"domain,omitempty"`
 	Path   *string `form:"path,omitempty" json:"path,omitempty"`
 	Method *string `form:"method,omitempty" json:"method,omitempty"`
+}
+
+// ListAuthzSubjectRolesParams defines parameters for ListAuthzSubjectRoles.
+type ListAuthzSubjectRolesParams struct {
+	Domain *string `form:"domain,omitempty" json:"domain,omitempty"`
+}
+
+// RemoveAuthzSubjectRoleParams defines parameters for RemoveAuthzSubjectRole.
+type RemoveAuthzSubjectRoleParams struct {
+	Domain *string `form:"domain,omitempty" json:"domain,omitempty"`
 }
 
 // ListCommentsParams defines parameters for ListComments.
@@ -473,12 +392,6 @@ type CreatearticlesJSONRequestBody = CreateArticleReq
 
 // UpdatearticlesJSONRequestBody defines body for Updatearticles for application/json ContentType.
 type UpdatearticlesJSONRequestBody = UpdateArticleReq
-
-// CreateAuthzPermissionJSONRequestBody defines body for CreateAuthzPermission for application/json ContentType.
-type CreateAuthzPermissionJSONRequestBody = PermissionBody
-
-// UpdateAuthzPermissionJSONRequestBody defines body for UpdateAuthzPermission for application/json ContentType.
-type UpdateAuthzPermissionJSONRequestBody = PermissionBody
 
 // CreateAuthzRoleJSONRequestBody defines body for CreateAuthzRole for application/json ContentType.
 type CreateAuthzRoleJSONRequestBody = CreateRoleBody
@@ -575,6 +488,11 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 
+	// ListArticleFanout Second Hatchet consumer of article-created (fan-out)
+	//
+	// Corresponds with GET /article-fanout (the `ListArticleFanout` operationId).
+	ListArticleFanout(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// Listarticles List articles (q= / cursor)
 	//
 	// Corresponds with GET /articles (the `Listarticles` operationId).
@@ -625,50 +543,10 @@ type ClientInterface interface {
 
 	// ListAuthzPermissions 列出 API 权限目录
 	//
-	// 返回已登记的 path/method + Huma 元数据.
+	// 从路由表 + Casbin 策略派生（只读）.
 	//
 	// Corresponds with GET /authz/permissions (the `ListAuthzPermissions` operationId).
 	ListAuthzPermissions(ctx context.Context, params *ListAuthzPermissionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreateAuthzPermissionWithBody 创建权限目录项
-	//
-	// Takes any type of body and a specified content type.
-	//
-	// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-	CreateAuthzPermissionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// CreateAuthzPermission 创建权限目录项
-	//
-	// Takes a body of the `application/json` content type.
-	//
-	// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-	CreateAuthzPermission(ctx context.Context, body CreateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// DeleteAuthzPermission 删除权限目录项
-	//
-	// 仅删除目录元数据，不删除 Casbin 策略.
-	//
-	// Corresponds with DELETE /authz/permissions/{id} (the `DeleteAuthzPermission` operationId).
-	DeleteAuthzPermission(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// GetAuthzPermission 获取权限目录项
-	//
-	// Corresponds with GET /authz/permissions/{id} (the `GetAuthzPermission` operationId).
-	GetAuthzPermission(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// UpdateAuthzPermissionWithBody 更新权限目录项
-	//
-	// Takes any type of body and a specified content type.
-	//
-	// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-	UpdateAuthzPermissionWithBody(ctx context.Context, id int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// UpdateAuthzPermission 更新权限目录项
-	//
-	// Takes a body of the `application/json` content type.
-	//
-	// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-	UpdateAuthzPermission(ctx context.Context, id int64, body UpdateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListAuthzPolicies 列出全部 Casbin 策略
 	//
@@ -751,7 +629,7 @@ type ClientInterface interface {
 	// ListAuthzSubjectRoles 列出用户角色
 	//
 	// Corresponds with GET /authz/subjects/{id}/roles (the `ListAuthzSubjectRoles` operationId).
-	ListAuthzSubjectRoles(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListAuthzSubjectRoles(ctx context.Context, id string, params *ListAuthzSubjectRolesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// AddAuthzSubjectRoleWithBody 为用户追加角色
 	//
@@ -784,7 +662,12 @@ type ClientInterface interface {
 	// RemoveAuthzSubjectRole 移除用户角色
 	//
 	// Corresponds with DELETE /authz/subjects/{id}/roles/{role} (the `RemoveAuthzSubjectRole` operationId).
-	RemoveAuthzSubjectRole(ctx context.Context, id string, role string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	RemoveAuthzSubjectRole(ctx context.Context, id string, role string, params *RemoveAuthzSubjectRoleParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CacheDemo cachex Get/Set demo
+	//
+	// Corresponds with GET /cache-demo (the `CacheDemo` operationId).
+	CacheDemo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListComments List comments (q= / cursor / JOIN article.title)
 	//
@@ -834,15 +717,35 @@ type ClientInterface interface {
 	// Corresponds with GET /heartbeat (the `GetHeartbeat` operationId).
 	GetHeartbeat(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CallHeartbeat Trigger heartbeat actor once
+	//
+	// Corresponds with POST /heartbeat (the `CallHeartbeat` operationId).
+	CallHeartbeat(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetMe Current authz subject
 	//
 	// Corresponds with GET /me (the `GetMe` operationId).
 	GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PublicPing Anonymous ping (authz.public)
+	// PublicPing Anonymous ping (auth.public_paths)
 	//
 	// Corresponds with GET /public/ping (the `PublicPing` operationId).
 	PublicPing(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+// ListArticleFanout Second Hatchet consumer of article-created (fan-out)
+//
+// Corresponds with GET /article-fanout (the `ListArticleFanout` operationId).
+func (c *Client) ListArticleFanout(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListArticleFanoutRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 // Listarticles List articles (q= / cursor)
@@ -975,111 +878,11 @@ func (c *Client) ListAuthzBindings(ctx context.Context, reqEditors ...RequestEdi
 
 // ListAuthzPermissions 列出 API 权限目录
 //
-// 返回已登记的 path/method + Huma 元数据.
+// 从路由表 + Casbin 策略派生（只读）.
 //
 // Corresponds with GET /authz/permissions (the `ListAuthzPermissions` operationId).
 func (c *Client) ListAuthzPermissions(ctx context.Context, params *ListAuthzPermissionsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListAuthzPermissionsRequest(c.Server, params)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// CreateAuthzPermissionWithBody 创建权限目录项
-//
-// Takes any type of body and a specified content type.
-//
-// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-func (c *Client) CreateAuthzPermissionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateAuthzPermissionRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// CreateAuthzPermission 创建权限目录项
-//
-// Takes a body of the `application/json` content type.
-//
-// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-func (c *Client) CreateAuthzPermission(ctx context.Context, body CreateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateAuthzPermissionRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// DeleteAuthzPermission 删除权限目录项
-//
-// 仅删除目录元数据，不删除 Casbin 策略.
-//
-// Corresponds with DELETE /authz/permissions/{id} (the `DeleteAuthzPermission` operationId).
-func (c *Client) DeleteAuthzPermission(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteAuthzPermissionRequest(c.Server, id)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// GetAuthzPermission 获取权限目录项
-//
-// Corresponds with GET /authz/permissions/{id} (the `GetAuthzPermission` operationId).
-func (c *Client) GetAuthzPermission(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetAuthzPermissionRequest(c.Server, id)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// UpdateAuthzPermissionWithBody 更新权限目录项
-//
-// Takes any type of body and a specified content type.
-//
-// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-func (c *Client) UpdateAuthzPermissionWithBody(ctx context.Context, id int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUpdateAuthzPermissionRequestWithBody(c.Server, id, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// UpdateAuthzPermission 更新权限目录项
-//
-// Takes a body of the `application/json` content type.
-//
-// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-func (c *Client) UpdateAuthzPermission(ctx context.Context, id int64, body UpdateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUpdateAuthzPermissionRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1291,8 +1094,8 @@ func (c *Client) SetAuthzRolePermissions(ctx context.Context, role string, body 
 // ListAuthzSubjectRoles 列出用户角色
 //
 // Corresponds with GET /authz/subjects/{id}/roles (the `ListAuthzSubjectRoles` operationId).
-func (c *Client) ListAuthzSubjectRoles(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListAuthzSubjectRolesRequest(c.Server, id)
+func (c *Client) ListAuthzSubjectRoles(ctx context.Context, id string, params *ListAuthzSubjectRolesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListAuthzSubjectRolesRequest(c.Server, id, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1374,8 +1177,23 @@ func (c *Client) SetAuthzSubjectRoles(ctx context.Context, id string, body SetAu
 // RemoveAuthzSubjectRole 移除用户角色
 //
 // Corresponds with DELETE /authz/subjects/{id}/roles/{role} (the `RemoveAuthzSubjectRole` operationId).
-func (c *Client) RemoveAuthzSubjectRole(ctx context.Context, id string, role string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewRemoveAuthzSubjectRoleRequest(c.Server, id, role)
+func (c *Client) RemoveAuthzSubjectRole(ctx context.Context, id string, role string, params *RemoveAuthzSubjectRoleParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRemoveAuthzSubjectRoleRequest(c.Server, id, role, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CacheDemo cachex Get/Set demo
+//
+// Corresponds with GET /cache-demo (the `CacheDemo` operationId).
+func (c *Client) CacheDemo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCacheDemoRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -1514,6 +1332,21 @@ func (c *Client) GetHeartbeat(ctx context.Context, reqEditors ...RequestEditorFn
 	return c.Client.Do(req)
 }
 
+// CallHeartbeat Trigger heartbeat actor once
+//
+// Corresponds with POST /heartbeat (the `CallHeartbeat` operationId).
+func (c *Client) CallHeartbeat(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCallHeartbeatRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // GetMe Current authz subject
 //
 // Corresponds with GET /me (the `GetMe` operationId).
@@ -1529,7 +1362,7 @@ func (c *Client) GetMe(ctx context.Context, reqEditors ...RequestEditorFn) (*htt
 	return c.Client.Do(req)
 }
 
-// PublicPing Anonymous ping (authz.public)
+// PublicPing Anonymous ping (auth.public_paths)
 //
 // Corresponds with GET /public/ping (the `PublicPing` operationId).
 func (c *Client) PublicPing(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1542,6 +1375,33 @@ func (c *Client) PublicPing(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListArticleFanoutRequest constructs an http.Request for the ListArticleFanout method
+func NewListArticleFanoutRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/article-fanout")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewListarticlesRequest constructs an http.Request for the Listarticles method
@@ -1954,161 +1814,6 @@ func NewListAuthzPermissionsRequest(server string, params *ListAuthzPermissionsP
 	return req, nil
 }
 
-// NewCreateAuthzPermissionRequest calls the generic CreateAuthzPermission builder with application/json body
-func NewCreateAuthzPermissionRequest(server string, body CreateAuthzPermissionJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateAuthzPermissionRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewCreateAuthzPermissionRequestWithBody constructs an http.Request for the CreateAuthzPermission method, with any body, and a specified content type
-func NewCreateAuthzPermissionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/authz/permissions")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewDeleteAuthzPermissionRequest constructs an http.Request for the DeleteAuthzPermission method
-func NewDeleteAuthzPermissionRequest(server string, id int64) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/authz/permissions/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewGetAuthzPermissionRequest constructs an http.Request for the GetAuthzPermission method
-func NewGetAuthzPermissionRequest(server string, id int64) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/authz/permissions/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewUpdateAuthzPermissionRequest calls the generic UpdateAuthzPermission builder with application/json body
-func NewUpdateAuthzPermissionRequest(server string, id int64, body UpdateAuthzPermissionJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewUpdateAuthzPermissionRequestWithBody(server, id, "application/json", bodyReader)
-}
-
-// NewUpdateAuthzPermissionRequestWithBody constructs an http.Request for the UpdateAuthzPermission method, with any body, and a specified content type
-func NewUpdateAuthzPermissionRequestWithBody(server string, id int64, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/authz/permissions/%s", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
 // NewListAuthzPoliciesRequest constructs an http.Request for the ListAuthzPolicies method
 func NewListAuthzPoliciesRequest(server string) (*http.Request, error) {
 	var err error
@@ -2306,6 +2011,18 @@ func NewRemoveAuthzRolePermissionRequest(server string, role string, params *Rem
 		// per the OpenAPI spec (e.g. "color=blue,black,brown").
 		var rawQueryFragments []string
 
+		if params.Domain != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "domain", *params.Domain, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
 		if params.Path != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "path", *params.Path, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
@@ -2473,7 +2190,7 @@ func NewSetAuthzRolePermissionsRequestWithBody(server string, role string, conte
 }
 
 // NewListAuthzSubjectRolesRequest constructs an http.Request for the ListAuthzSubjectRoles method
-func NewListAuthzSubjectRolesRequest(server string, id string) (*http.Request, error) {
+func NewListAuthzSubjectRolesRequest(server string, id string, params *ListAuthzSubjectRolesParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -2496,6 +2213,33 @@ func NewListAuthzSubjectRolesRequest(server string, id string) (*http.Request, e
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Domain != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "domain", *params.Domain, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
@@ -2601,7 +2345,7 @@ func NewSetAuthzSubjectRolesRequestWithBody(server string, id string, contentTyp
 }
 
 // NewRemoveAuthzSubjectRoleRequest constructs an http.Request for the RemoveAuthzSubjectRole method
-func NewRemoveAuthzSubjectRoleRequest(server string, id string, role string) (*http.Request, error) {
+func NewRemoveAuthzSubjectRoleRequest(server string, id string, role string, params *RemoveAuthzSubjectRoleParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -2633,7 +2377,61 @@ func NewRemoveAuthzSubjectRoleRequest(server string, id string, role string) (*h
 		return nil, err
 	}
 
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Domain != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "domain", *params.Domain, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
 	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCacheDemoRequest constructs an http.Request for the CacheDemo method
+func NewCacheDemoRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/cache-demo")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2961,6 +2759,33 @@ func NewGetHeartbeatRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewCallHeartbeatRequest constructs an http.Request for the CallHeartbeat method
+func NewCallHeartbeatRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/heartbeat")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetMeRequest constructs an http.Request for the GetMe method
 func NewGetMeRequest(server string) (*http.Request, error) {
 	var err error
@@ -3059,6 +2884,13 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
+	// ListArticleFanoutWithResponse Second Hatchet consumer of article-created (fan-out)
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /article-fanout (the `ListArticleFanout` operationId).
+	ListArticleFanoutWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListArticleFanoutResponse, error)
+
 	// ListarticlesWithResponse List articles (q= / cursor)
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -3117,56 +2949,12 @@ type ClientWithResponsesInterface interface {
 
 	// ListAuthzPermissionsWithResponse 列出 API 权限目录
 	//
-	// 返回已登记的 path/method + Huma 元数据.
+	// 从路由表 + Casbin 策略派生（只读）.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /authz/permissions (the `ListAuthzPermissions` operationId).
 	ListAuthzPermissionsWithResponse(ctx context.Context, params *ListAuthzPermissionsParams, reqEditors ...RequestEditorFn) (*ListAuthzPermissionsResponse, error)
-
-	// CreateAuthzPermissionWithBodyWithResponse 创建权限目录项
-	//
-	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-	CreateAuthzPermissionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAuthzPermissionResponse, error)
-
-	// CreateAuthzPermissionWithResponse 创建权限目录项
-	//
-	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-	CreateAuthzPermissionWithResponse(ctx context.Context, body CreateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAuthzPermissionResponse, error)
-
-	// DeleteAuthzPermissionWithResponse 删除权限目录项
-	//
-	// 仅删除目录元数据，不删除 Casbin 策略.
-	//
-	// Returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with DELETE /authz/permissions/{id} (the `DeleteAuthzPermission` operationId).
-	DeleteAuthzPermissionWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteAuthzPermissionResponse, error)
-
-	// GetAuthzPermissionWithResponse 获取权限目录项
-	//
-	// Returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with GET /authz/permissions/{id} (the `GetAuthzPermission` operationId).
-	GetAuthzPermissionWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*GetAuthzPermissionResponse, error)
-
-	// UpdateAuthzPermissionWithBodyWithResponse 更新权限目录项
-	//
-	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-	UpdateAuthzPermissionWithBodyWithResponse(ctx context.Context, id int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateAuthzPermissionResponse, error)
-
-	// UpdateAuthzPermissionWithResponse 更新权限目录项
-	//
-	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-	UpdateAuthzPermissionWithResponse(ctx context.Context, id int64, body UpdateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateAuthzPermissionResponse, error)
 
 	// ListAuthzPoliciesWithResponse 列出全部 Casbin 策略
 	//
@@ -3263,7 +3051,7 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /authz/subjects/{id}/roles (the `ListAuthzSubjectRoles` operationId).
-	ListAuthzSubjectRolesWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*ListAuthzSubjectRolesResponse, error)
+	ListAuthzSubjectRolesWithResponse(ctx context.Context, id string, params *ListAuthzSubjectRolesParams, reqEditors ...RequestEditorFn) (*ListAuthzSubjectRolesResponse, error)
 
 	// AddAuthzSubjectRoleWithBodyWithResponse 为用户追加角色
 	//
@@ -3298,7 +3086,14 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with DELETE /authz/subjects/{id}/roles/{role} (the `RemoveAuthzSubjectRole` operationId).
-	RemoveAuthzSubjectRoleWithResponse(ctx context.Context, id string, role string, reqEditors ...RequestEditorFn) (*RemoveAuthzSubjectRoleResponse, error)
+	RemoveAuthzSubjectRoleWithResponse(ctx context.Context, id string, role string, params *RemoveAuthzSubjectRoleParams, reqEditors ...RequestEditorFn) (*RemoveAuthzSubjectRoleResponse, error)
+
+	// CacheDemoWithResponse cachex Get/Set demo
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /cache-demo (the `CacheDemo` operationId).
+	CacheDemoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*CacheDemoResponse, error)
 
 	// ListCommentsWithResponse List comments (q= / cursor / JOIN article.title)
 	//
@@ -3356,6 +3151,13 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /heartbeat (the `GetHeartbeat` operationId).
 	GetHeartbeatWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHeartbeatResponse, error)
 
+	// CallHeartbeatWithResponse Trigger heartbeat actor once
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /heartbeat (the `CallHeartbeat` operationId).
+	CallHeartbeatWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*CallHeartbeatResponse, error)
+
 	// GetMeWithResponse Current authz subject
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -3363,12 +3165,60 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /me (the `GetMe` operationId).
 	GetMeWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetMeResponse, error)
 
-	// PublicPingWithResponse Anonymous ping (authz.public)
+	// PublicPingWithResponse Anonymous ping (auth.public_paths)
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /public/ping (the `PublicPing` operationId).
 	PublicPingWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*PublicPingResponse, error)
+}
+
+type ListArticleFanoutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *FanoutBody
+	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListArticleFanoutResponse) GetJSON200() *FanoutBody {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
+func (r ListArticleFanoutResponse) GetApplicationproblemJSONDefault() *ErrorModel {
+	return r.ApplicationproblemJSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r ListArticleFanoutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListArticleFanoutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListArticleFanoutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListArticleFanoutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type ListarticlesResponse struct {
@@ -3694,191 +3544,6 @@ func (r ListAuthzPermissionsResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListAuthzPermissionsResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type CreateAuthzPermissionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *PermissionView
-	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
-	ApplicationproblemJSONDefault *ErrorModel
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r CreateAuthzPermissionResponse) GetJSON200() *PermissionView {
-	return r.JSON200
-}
-
-// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
-func (r CreateAuthzPermissionResponse) GetApplicationproblemJSONDefault() *ErrorModel {
-	return r.ApplicationproblemJSONDefault
-}
-
-// GetBody returns the raw response body bytes
-func (r CreateAuthzPermissionResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r CreateAuthzPermissionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreateAuthzPermissionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r CreateAuthzPermissionResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type DeleteAuthzPermissionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
-	ApplicationproblemJSONDefault *ErrorModel
-}
-
-// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
-func (r DeleteAuthzPermissionResponse) GetApplicationproblemJSONDefault() *ErrorModel {
-	return r.ApplicationproblemJSONDefault
-}
-
-// GetBody returns the raw response body bytes
-func (r DeleteAuthzPermissionResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r DeleteAuthzPermissionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r DeleteAuthzPermissionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r DeleteAuthzPermissionResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type GetAuthzPermissionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *PermissionView
-	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
-	ApplicationproblemJSONDefault *ErrorModel
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r GetAuthzPermissionResponse) GetJSON200() *PermissionView {
-	return r.JSON200
-}
-
-// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
-func (r GetAuthzPermissionResponse) GetApplicationproblemJSONDefault() *ErrorModel {
-	return r.ApplicationproblemJSONDefault
-}
-
-// GetBody returns the raw response body bytes
-func (r GetAuthzPermissionResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r GetAuthzPermissionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetAuthzPermissionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r GetAuthzPermissionResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type UpdateAuthzPermissionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *PermissionView
-	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
-	ApplicationproblemJSONDefault *ErrorModel
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r UpdateAuthzPermissionResponse) GetJSON200() *PermissionView {
-	return r.JSON200
-}
-
-// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
-func (r UpdateAuthzPermissionResponse) GetApplicationproblemJSONDefault() *ErrorModel {
-	return r.ApplicationproblemJSONDefault
-}
-
-// GetBody returns the raw response body bytes
-func (r UpdateAuthzPermissionResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r UpdateAuthzPermissionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r UpdateAuthzPermissionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r UpdateAuthzPermissionResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4474,6 +4139,54 @@ func (r RemoveAuthzSubjectRoleResponse) ContentType() string {
 	return ""
 }
 
+type CacheDemoResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *map[string]interface{}
+	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r CacheDemoResponse) GetJSON200() *map[string]interface{} {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
+func (r CacheDemoResponse) GetApplicationproblemJSONDefault() *ErrorModel {
+	return r.ApplicationproblemJSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r CacheDemoResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CacheDemoResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CacheDemoResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CacheDemoResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListCommentsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -4755,6 +4468,54 @@ func (r GetHeartbeatResponse) ContentType() string {
 	return ""
 }
 
+type CallHeartbeatResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *HeartbeatOut
+	// ApplicationproblemJSONDefault the response for an HTTP default `application/problem+json` response
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r CallHeartbeatResponse) GetJSON200() *HeartbeatOut {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSONDefault returns the response for an HTTP default `application/problem+json` response
+func (r CallHeartbeatResponse) GetApplicationproblemJSONDefault() *ErrorModel {
+	return r.ApplicationproblemJSONDefault
+}
+
+// GetBody returns the raw response body bytes
+func (r CallHeartbeatResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CallHeartbeatResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CallHeartbeatResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CallHeartbeatResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetMeResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -4849,6 +4610,19 @@ func (r PublicPingResponse) ContentType() string {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
+}
+
+// ListArticleFanoutWithResponse Second Hatchet consumer of article-created (fan-out)
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /article-fanout (the `ListArticleFanout` operationId).
+func (c *ClientWithResponses) ListArticleFanoutWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListArticleFanoutResponse, error) {
+	rsp, err := c.ListArticleFanout(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListArticleFanoutResponse(rsp)
 }
 
 // ListarticlesWithResponse List articles (q= / cursor)
@@ -4957,7 +4731,7 @@ func (c *ClientWithResponses) ListAuthzBindingsWithResponse(ctx context.Context,
 
 // ListAuthzPermissionsWithResponse 列出 API 权限目录
 //
-// 返回已登记的 path/method + Huma 元数据.
+// 从路由表 + Casbin 策略派生（只读）.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -4968,86 +4742,6 @@ func (c *ClientWithResponses) ListAuthzPermissionsWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseListAuthzPermissionsResponse(rsp)
-}
-
-// CreateAuthzPermissionWithBodyWithResponse 创建权限目录项
-//
-// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-func (c *ClientWithResponses) CreateAuthzPermissionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAuthzPermissionResponse, error) {
-	rsp, err := c.CreateAuthzPermissionWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateAuthzPermissionResponse(rsp)
-}
-
-// CreateAuthzPermissionWithResponse 创建权限目录项
-//
-// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /authz/permissions (the `CreateAuthzPermission` operationId).
-func (c *ClientWithResponses) CreateAuthzPermissionWithResponse(ctx context.Context, body CreateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAuthzPermissionResponse, error) {
-	rsp, err := c.CreateAuthzPermission(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateAuthzPermissionResponse(rsp)
-}
-
-// DeleteAuthzPermissionWithResponse 删除权限目录项
-//
-// 仅删除目录元数据，不删除 Casbin 策略.
-//
-// Returns a wrapper object for the known response body format(s).
-//
-// Corresponds with DELETE /authz/permissions/{id} (the `DeleteAuthzPermission` operationId).
-func (c *ClientWithResponses) DeleteAuthzPermissionWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteAuthzPermissionResponse, error) {
-	rsp, err := c.DeleteAuthzPermission(ctx, id, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseDeleteAuthzPermissionResponse(rsp)
-}
-
-// GetAuthzPermissionWithResponse 获取权限目录项
-//
-// Returns a wrapper object for the known response body format(s).
-//
-// Corresponds with GET /authz/permissions/{id} (the `GetAuthzPermission` operationId).
-func (c *ClientWithResponses) GetAuthzPermissionWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*GetAuthzPermissionResponse, error) {
-	rsp, err := c.GetAuthzPermission(ctx, id, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetAuthzPermissionResponse(rsp)
-}
-
-// UpdateAuthzPermissionWithBodyWithResponse 更新权限目录项
-//
-// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-func (c *ClientWithResponses) UpdateAuthzPermissionWithBodyWithResponse(ctx context.Context, id int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateAuthzPermissionResponse, error) {
-	rsp, err := c.UpdateAuthzPermissionWithBody(ctx, id, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseUpdateAuthzPermissionResponse(rsp)
-}
-
-// UpdateAuthzPermissionWithResponse 更新权限目录项
-//
-// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with PUT /authz/permissions/{id} (the `UpdateAuthzPermission` operationId).
-func (c *ClientWithResponses) UpdateAuthzPermissionWithResponse(ctx context.Context, id int64, body UpdateAuthzPermissionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateAuthzPermissionResponse, error) {
-	rsp, err := c.UpdateAuthzPermission(ctx, id, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseUpdateAuthzPermissionResponse(rsp)
 }
 
 // ListAuthzPoliciesWithResponse 列出全部 Casbin 策略
@@ -5217,8 +4911,8 @@ func (c *ClientWithResponses) SetAuthzRolePermissionsWithResponse(ctx context.Co
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with GET /authz/subjects/{id}/roles (the `ListAuthzSubjectRoles` operationId).
-func (c *ClientWithResponses) ListAuthzSubjectRolesWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*ListAuthzSubjectRolesResponse, error) {
-	rsp, err := c.ListAuthzSubjectRoles(ctx, id, reqEditors...)
+func (c *ClientWithResponses) ListAuthzSubjectRolesWithResponse(ctx context.Context, id string, params *ListAuthzSubjectRolesParams, reqEditors ...RequestEditorFn) (*ListAuthzSubjectRolesResponse, error) {
+	rsp, err := c.ListAuthzSubjectRoles(ctx, id, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -5282,12 +4976,25 @@ func (c *ClientWithResponses) SetAuthzSubjectRolesWithResponse(ctx context.Conte
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with DELETE /authz/subjects/{id}/roles/{role} (the `RemoveAuthzSubjectRole` operationId).
-func (c *ClientWithResponses) RemoveAuthzSubjectRoleWithResponse(ctx context.Context, id string, role string, reqEditors ...RequestEditorFn) (*RemoveAuthzSubjectRoleResponse, error) {
-	rsp, err := c.RemoveAuthzSubjectRole(ctx, id, role, reqEditors...)
+func (c *ClientWithResponses) RemoveAuthzSubjectRoleWithResponse(ctx context.Context, id string, role string, params *RemoveAuthzSubjectRoleParams, reqEditors ...RequestEditorFn) (*RemoveAuthzSubjectRoleResponse, error) {
+	rsp, err := c.RemoveAuthzSubjectRole(ctx, id, role, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseRemoveAuthzSubjectRoleResponse(rsp)
+}
+
+// CacheDemoWithResponse cachex Get/Set demo
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /cache-demo (the `CacheDemo` operationId).
+func (c *ClientWithResponses) CacheDemoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*CacheDemoResponse, error) {
+	rsp, err := c.CacheDemo(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCacheDemoResponse(rsp)
 }
 
 // ListCommentsWithResponse List comments (q= / cursor / JOIN article.title)
@@ -5394,6 +5101,19 @@ func (c *ClientWithResponses) GetHeartbeatWithResponse(ctx context.Context, reqE
 	return ParseGetHeartbeatResponse(rsp)
 }
 
+// CallHeartbeatWithResponse Trigger heartbeat actor once
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /heartbeat (the `CallHeartbeat` operationId).
+func (c *ClientWithResponses) CallHeartbeatWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*CallHeartbeatResponse, error) {
+	rsp, err := c.CallHeartbeat(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCallHeartbeatResponse(rsp)
+}
+
 // GetMeWithResponse Current authz subject
 //
 // Returns a wrapper object for the known response body format(s).
@@ -5407,7 +5127,7 @@ func (c *ClientWithResponses) GetMeWithResponse(ctx context.Context, reqEditors 
 	return ParseGetMeResponse(rsp)
 }
 
-// PublicPingWithResponse Anonymous ping (authz.public)
+// PublicPingWithResponse Anonymous ping (auth.public_paths)
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -5418,6 +5138,39 @@ func (c *ClientWithResponses) PublicPingWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParsePublicPingResponse(rsp)
+}
+
+// ParseListArticleFanoutResponse parses an HTTP response from a ListArticleFanoutWithResponse call
+func ParseListArticleFanoutResponse(rsp *http.Response) (*ListArticleFanoutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListArticleFanoutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest FanoutBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListarticlesResponse parses an HTTP response from a ListarticlesWithResponse call
@@ -5630,134 +5383,6 @@ func ParseListAuthzPermissionsResponse(rsp *http.Response) (*ListAuthzPermission
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ListPermissionsBody
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSONDefault = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseCreateAuthzPermissionResponse parses an HTTP response from a CreateAuthzPermissionWithResponse call
-func ParseCreateAuthzPermissionResponse(rsp *http.Response) (*CreateAuthzPermissionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreateAuthzPermissionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest PermissionView
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSONDefault = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseDeleteAuthzPermissionResponse parses an HTTP response from a DeleteAuthzPermissionWithResponse call
-func ParseDeleteAuthzPermissionResponse(rsp *http.Response) (*DeleteAuthzPermissionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &DeleteAuthzPermissionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case rsp.StatusCode == 204:
-		break // No content-type
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSONDefault = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetAuthzPermissionResponse parses an HTTP response from a GetAuthzPermissionWithResponse call
-func ParseGetAuthzPermissionResponse(rsp *http.Response) (*GetAuthzPermissionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetAuthzPermissionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest PermissionView
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSONDefault = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseUpdateAuthzPermissionResponse parses an HTTP response from a UpdateAuthzPermissionWithResponse call
-func ParseUpdateAuthzPermissionResponse(rsp *http.Response) (*UpdateAuthzPermissionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &UpdateAuthzPermissionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest PermissionView
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -6184,6 +5809,39 @@ func ParseRemoveAuthzSubjectRoleResponse(rsp *http.Response) (*RemoveAuthzSubjec
 	return response, nil
 }
 
+// ParseCacheDemoResponse parses an HTTP response from a CacheDemoWithResponse call
+func ParseCacheDemoResponse(rsp *http.Response) (*CacheDemoResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CacheDemoResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListCommentsResponse parses an HTTP response from a ListCommentsWithResponse call
 func ParseListCommentsResponse(rsp *http.Response) (*ListCommentsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -6354,6 +6012,39 @@ func ParseGetHeartbeatResponse(rsp *http.Response) (*GetHeartbeatResponse, error
 	}
 
 	response := &GetHeartbeatResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest HeartbeatOut
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCallHeartbeatResponse parses an HTTP response from a CallHeartbeatWithResponse call
+func ParseCallHeartbeatResponse(rsp *http.Response) (*CallHeartbeatResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CallHeartbeatResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}

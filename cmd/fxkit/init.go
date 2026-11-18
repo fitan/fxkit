@@ -39,6 +39,11 @@ pass --fxkit-path /path/to/fxkit (adds a ` + "`replace`" + `) or set FXKIT_MODUL
 			if modulePath == "" {
 				modulePath = "example.com/" + name
 			}
+			// module path 会原样写进 go.mod（以及 replace 指令）：带换行/空格的
+			// 值会生成非法模块图，必须在落盘前拒绝。
+			if err := validateModulePath(modulePath); err != nil {
+				return err
+			}
 
 			absFxkit, err := resolveFxkitPath(fxkitPath)
 			if err != nil {

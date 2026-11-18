@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fitan/fxkit-example/services/catalog/internal/article"
 	"github.com/fitan/fxkit-example/services/catalog/internal/comment"
+	"github.com/fitan/fxkit-example/services/catalog/internal/entity"
+	"github.com/fitan/fxkit-example/services/catalog/internal/repository"
 	"github.com/fitan/fxkit/crudx"
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/gormx"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// setupTestDB 为每个测试创建独立的 SQLite 数据库。
 func setupTestDB(t *testing.T) *gormx.Client {
 	dsn := filepath.Join(t.TempDir(), "comment_test.db")
 	client, err := gormx.New(&gormx.Config{
@@ -27,27 +29,29 @@ func setupTestDB(t *testing.T) *gormx.Client {
 	return client
 }
 
+// setupCommentService 构造评论服务，并迁移文章表以支持 JOIN。
 func setupCommentService(t *testing.T, client *gormx.Client) *comment.Service {
 	lc := di.NewLifecycle()
 	cfg := &comment.Config{PageSize: 10}
 
-	svc, err := comment.NewService(client, cfg, lc)
+	svc, err := comment.NewService(client, repository.NewCommentRepo(client), cfg, lc)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 
 	// 也自动迁移 Article 表以支持 JOIN 查询
-	require.NoError(t, client.Conn(context.Background()).AutoMigrate(&article.Article{}))
+	require.NoError(t, entity.MigrateArticles(client.Conn(context.Background())))
 	require.NoError(t, lc.Start(context.Background()))
 	return svc
 }
 
+// TestCommentService_CRUDAndFilters 覆盖 CRUD 与 isnull / or() / JOIN 过滤。
 func TestCommentService_CRUDAndFilters(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestDB(t)
 	svc := setupCommentService(t, client)
 
 	// 先创建关联文章
-	art := article.Article{Title: "Golang Testing", Status: "published", Author: "alice"}
+	art := entity.Article{Title: "Golang Testing", Status: "published", Author: "alice"}
 	require.NoError(t, client.Conn(ctx).Create(&art).Error)
 
 	noteVal := "pinned note"

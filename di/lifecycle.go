@@ -131,14 +131,13 @@ func (lc *Lifecycle) StartPreStartOnly(ctx context.Context) error {
 	if lc == nil {
 		return nil
 	}
-	for i, h := range lc.orderedPreStart() {
+	for _, h := range lc.orderedPreStart() {
 		if h.OnStart == nil {
 			continue
 		}
 		if err := h.OnStart(ctx); err != nil {
 			return fmt.Errorf("lifecycle pre-start hook failed: %w", err)
 		}
-		_ = i
 	}
 	return nil
 }

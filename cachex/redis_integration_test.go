@@ -91,8 +91,8 @@ func TestRedisIntegration_GetOrSetNegativeAndSingleflight(t *testing.T) {
 		t.Fatalf("first call: %v", err)
 	}
 	_, err = GetOrSet(ctx, c, "fxkit:itest:neg", loadNotFound)
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("negative hit must keep ErrRecordNotFound, got %v", err)
+	if !errors.Is(err, ErrNegativeHit) {
+		t.Fatalf("negative hit: %v", err)
 	}
 	if n := loads.Load(); n != 1 {
 		t.Fatalf("negative cache miss: loader called %d times", n)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fitan/fxkit/authz"
 	"github.com/fitan/fxkit/buildinfo"
+	"github.com/fitan/fxkit/cachex"
 	"github.com/fitan/fxkit/cli"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/consulx"
@@ -25,6 +26,7 @@ import (
 	"github.com/fitan/fxkit/server"
 )
 
+// init 读取被 gitignore 的 Hatchet token 文件（示例便利，不建议生产使用）。
 func init() {
 	// 示例用途：被 gitignore 的 example/tmp/hatchet.token（不要把 JWT 放进受版本控制的 yaml）。
 	if strings.TrimSpace(os.Getenv("HATCHET_CLIENT_TOKEN")) != "" {
@@ -61,6 +63,7 @@ func WithMergedDocs(baseYAML []byte) di.Option {
 		server.ListenerModule,
 		docs.MergedModule(baseYAML),
 		gormx.Module,
+		cachex.Module,
 		hatchetx.Module,
 		outbox.Module,
 		authz.Module,

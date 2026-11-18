@@ -69,8 +69,8 @@ func TestRelay_ProcessBatch_PublishesAndMarksPublished(t *testing.T) {
 	if updated.PublishedAt == nil {
 		t.Fatal("expected published_at set")
 	}
-	if updated.Attempts != 1 {
-		t.Fatalf("expected attempts=1, got %d", updated.Attempts)
+	if updated.Attempts != 0 {
+		t.Fatalf("expected attempts=0 (claim must not consume retry budget), got %d", updated.Attempts)
 	}
 
 	pub.mu.Lock()

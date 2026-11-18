@@ -64,33 +64,58 @@ func invokeRegistrars(p registrarParams) {
 	slog.Info("huma: registrars complete", "count", len(p.Registrars), "middlewares", installed)
 }
 
+// Config 控制 Huma 自身的 spec 端点与响应注入（yaml: huma）。
+type Config struct {
+	// PublicSpec 暴露 /huma/openapi.{json,yaml}（含 -3.0 变体）。
+	// 默认 false：spec 会暴露全部路由与字段结构，应与 docs 一样由网关/鉴权保护。
+	//
+	// 注意：mcpx 与 docs.MergedModule 读取的是内存中的 api.OpenAPI()，
+	// 不依赖这个 HTTP 端点。
+	PublicSpec bool `yaml:"public_spec"`
+
+	// SchemaLinks 在响应 JSON 中注入 $schema 字段，并添加 Link 头
+	// （Huma 的 SchemaLinkTransformer 默认行为）。
+	// 默认 false：多数 API 不需要该字段，且会污染 DTO。
+	SchemaLinks bool `yaml:"schema_links"`
+}
+
+// SetDefaults 默认不暴露 Huma spec 路由，也不注入 $schema / Link。
+func (c *Config) SetDefaults() {
+	c.PublicSpec = false
+	c.SchemaLinks = false
+}
+
 // NewAPI 在共享 chi mux 上构建 Huma API，使用 app 元数据作为 OpenAPI 标题。
-func NewAPI(mux *chi.Mux, app *config.App) huma.API {
+//
+// 默认关闭 DocsPath、OpenAPIPath，并移除 Huma 的 $schema / Link 注入；
+// 需要 Huma 的 schema link 行为时显式设 SchemaLinks=true。
+func NewAPI(mux *chi.Mux, app *config.App, cfgs ...*Config) huma.API {
 	appName := "app"
 	if app != nil && app.Name != "" {
 		appName = app.Name
 	}
 	conf := huma.DefaultConfig(appName, "1.0.0")
 	conf.DocsPath = ""
-	conf.OpenAPIPath = "/huma/openapi"
+	conf.OpenAPIPath = ""
+
+	var cfg *Config
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
+	if cfg != nil && cfg.PublicSpec {
+		conf.OpenAPIPath = "/huma/openapi"
+	}
+	if cfg == nil || !cfg.SchemaLinks {
+		// Huma 的 DefaultConfig 通过 CreateHooks 安装 SchemaLinkTransformer；
+		// 清空它即可去掉响应里的 $schema 字段与 Link 头。
+		conf.CreateHooks = nil
+		conf.Transformers = nil
+	}
 	return humachi.New(mux, conf)
 }
 
-// ProvideRegistrar 将 Registrar 发布到容器 group。
-//
-// 支持的形式：
-//
-//	Registrar                  直接发布
-//	func(api huma.API)         适配为 FuncRegistrar
-//	func() Registrar           装配期直接调用
-//	func(di.Injector) Registrar
-//	func(*Service) Registrar   延迟到 PreStart 解析依赖后调用（最常见写法）
-//
-// 无法识别的签名会 panic —— 静默丢弃会导致「registrar 写好了但请求仍 404」。
 // ProvideRegistrar 发布一个已构造好的 [Registrar]。
-//
-// 需要依赖时用 [ProvideRegistrarLazy]：构造函数显式接收 di.Injector，
-// 不再依赖反射解析任意函数签名。
+// 需要依赖时用 [ProvideRegistrarLazy]（构造函数显式接收 di.Injector）。
 func ProvideRegistrar(reg Registrar) di.Option {
 	return func(i di.Injector) {
 		if reg == nil {
@@ -105,8 +130,6 @@ func ProvideRegistrarLazy(fn func(di.Injector) (Registrar, error)) di.Option {
 	return func(i di.Injector) { di.ProvideLazyE[Registrar](i, fn) }
 }
 
-// ProvideMiddleware 将一个 [MiddlewareRegistrar] 发布到容器 group。
-// 支持的签名与 [ProvideRegistrar] 相同（含 func(*Service) MiddlewareRegistrar）。
 // ProvideMiddleware 发布一个已构造好的 [MiddlewareRegistrar]。
 // 需要依赖时用 [ProvideMiddlewareLazy]。
 func ProvideMiddleware(mw MiddlewareRegistrar) di.Option {
@@ -131,6 +154,7 @@ func ProvideMiddlewareLazy(fn func(di.Injector) (MiddlewareRegistrar, error)) di
 // 这里把安装动作放到 Lifecycle.PreStart（PhaseWireGroup），
 // 保证 docs / authz / mcpx / 宿主模块无论装配顺序如何都已贡献完毕。
 var Module = di.Module("fxkit/huma",
+	config.Provide[Config]("huma"),
 	func(i di.Injector) {
 		di.Provide(i, func(i di.Injector) (huma.API, error) {
 			mux, err := di.Invoke[*chi.Mux](i)
@@ -138,7 +162,8 @@ var Module = di.Module("fxkit/huma",
 				return nil, err
 			}
 			app, _ := di.Invoke[*config.App](i)
-			return NewAPI(mux, app), nil
+			cfg, _ := di.Invoke[*Config](i)
+			return NewAPI(mux, app, cfg), nil
 		})
 
 		if lc, err := di.Invoke[*di.Lifecycle](i); err == nil && lc != nil {

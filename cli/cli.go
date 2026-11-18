@@ -108,6 +108,9 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 
 			startTO, stopTO := timeoutsFromCmd(cmd)
 			root := newApp(cmd, opts)
+			// 无论启动成功、失败还是信号退出，都要关闭容器（触发 provider Shutdown）。
+			// 早期只在正常路径调用，启动失败时数据库/HTTP 客户端等资源会泄漏。
+			defer root.Shutdown()
 
 			lc, err := di.Invoke[*di.Lifecycle](root)
 			if err != nil {
@@ -124,7 +127,6 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 				if warmupMode != warmupOff {
 					printWarmup(cmd.OutOrStdout(), di.Warmup(root))
 				}
-				_ = root.Shutdown()
 				return nil
 			}
 
@@ -134,7 +136,8 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 			//
 			// 注意：不能在这里单独调 StartPreStartOnly —— 那会把 huma registrar
 			// 跑一遍，随后 lc.Start 又跑一遍，导致 operation ID 重复注册而 panic。
-			// 正确做法是注册成 PreStart 的最后阶段（见 registerWarmup）。
+			// 正确做法是注册成 PhaseMountHTTP+1 的 PreStart 钩子（见 registerWarmup）。
+			// 它不是最后一档：PhaseAfterHTTPServer（210）在它之后。
 			if warmupMode == warmupBeforeStart {
 				registerWarmup(root)
 			}
@@ -159,6 +162,7 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 			// 等待退出信号
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+			defer signal.Stop(quit)
 			<-quit
 
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), stopTO)
@@ -169,7 +173,6 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 			if stopErr != nil {
 				return stopErr
 			}
-			_ = root.Shutdown()
 			return nil
 		},
 	}
@@ -204,11 +207,12 @@ func printWarmup(w io.Writer, report di.WarmupReport) {
 	}
 }
 
-// registerWarmup 把「预热全部服务」注册为 PreStart 的最后阶段。
+// registerWarmup 把「预热全部服务」注册为 PhaseMountHTTP+1（201）。
 //
-// 用 PhaseMountHTTP+1：此时所有延迟构造函数已求值、group 已完整、
-// huma operation 已注册完毕，但服务尚未对外监听。
-// 任何服务构造失败都会中止启动（这是关键：lazy 服务的问题不再延后到运行时）。
+// 此时延迟构造函数已求值、group 已完整、huma operation 已注册，服务尚未对外监听。
+// 它不是 PreStart 的最后一档：PhaseAfterHTTPServer（210）在它之后，
+// 那里才第一次解析的服务不在这次预热里。
+// 任何已解析服务构造失败都会中止启动。
 func registerWarmup(root di.Injector) {
 	lc, err := di.Invoke[*di.Lifecycle](root)
 	if err != nil || lc == nil {

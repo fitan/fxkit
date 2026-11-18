@@ -7,7 +7,7 @@ description: >-
   configs/config.yaml, or scaffolding a new fxkit service — even if they only say
   "加个服务" / "搭后端" without naming fxkit. Prefer this skill over inventing ad-hoc Fx
   wiring. Related: fxkit-huma-crud, fxkit-hatchet, fxkit-authz, fxkit-otel,
-  fxkit-discovery, fxkit-reqx, fxkit-docs.
+  fxkit-discovery, fxkit-reqx, fxkit-docs, fxkit-mcp, fxkit-layout.
 ---
 
 # fxkit 服务脚手架
@@ -30,6 +30,13 @@ Import 示例使用 `github.com/fitan/fxkit`——按消费方 `go.mod` / `repla
 | Consul **注册**（consulx） | `fxkit-discovery` |
 | 出站 HTTP / 调下游（reqx） | `fxkit-reqx` |
 | Scalar /docs、openapi dump、`fxkit gen client` | `fxkit-docs` |
+| MCP / Function Calling / OpenAPI→Tool | `fxkit-mcp` |
+| 目录结构 / 多服务拆分 / 文件命名 / 依赖方向 | `fxkit-layout` |
+
+## 设计原则（使用与维护都适用）
+
+- **不过度设计**：没有第二个真实调用方，不抽接口、不加配置开关、不造通用层。先写具体实现。
+- **不过度防御**：只在系统边界（HTTP/DB/外部服务）校验；内部信任调用方；配置错误启动失败，不静默回退。
 
 ## 新服务最小路径
 
@@ -57,8 +64,10 @@ fxkit.Run(fxkit.Default(), huma.Module, users.Module)
 
 | Bundle | 内容 |
 |--------|------|
-| `fxkit.Default()` | config, buildinfo, otelx, server+Listener, docs, gormx, hatchetx, outbox, authz, consulx, reqx, cli |
-| `fxkit.Minimal()` | config, buildinfo, server+Listener, docs, cli |
+| `fxkit.Default()` | config, buildinfo, otelx, server+Listener, cli, docs, gormx, hatchetx, outbox, authz, consulx, reqx, mcpx, cachex |
+| `fxkit.Minimal()` | `Core()`：config, buildinfo, otelx, server+Listener, cli。不含 docs |
+| `fxkit.Data()` | `Core()` + docs, gormx, outbox, cachex, consulx, reqx；不含 authz/MCP/hatchet |
+| `fxkit.Worker()` | config, buildinfo, otelx, cli, gormx, outbox, hatchetx, cachex；无 HTTP listener |
 | 自选 | `di.Options(config.Module, server.Module, server.ListenerModule, …)` |
 
 ## 业务模块写法
@@ -94,7 +103,7 @@ func helloRoutes(svc *Service) []server.Route {
 
 - `Methods` 非空 → `chi.Method`（支持 `{id}`）。
 - 前缀通配可用 `server.PrefixRoute("/prefix/", handler)`。
-- 业务中间件：`server.ProvideMiddleware(fn)`（挂到共享 mux，顺序=Provide 顺序）。内置顺序概念上：recover → CORS → OTel → body-log → 业务。
+- 业务中间件：`server.ProvideMiddleware(fn)`（挂到共享 mux，顺序=Provide 顺序）。内置顺序：recover → SSE write-deadline → access-log(可选) → CORS → rate-limit → OTel/route-pattern(可选) → 业务中间件 → body-log(可选)。
 - 错误用 `fxerrors.WriteError(w, r, err)`。
 
 ### fxerrors（对外错误）
@@ -125,6 +134,8 @@ return s.db.Transaction(ctx, func(txCtx context.Context) error {
 | `Pool()` | 长生命周期 `*gorm.DB` |
 
 未配 `db.driver` 时通常不连库；`/readyz` 在配了 DB 时会 ping。列表见 `fxkit-huma-crud`（`crudx.List` + `ListSpec`）。
+
+框架自有表：`outbox_events` / `outbox_inbox_events`、`casbin_rule`、`authz_role`；opt-in：`idempotency_keys`、`audit_events`。DDL 用 `migrate print` 导出，或 `migrate baseline` 写成 Atlas 的第一份迁移。
 
 ## 配置约定
 
@@ -160,7 +171,17 @@ func NewService(cfg *OrdersConfig) *Service { ... }
 
 非 Fx 场景用 `config.Load[OrdersConfig](cfg, "orders")`。
 
-热重载：`cfg.Reload()` 重建底层树后重读 YAML/Consul。`ProvideConfig` 在启动时解一次；要热更新请注入 `*fxkit.Config` 再 `Load`。框架段在各自包的 `Config` 上 `SetDefaults`/`Validate`。
+热重载：框架默认不自动刷新（`ProvideConfig` 是启动快照）。需要业务配置热更新时用 opt-in 的 `config.ProvideWatch[T](key)` 或 `(*config.Config).Watch[T](key)`；它只 watch Consul KV，框架配置仍建议重启/滚动发布。
+
+## 可选运维能力
+
+- **pprof**：`server.pprof.enabled: true`，默认关闭；开启后仍走 authz。
+- **审计**：`audit.Module`（opt-in，放在 `authz.Module` 之后），sink 支持 `slog` / `db` / `outbox`；默认只记元数据。
+- **幂等**：`idempotency.Module`；只对带 `Idempotency-Key` 的 mutating 请求生效，DB store；过期 key 按 `purge_interval` 清理。
+- **限流**：统一在网关/边缘做；框架不再内置进程内限流。
+- **乐观锁**：模型实现 `GetVersion/SetVersion`，用 `gormx.UpdateWithVersion`。
+- **安全头/CSRF**：安全头默认开启；`server.csrf.enabled` 仅 cookie 认证。
+- **配置热更新**：只提供 `config.Dynamic[T]` / `config.Watch[T]`；`ProvideConfig` 仍是启动快照；框架对象不热替换。
 
 ## 脚手架 CLI（`cmd/fxkit`）
 
@@ -184,7 +205,7 @@ fxkit gen client --spec openapi.yaml --out ./internal/clients/users
 `gen resource` 产出对齐 crudx + 显式 Service 方法；接 Huma 时再读 `fxkit-huma-crud`。
 `gen client` 读 OpenAPI（通常来自 `<svc> openapi`）生成 oapi-codegen SDK + `reqx` 封装；细节见 `fxkit-docs` / `fxkit-reqx`。
 
-宿主扩展 Cobra：在 `Run` 前 `cli.AddCommand(...)` / `cli.SetRootName(...)`。内置：`serve`、`openapi`、`version`。
+宿主扩展 Cobra：在 `Run` 前 `cli.AddCommand(...)` / `cli.SetRootName(...)`。内置：`serve`、`openapi`、`mcp`、`validate`、`migrate`（`print` / `baseline` / `check`）、`version`。
 
 ## logx / buildinfo（轻量）
 
@@ -194,7 +215,7 @@ fxkit gen client --spec openapi.yaml --out ./internal/clients/users
 ## Agent 检查清单
 
 - [ ] 用 `fxkit.Service` / `Routes`，不要手写零散 `di.Provide` 绕过惯例（除非扩展框架本身）。
-- [ ] REST 需要时加入 `huma.Module`；鉴权只覆盖 Huma（见 `fxkit-authz`）。
+- [ ] REST 需要时加入 `huma.Module`。鉴权在 chi 上，Huma 和裸路由一起过（见 `fxkit-authz`）。
 - [ ] 对外错误走 `fxerrors`；Huma 非 `*fxerrors.Error` → 500 + `"internal error"`。
 - [ ] Go 拉依赖：`GOPROXY=https://goproxy.cn,direct`（命令级 env）。
 - [ ] 异步 → `fxkit-hatchet`；注册 → `fxkit-discovery`；出站 → `fxkit-reqx`；观测 → `fxkit-otel`；文档 → `fxkit-docs`。
@@ -206,4 +227,4 @@ fxkit gen client --spec openapi.yaml --out ./internal/clients/users
 - 生产开启 `auth.dev_header_user`。
 - 空 CORS 当成 `*`。
 - 正式环境仍用 `docs` 默认 embed 骨架当 OpenAPI 契约。
-- 把裸 chi 路由鉴权当成框架自带（authz 只保护 Huma）。
+- 以为裸 chi 不经过 authz。中间件挂在 chi 上；要匿名就写 `auth.public_paths`。

@@ -66,38 +66,54 @@ func corsMiddleware(cfg *Config) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			origin := r.Header.Get("Origin")
+			origin := strings.TrimSpace(r.Header.Get("Origin"))
+			if origin == "" {
+				// 非 CORS 请求（包括普通 OPTIONS）：交给路由决定 404/405/自定义 OPTIONS。
+				// 早期实现在这里无条件返回 200，导致任意不存在的 OPTIONS 也被“成功”响应。
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			allowed := false
 			if allowAll {
-				if allowCreds && origin != "" {
+				allowed = true
+				if allowCreds {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Add("Vary", "Origin")
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
 				} else {
 					w.Header().Set("Access-Control-Allow-Origin", "*")
 				}
+			} else if _, ok := origins[origin]; ok {
 				allowed = true
-			} else if origin != "" {
-				if _, ok := origins[origin]; ok {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Add("Vary", "Origin")
-					if allowCreds {
-						w.Header().Set("Access-Control-Allow-Credentials", "true")
-					}
-					allowed = true
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				if allowCreds {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
 				}
 			}
-			if allowed {
+			w.Header().Add("Vary", "Origin")
+
+			if r.Method == http.MethodOptions {
+				w.Header().Add("Vary", "Access-Control-Request-Method")
+				w.Header().Add("Vary", "Access-Control-Request-Headers")
+				if !allowed {
+					// 不允许的 Origin 不伪造预检成功；交给路由（通常是 404/405）
+					// 或由上层网关返回 403，避免浏览器误以为预检通过。
+					next.ServeHTTP(w, r)
+					return
+				}
 				w.Header().Set("Access-Control-Allow-Methods", allowMethods)
 				w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
 				w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
 				if maxAge > 0 {
 					w.Header().Set("Access-Control-Max-Age", strconv.Itoa(int(maxAge.Seconds())))
 				}
-			}
-			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusOK)
 				return
+			}
+
+			// 实际请求：只返回浏览器需要的 CORS 响应头，不拦截请求。
+			if allowed {
+				w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
 			}
 			next.ServeHTTP(w, r)
 		})

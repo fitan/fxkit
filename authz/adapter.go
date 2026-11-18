@@ -19,7 +19,7 @@ type casbinRule struct {
 	V0    string `gorm:"column:v0;size:100;uniqueIndex:uk_casbin_rule"`
 	V1    string `gorm:"column:v1;size:255;uniqueIndex:uk_casbin_rule"`
 	V2    string `gorm:"column:v2;size:100;uniqueIndex:uk_casbin_rule"`
-	V3    string `gorm:"column:v3;size:100"`
+	V3    string `gorm:"column:v3;size:100;uniqueIndex:uk_casbin_rule"`
 	V4    string `gorm:"column:v4;size:100"`
 	V5    string `gorm:"column:v5;size:100"`
 }
@@ -113,6 +113,33 @@ func (a *gormAdapter) RemoveFilteredPolicy(_ string, ptype string, fieldIndex in
 		q = q.Where(cols[colIdx]+" = ?", v)
 	}
 	return q.Delete(&casbinRule{}).Error
+}
+
+// replacePoliciesForSubDomain 原子替换某个角色在某个 domain 的 p 规则。
+func (a *gormAdapter) replacePoliciesForSubDomain(sub, dom string, rules [][]string) error {
+	return a.replaceRulesWhere("p", "v0 = ? AND v1 = ?", []any{sub, dom}, rules)
+}
+
+// replaceGroupingsForUserDomain 原子替换某个用户在某 domain 的 g 规则。
+func (a *gormAdapter) replaceGroupingsForUserDomain(user, dom string, rules [][]string) error {
+	return a.replaceRulesWhere("g", "v0 = ? AND v2 = ?", []any{user, dom}, rules)
+}
+
+func (a *gormAdapter) replaceRulesWhere(ptype, where string, args []any, rules [][]string) error {
+	return a.db.Transaction(func(tx *gorm.DB) error {
+		t := tx.Table(a.tableName).Where("ptype = ?", ptype).Where(where, args...)
+		if err := t.Delete(&casbinRule{}).Error; err != nil {
+			return err
+		}
+		if len(rules) == 0 {
+			return nil
+		}
+		rows := make([]casbinRule, 0, len(rules))
+		for _, rule := range rules {
+			rows = append(rows, ruleToRow(ptype, rule))
+		}
+		return tx.Table(a.tableName).CreateInBatches(rows, 100).Error
+	})
 }
 
 // replacePoliciesForSub 原子替换所有 v0 为 sub 的 p 规则。

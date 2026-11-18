@@ -76,16 +76,10 @@ type {{.TypeName}}Detail struct {
 	UpdatedAt time.Time ` + "`json:\"updatedAt\"`" + `
 }
 
-type Create{{.TypeName}}Req struct {
-{{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
-{{- end}}
-}
-
 type Update{{.TypeName}}Req struct {
 	ID string ` + "`json:\"id\"`" + `
 {{- range .Fields}}
-	{{.Name}} {{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
+	{{.Name}} {{if .Optional}}*{{end}}{{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
 {{- end}}
 }
 
@@ -96,7 +90,7 @@ type Service struct {
 }
 
 func NewService(client *gormx.Client, lc *di.Lifecycle) (*Service, error) {
-	if client == nil {
+	if client == nil || !client.Enabled() {
 		return nil, fxerrors.Internal({{quote .NilClientMsg}})
 	}
 	if _, err := crudx.ResolveModel[{{.TypeName}}](client.Conn(context.Background())); err != nil {
@@ -161,14 +155,25 @@ func (s *Service) Update(ctx context.Context, req Update{{.TypeName}}Req) ({{.Ty
 			return {{.TypeName}}Detail{}, err
 		}
 		next := *existing
+		// 只写入请求里真正提供的字段：optional 字段用指针区分「未提供」与「显式零值」，
+		// 避免 PATCH 式请求把未传字段变成零值。
+		updates := map[string]any{}
 {{- range .Fields}}
-		next.{{.Name}} = req.{{.Name}}
-{{- end}}
-{{- if .Fields}}
-		if err := s.client.Conn(txCtx).Select({{range $i, $f := .Fields}}{{if $i}}, {{end}}{{quote $f.Column}}{{end}}).Updates(&next).Error; err != nil {
-			return {{.TypeName}}Detail{}, crudx.MapDBError(err)
+{{- if .Optional}}
+		if req.{{.Name}} != nil {
+			next.{{.Name}} = *req.{{.Name}}
+			updates[{{quote .Column}}] = *req.{{.Name}}
 		}
+{{- else}}
+		next.{{.Name}} = req.{{.Name}}
+		updates[{{quote .Column}}] = req.{{.Name}}
 {{- end}}
+{{- end}}
+		if len(updates) > 0 {
+			if err := s.client.Conn(txCtx).Model(&next).Updates(updates).Error; err != nil {
+				return {{.TypeName}}Detail{}, crudx.MapDBError(err)
+			}
+		}
 		out, err := crudx.FirstByID[{{.TypeName}}](txCtx, s.client.Conn(txCtx), req.ID)
 		if err != nil {
 			return {{.TypeName}}Detail{}, err

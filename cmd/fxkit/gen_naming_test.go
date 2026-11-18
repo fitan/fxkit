@@ -66,7 +66,9 @@ func TestGormNamingColumns(t *testing.T) {
 	}
 	for _, s := range []string{
 		`Model(&Person{}).Table("people")`,
-		`Select("user_id", "api_key", "created_by")`,
+		`updates["user_id"] = req.UserID`,
+		`updates["api_key"] = req.APIKey`,
+		`updates["created_by"] = req.CreatedBy`,
 	} {
 		if !bytes.Contains(src, []byte(s)) {
 			t.Errorf("generated source missing %q", s)

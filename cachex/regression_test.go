@@ -10,17 +10,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // TestGetOrSet_NegativeCacheKeepsNotFoundSemantics 是回归测试：
-// 命中空值缓存时必须返回「未找到」语义，而不是 ErrCacheMiss。
-// 否则调用方 `errors.Is(err, gorm.ErrRecordNotFound)` 在首访和命中缓存时行为不一致。
+// 命中空值缓存时返回 ErrNegativeHit，而不是再打 loader，也不是 ErrCacheMiss。
 func TestGetOrSet_NegativeCacheKeepsNotFoundSemantics(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 
 	var loads int64
-	notFound := errors.New("record not found")
+	notFound := gorm.ErrRecordNotFound
 	loader := func(context.Context) (string, error) {
 		atomic.AddInt64(&loads, 1)
 		return "", notFound
@@ -41,8 +41,8 @@ func TestGetOrSet_NegativeCacheKeepsNotFoundSemantics(t *testing.T) {
 // singleflight 早期是包级全局变量，只用业务 key 做键，导致不同 cache 实例串结果。
 func TestGetOrSet_SingleflightIsolatedPerCache(t *testing.T) {
 	ctx := context.Background()
-	a := NewMemoryCache()
-	b := NewMemoryCache()
+	a := newTestCache()
+	b := newTestCache()
 
 	started := make(chan struct{})
 	done := make(chan struct{})
@@ -71,7 +71,7 @@ func TestGetOrSet_SingleflightIsolatedPerCache(t *testing.T) {
 // Config 的 default_ttl / null_ttl / jitter / singleflight 早期完全没被 GetOrSet 读取。
 func TestResolverUsesConfig(t *testing.T) {
 	ctx := context.Background()
-	c := NewMemoryCache()
+	c := newTestCache()
 	cfg := &Config{DefaultTTL: time.Millisecond}
 	cfg.SetDefaults()
 	cfg.DefaultTTL = 20 * time.Millisecond

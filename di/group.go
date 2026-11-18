@@ -193,24 +193,42 @@ func ListGroups(i Injector) []string {
 	return out
 }
 
-// ProvideLazyE 把 fn 延迟到 [PhaseResolveContributors] 执行，并把结果写入 group。
+// ProvideLazyOptionalE 把 fn 延迟到 [PhaseResolveContributors] 执行。
 //
-// 与旧的 ProvideLazyGroupItem 相比，这里只接受 func(Injector) (T, error)：
-// 依赖通过 di.MustInvoke 显式获取，因此不再需要反射解析任意函数签名。
-func ProvideLazyE[T any](i Injector, fn func(Injector) (T, error)) {
+// ok=false 表示该贡献点在当前环境不适用（例如依赖未配置），不会写入 group。
+// 与 [ProvideLazyE] 的区别是用显式 bool 表达「跳过」，而不是让 T 为 nil
+// （nil 可能是合法值，也可能只是调用方忘了返回实例）。
+func ProvideLazyOptionalE[T any](i Injector, fn func(Injector) (T, bool, error)) {
 	if fn == nil {
 		return
 	}
 	lc := MustInvoke[*Lifecycle](i)
 	lc.AppendPreStartPhase(PhaseResolveContributors, Hook{
 		OnStart: func(context.Context) error {
-			v, err := fn(i)
+			v, ok, err := fn(i)
 			if err != nil {
 				return err
+			}
+			if !ok {
+				return nil
 			}
 			ProvideGroupItem(i, v)
 			return nil
 		},
+	})
+}
+
+// ProvideLazyE 把 fn 延迟到 [PhaseResolveContributors] 执行，并把结果写入 group。
+//
+// 约定 fn 成功返回即“有值”：如果 T 可能为 nil，请用 [ProvideLazyOptionalE]
+// 显式表达是否写入。
+func ProvideLazyE[T any](i Injector, fn func(Injector) (T, error)) {
+	if fn == nil {
+		return
+	}
+	ProvideLazyOptionalE(i, func(i Injector) (T, bool, error) {
+		v, err := fn(i)
+		return v, err == nil, err
 	})
 }
 

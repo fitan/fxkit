@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fitan/fxkit/di"
@@ -22,7 +25,7 @@ func buildMigrateCmd(opts []di.Option) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "migrate",
-		Short: "Print framework DDL / verify schema (DDL execution belongs to your SQL platform)",
+		Short: "Print/baseline framework DDL; schema check (DDL execution belongs to Atlas/your platform)",
 	}
 
 	printCmd := &cobra.Command{
@@ -39,6 +42,55 @@ func buildMigrateCmd(opts []di.Option) *cobra.Command {
 	}
 	printCmd.Flags().StringVar(&dialect, "dialect", "postgres", "postgres | mysql | sqlite")
 	printCmd.Flags().StringVar(&version, "version", "", "only files with this version prefix (e.g. 0001)")
+
+	var (
+		baselineDir     string
+		baselineFile    string
+		baselineForce   bool
+		baselineDialect string
+	)
+	baselineCmd := &cobra.Command{
+		Use:   "baseline",
+		Short: "Write framework DDL as the first Atlas migration",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			d := strings.TrimSpace(baselineDialect)
+			if d == "" {
+				d = "postgres"
+			}
+			sql, err := gormx.PrintMigrations(d, "")
+			if err != nil {
+				return err
+			}
+			dir := strings.TrimSpace(baselineDir)
+			if dir == "" {
+				dir = filepath.Join("migrations", d)
+			}
+			name := strings.TrimSpace(baselineFile)
+			if name == "" {
+				name = "0001_fxkit_core.sql"
+			}
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			path := filepath.Join(dir, name)
+			if !baselineForce {
+				if _, err := os.Stat(path); err == nil {
+					return fmt.Errorf("baseline: %s already exists (use --force to overwrite)", path)
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+			if err := os.WriteFile(path, []byte(sql), 0o644); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), path)
+			return nil
+		},
+	}
+	baselineCmd.Flags().StringVar(&baselineDialect, "dialect", "postgres", "postgres | mysql | sqlite")
+	baselineCmd.Flags().StringVar(&baselineDir, "dir", "", "target directory (default migrations/<dialect>)")
+	baselineCmd.Flags().StringVar(&baselineFile, "filename", "0001_fxkit_core.sql", "baseline file name")
+	baselineCmd.Flags().BoolVar(&baselineForce, "force", false, "overwrite an existing file")
 
 	checkCmd := &cobra.Command{
 		Use:   "check",
@@ -62,6 +114,6 @@ func buildMigrateCmd(opts []di.Option) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(printCmd, checkCmd)
+	cmd.AddCommand(printCmd, baselineCmd, checkCmd)
 	return cmd
 }

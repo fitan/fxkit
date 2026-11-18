@@ -24,7 +24,10 @@ const (
 
 // resolveTransport 选择一个已发现的端点并改写请求 host，
 // 然后委托给下一个 RoundTripper（通常是 otelhttp → 基础传输层）。
-// 遇到传输层失败或选中的 5xx 时，会尝试另一个端点，对任意方法都适用。
+// 遇到传输层失败或选中的 5xx 时，会在**幂等请求**上尝试另一个端点。
+//
+// 非幂等方法（POST/PATCH）默认不 failover：上游已经处理但网关返回 5xx 时，
+// 重放会制造重复订单/支付。调用方显式提供 `Idempotency-Key` 头时才允许重试。
 //
 // 默认情况下请求的 URL.Host/Host 会被改写为选中的端点（历史行为）。
 // 当设置了 preserveHost（配置了 ServerName，或 https + 命名的 Consul
@@ -41,23 +44,36 @@ type resolveTransport struct {
 	preserveHost     bool
 	autoPreserveHost bool
 	logicalHost      string
+
+	// closeIdleFn 在 preserveHost 模式下清理底层连接池；
+	// 否则所有 endpoint 共享同一个 URL.Host key，
+	// failover 可能复用刚刚失败的 keep-alive 连接。
+	closeIdleFn func()
 }
 
 func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := ensureRewindableBody(req); err != nil {
 		return nil, fmt.Errorf("reqx(%s): rewind body: %w", t.name, err)
 	}
-	n := t.pool.len()
-	if n == 0 {
+	// 用快照而不是「next + i--」。Consul watch 会在请求中把池变小，
+	// 已试过的端点再被抽中时，i-- 会在 len(tried) < 旧长度 上一直转。
+	eps := failoverOrder(t.pool)
+	if len(eps) == 0 {
 		return nil, fmt.Errorf("reqx(%s): no healthy endpoints", t.name)
 	}
 
 	// attempts 尊重调用方配置：早期实现先按端点数量取小、再无条件夹到 5，
 	// 导致 MaxFailover=20 静默变成 5（既不报错也不告警）。
-	attempts := n
+	attempts := len(eps)
 	if t.maxFailover > 0 && t.maxFailover < attempts {
 		attempts = t.maxFailover
 	}
+	// 非幂等请求只能选一个端点：失败后换端点重放 POST/PATCH 可能产生重复写入。
+	// 调用方显式提供 Idempotency-Key 时才允许 failover。
+	if !retryableRequest(req) {
+		attempts = 1
+	}
+	eps = eps[:attempts]
 
 	scheme := t.scheme
 	if scheme == "" {
@@ -65,24 +81,9 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 
 	var lastErr error
-	tried := make(map[string]struct{}, attempts)
 	hasUnrewindableBody := req.Body != nil && req.Body != http.NoBody && req.GetBody == nil
 
-	for i := 0; i < attempts; i++ {
-		ep, err := t.pool.next()
-		if err != nil {
-			return nil, fmt.Errorf("reqx(%s): %w", t.name, err)
-		}
-		if _, ok := tried[ep]; ok {
-			// 已尝试过该 host；继续轮换直到出现新端点或耗尽。
-			if len(tried) >= n {
-				break
-			}
-			i--
-			continue
-		}
-		tried[ep] = struct{}{}
-
+	for i, ep := range eps {
 		r2, err := cloneForEndpoint(req, ep, endpointRewrite{
 			scheme:       scheme,
 			preserveHost: t.shouldPreserveHost(ep),
@@ -94,7 +95,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 		resp, err := t.next.RoundTrip(r2)
 		if err == nil {
-			if shouldFailoverStatus(resp.StatusCode) && i+1 < attempts && len(tried) < n {
+			if shouldFailoverStatus(resp.StatusCode) && i+1 < len(eps) {
 				if hasUnrewindableBody {
 					// 无法安全回卷大体积或流式 body；不要用空 body 重试
 					return resp, nil
@@ -102,14 +103,20 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 				_, _ = io.Copy(io.Discard, resp.Body)
 				_ = resp.Body.Close()
 				lastErr = fmt.Errorf("reqx(%s): endpoint %s status %d", t.name, ep, resp.StatusCode)
+				if t.preserveHost {
+					t.closeIdleConnections()
+				}
 				continue
 			}
 			return resp, nil
 		}
 
 		lastErr = err
-		if !isFailoverError(err) || i+1 >= attempts || hasUnrewindableBody {
+		if !isFailoverError(err) || i+1 >= len(eps) || hasUnrewindableBody {
 			return nil, fmt.Errorf("reqx(%s): endpoint %s: %w", t.name, ep, err)
+		}
+		if t.preserveHost {
+			t.closeIdleConnections()
 		}
 	}
 
@@ -117,6 +124,56 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		lastErr = fmt.Errorf("reqx(%s): no healthy endpoints", t.name)
 	}
 	return nil, lastErr
+}
+
+// failoverOrder 返回本次请求要尝试的端点，起点按 round-robin 旋转。
+//
+// 列表是调用当时的快照。请求进行中池子变小或变大，都不再回头抽 next()，
+// 所以不会在「已尝试集合小于旧长度」上空转。新端点留给下一次请求。
+func failoverOrder(pool *endpointPool) []string {
+	if pool == nil {
+		return nil
+	}
+	eps := pool.snapshot()
+	if len(eps) < 2 {
+		return eps
+	}
+	first, err := pool.next()
+	if err != nil || first == "" {
+		return eps
+	}
+	for i, ep := range eps {
+		if ep != first {
+			continue
+		}
+		if i == 0 {
+			return eps
+		}
+		out := make([]string, 0, len(eps))
+		out = append(out, eps[i:]...)
+		out = append(out, eps[:i]...)
+		return out
+	}
+	return eps
+}
+
+// retryableRequest 报告该请求失败后是否可以安全地换端点重试。
+//
+// HTTP 语义上幂等的方法（GET/HEAD/OPTIONS/TRACE/PUT/DELETE）可以重放；
+// POST/PATCH 默认不可以，除非调用方提供 Idempotency-Key。
+func retryableRequest(req *http.Request) bool {
+	switch req.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace,
+		http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return strings.TrimSpace(req.Header.Get("Idempotency-Key")) != ""
+}
+
+func (t *resolveTransport) closeIdleConnections() {
+	if t.closeIdleFn != nil {
+		t.closeIdleFn()
+	}
 }
 
 // shouldPreserveHost 报告该端点是否应保留逻辑 host。自动模式
@@ -366,6 +423,12 @@ func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
 		maxFailover = defaultMaxFailover
 	}
 
+	closeIdle := func() {
+		if c, ok := base.(interface{ CloseIdleConnections() }); ok {
+			c.CloseIdleConnections()
+		}
+	}
+
 	return &resolveTransport{
 		pool:             in.Pool,
 		scheme:           in.Scheme,
@@ -375,6 +438,7 @@ func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
 		preserveHost:     in.PreserveHost,
 		autoPreserveHost: in.AutoPreserve,
 		logicalHost:      in.LogicalHost,
+		closeIdleFn:      closeIdle,
 	}, nil
 }
 

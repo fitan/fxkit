@@ -64,11 +64,9 @@ func registerSelfLifecycle(p registerSelfParams) {
 			OnStart: func(ctx context.Context) error {
 				id, err := registerSelf(ctx, p.Disc, p.App, p.Server)
 				if err != nil {
-					if isRegisterConfigError(err) {
-						return err
-					}
-					slog.Warn("consul register skipped", "error", err)
-					return nil
+					// discovery.register=true 时，注册失败意味着实例拿不到流量。
+					// 直接失败启动，避免带病运行（重启由编排系统处理）。
+					return fmt.Errorf("consul self-register: %w", err)
 				}
 				if id == "" {
 					return nil

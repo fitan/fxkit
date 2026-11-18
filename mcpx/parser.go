@@ -70,12 +70,17 @@ func ParseOpenAPI(data []byte) ([]Tool, error) {
 			}
 			// 名称冲突（不同 path 归一到同一标识符）时加后缀，
 			// 避免注册到 map 时后写静默覆盖前者。
-			if n, seen := usedNames[tool.Name]; seen {
-				usedNames[tool.Name] = n + 1
-				tool.Name = fmt.Sprintf("%s_%d", tool.Name, n+1)
-			} else {
-				usedNames[tool.Name] = 1
+			if _, seen := usedNames[tool.Name]; seen {
+				base := tool.Name
+				for i := 2; ; i++ {
+					candidate := fmt.Sprintf("%s_%d", base, i)
+					if _, exists := usedNames[candidate]; !exists {
+						tool.Name = candidate
+						break
+					}
+				}
 			}
+			usedNames[tool.Name] = 1
 			tools = append(tools, tool)
 		}
 	}
@@ -203,20 +208,42 @@ func extractOperation(root map[string]any, method, path string, op map[string]an
 				bodySchema = inlineSchema(root, bodySchema, map[string]bool{})
 
 				if bProps, ok := bodySchema["properties"].(map[string]any); ok {
+					rename := make(map[string]string, len(bProps))
 					for k, v := range bProps {
 						if k == "$schema" {
 							continue // 忽略 Huma 自动注入的元 schema 字段
 						}
-						properties[k] = v
-						paramLocations[k] = "body"
+						argName := k
+						// body 字段与 path/query/header 参数同名时，加前缀避免覆盖。
+						if _, exists := properties[argName]; exists {
+							argName = "body." + k
+							// 用 body:<原名> 记录映射，派发时才知道要写回哪个 JSON key。
+							paramLocations[argName] = "body:" + k
+						} else {
+							paramLocations[argName] = "body"
+						}
+						rename[k] = argName
+						properties[argName] = v
 					}
-				}
-				if bReq, ok := bodySchema["required"].([]any); ok {
-					for _, r := range bReq {
-						if rStr, ok := r.(string); ok && rStr != "$schema" {
-							requiredFields = append(requiredFields, rStr)
+					if bReq, ok := bodySchema["required"].([]any); ok {
+						for _, r := range bReq {
+							if rStr, ok := r.(string); ok && rStr != "$schema" {
+								if renamed, ok := rename[rStr]; ok {
+									requiredFields = append(requiredFields, renamed)
+								}
+							}
 						}
 					}
+				} else {
+					// 非 object 请求体（数组/字符串/数字）：若只暴露单个参数，
+					// 否则工具会看起来「没有参数」而调用必然 422。
+					argName := "body"
+					if _, exists := properties[argName]; exists {
+						argName = "body.value"
+					}
+					properties[argName] = bodySchema
+					paramLocations[argName] = "body_raw"
+					requiredFields = append(requiredFields, argName)
 				}
 			}
 		}

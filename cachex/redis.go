@@ -59,10 +59,10 @@ func (r *RedisCache) Set(ctx context.Context, key string, val []byte, ttl time.D
 	return r.client.Set(ctx, key, val, normalizeRedisTTL(ttl)).Err()
 }
 
-// normalizeRedisTTL 统一 Redis 与内存实现的 TTL 语义。
+// normalizeRedisTTL 统一 Redis 与 Cache 接口的 TTL 语义。
 //
-// go-redis 把负 TTL 解释为 KEEPTTL（保留原过期时间），而 Cache 接口与内存
-// 实现约定 ttl <= 0 表示永不过期。这里把负数归一到 0。
+// go-redis 把负 TTL 解释为 KEEPTTL（保留原过期时间），而 Cache 接口约定
+// ttl <= 0 表示永不过期。这里把负数归一到 0。
 func normalizeRedisTTL(ttl time.Duration) time.Duration {
 	if ttl < 0 {
 		return 0
