@@ -12,6 +12,7 @@ import (
 // 不应来自 ListSpec 或 ListInput.Select。
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 
+// validSQLIdentifier 报告 s 是否为合法 SQL 标识符（允许 *、table.* 与 schema.table.col）。
 func validSQLIdentifier(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "*" {
@@ -50,6 +51,7 @@ func (s ListSpec) validateIdentifiers() error {
 	return nil
 }
 
+// validateRelationIdentifiers 递归校验关联上的列名；prefix 用于错误消息中的路径前缀。
 func validateRelationIdentifiers(prefix string, rel *RelationSpec) error {
 	for name, f := range rel.Fields {
 		if strings.TrimSpace(f.Column) != "" && !validSQLIdentifier(f.Column) {

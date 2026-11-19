@@ -106,7 +106,7 @@ ACL：`CONSUL_HTTP_TOKEN`（Consul 客户端惯例，不是配置树）。`--con
 | 键 | 说明 |
 |----|------|
 | `otel.enabled` | Trace/Metric/Log |
-| `otel.service_name` / `service_version` / `environment` | 资源属性 |
+| `otel.service_name` / `service_version` / `environment` | 资源属性；`service_name` 空则回退 `app.name`，`service_version` 空则回退 `buildinfo.Version` |
 | `otel.endpoint` | 如 `localhost:4317` |
 | `otel.protocol` | `grpc` / `http` |
 | `otel.insecure` | 明文 gRPC |

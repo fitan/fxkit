@@ -7,35 +7,50 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // Kind 是差异类型。
 type Kind string
 
 const (
+	// MissingInternal 表示记录只存在于外部数据源，内部缺失。
 	MissingInternal Kind = "missing_internal"
+	// MissingExternal 表示记录只存在于内部数据源，外部缺失。
 	MissingExternal Kind = "missing_external"
-	Mismatch        Kind = "mismatch"
+	// Mismatch 表示同一 key 的内外部记录不一致。
+	Mismatch Kind = "mismatch"
 )
 
 // Diff 是一条差异。
 type Diff[T any] struct {
-	Key      string
-	Kind     Kind
+	// Key 是记录的唯一键，由 [Comparator.Key] 生成。
+	Key string
+	// Kind 是差异类型，见 [MissingInternal]、[MissingExternal]、[Mismatch]。
+	Kind Kind
+	// Internal 是内部记录；[MissingInternal] 时为 nil。
 	Internal *T
+	// External 是外部记录；[MissingExternal] 时为 nil。
 	External *T
 }
 
 // Comparator 定义内部/外部数据源与比较规则。
 type Comparator[T any] struct {
+	// Internal 加载内部记录；返回错误会让 [Run] 失败。
 	Internal func(context.Context) ([]T, error)
+	// External 加载外部记录；返回错误会让 [Run] 失败。
 	External func(context.Context) ([]T, error)
-	Key      func(T) string
-	Equal    func(a, b T) bool
+	// Key 提取记录的唯一键；空键或重复键会让 [Run] 返回错误。
+	Key func(T) string
+	// Equal 判断同一 key 的内外部记录是否一致。
+	Equal func(a, b T) bool
 }
 
 // Run 执行一次对账，返回按 key 排序的差异。
-func Run[T any](ctx context.Context, c Comparator[T]) ([]Diff[T], error) {
+func Run[T any](ctx context.Context, c Comparator[T]) (out []Diff[T], err error) {
+	start := time.Now()
+	defer func() { recordRun(ctx, out, err, time.Since(start)) }()
+
 	if c.Internal == nil || c.External == nil || c.Key == nil || c.Equal == nil {
 		return nil, fmt.Errorf("reconciliation: Internal/External/Key/Equal are required")
 	}

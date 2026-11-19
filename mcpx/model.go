@@ -4,7 +4,9 @@ import "github.com/mark3labs/mcp-go/mcp"
 
 // Tool 是从 OpenAPI/Huma 路由导出的统一大模型工具定义。
 type Tool struct {
-	Name           string            `json:"name"`
+	// Name 是工具名，优先取 operationId；缺失时回退为 method_path，非法标识符字符替换为下划线。
+	Name string `json:"name"`
+	// Description 是给模型看的工具说明，取 description，缺失时回退 summary 或 "Execute <method> <path>"。
 	Description    string            `json:"description"`
 	Method         string            `json:"method"`                   // HTTP 动词 (GET, POST, PUT, DELETE, etc.)
 	Path           string            `json:"path"`                     // 原始路由路径 (/articles/{id})
@@ -41,29 +43,39 @@ func (t Tool) ToMCP() mcp.Tool {
 
 // OpenAITool 是符合 OpenAI Function Calling 规范的工具格式。
 type OpenAITool struct {
-	Type     string         `json:"type"` // 固定为 "function"
+	Type string `json:"type"` // 固定为 "function"
+	// Function 是 OpenAI 函数定义。
 	Function OpenAIFunction `json:"function"`
 }
 
 // OpenAIFunction 是 OpenAI 函数定义。
 type OpenAIFunction struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters"`
+	// Name 是函数名，通常取自 [Tool.Name]。
+	Name string `json:"name"`
+	// Description 是函数说明；omitempty，空则不输出。
+	Description string `json:"description,omitempty"`
+	// Parameters 是 JSON Schema 参数对象，通常为 [Tool.InputSchema]。
+	Parameters map[string]any `json:"parameters"`
 }
 
 // ClaudeTool 是符合 Anthropic Claude Tool Use 规范的工具格式。
 type ClaudeTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
+	// Name 是工具名，通常取自 [Tool.Name]。
+	Name string `json:"name"`
+	// Description 是工具说明；omitempty，空则不输出。
+	Description string `json:"description,omitempty"`
+	// InputSchema 是 JSON Schema 参数对象，序列化为 input_schema。
 	InputSchema map[string]any `json:"input_schema"`
 }
 
 // GeminiDeclaration 是符合 Google Gemini Function Calling 规范的函数声明。
 type GeminiDeclaration struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters"`
+	// Name 是函数名，通常取自 [Tool.Name]。
+	Name string `json:"name"`
+	// Description 是函数说明；omitempty，空则不输出。
+	Description string `json:"description,omitempty"`
+	// Parameters 是 JSON Schema 参数对象，通常为 [Tool.InputSchema]。
+	Parameters map[string]any `json:"parameters"`
 }
 
 // ToOpenAI 将工具列表转为 OpenAI 规范的工具数组。

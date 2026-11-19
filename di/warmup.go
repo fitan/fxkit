@@ -17,10 +17,12 @@ type WarmupError struct {
 	Err error
 }
 
+// Error 返回 "服务名: 原因" 形式的错误文本。
 func (e WarmupError) Error() string {
 	return fmt.Sprintf("%s: %v", e.Service, e.Err)
 }
 
+// Unwrap 返回被包装的构造错误。
 func (e WarmupError) Unwrap() error { return e.Err }
 
 // WarmupReport 是 [Warmup] 的结果。

@@ -8,8 +8,11 @@ import (
 type authzDecision int
 
 const (
+	// decisionAllow 表示放行。
 	decisionAllow authzDecision = iota
+	// decisionForbidden 表示身份有效但无权访问（对应 403）。
 	decisionForbidden
+	// decisionInternal 表示判定过程出错，必须拒绝（对应 500）。
 	decisionInternal
 )
 

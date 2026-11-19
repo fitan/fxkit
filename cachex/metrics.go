@@ -20,11 +20,15 @@ var cacheTracer = otel.Tracer("github.com/fitan/fxkit/cachex")
 // 使用全局 MeterProvider（otelx 在启动时安装），因此这里可以惰性创建；
 // 未启用 OTel 时全局是 noop provider，开销极小。
 var (
-	cacheMetricsOnce    sync.Once
-	cacheLookups        metric.Int64Counter
+	// cacheMetricsOnce 保证指标只注册一次。
+	cacheMetricsOnce sync.Once
+	// cacheLookups 统计查询结果（hit / negative / miss / error / disabled）。
+	cacheLookups metric.Int64Counter
+	// cacheLoaderDuration 记录回源 loader 的耗时（单位秒）。
 	cacheLoaderDuration metric.Float64Histogram
 )
 
+// initCacheMetrics 惰性创建 cachex 的 lookups 计数器与 loader 耗时直方图，仅首次生效。
 func initCacheMetrics() {
 	cacheMetricsOnce.Do(func() {
 		m := otel.Meter("github.com/fitan/fxkit/cachex")
@@ -49,6 +53,7 @@ func recordLookup(ctx context.Context, result string) {
 	cacheLookups.Add(ctx, 1, metric.WithAttributes(attribute.String("cache.result", result)))
 }
 
+// recordLoader 把一次 loader 耗时（秒）记录到 cachex.loader.duration。
 func recordLoader(ctx context.Context, d time.Duration) {
 	initCacheMetrics()
 	if cacheLoaderDuration == nil {

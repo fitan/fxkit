@@ -55,6 +55,7 @@ var Module = di.Module("fxkit/audit",
 	},
 )
 
+// provideSink 按 cfg.Sink 构造 Sink：db 需要已启用的 gormx.Client，outbox 需要 outbox.Store，缺失时返回 Internal 错误。
 func provideSink(i di.Injector, cfg *Config) (Sink, error) {
 	switch cfg.Sink {
 	case "", "slog":

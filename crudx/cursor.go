@@ -14,7 +14,9 @@ import (
 
 // cursorPayload 是不透明的列表游标（排序值 + 用于打破平局的主键）。
 type cursorPayload struct {
-	V  any    `json:"v"`
+	// V 是上一页最后一行的排序值，须为标量。
+	V any `json:"v"`
+	// PK 是用于打破平局的主键值（字符串形式）。
 	PK string `json:"pk"`
 	SB string `json:"sb,omitempty"` // 编码时的 sortBy
 	SD string `json:"sd,omitempty"` // 排序方向
@@ -99,6 +101,7 @@ func DecodeCursor(token string) (sortBy, sortDir string, sortValue any, pk strin
 	return p.SB, normalizeSortDir(p.SD), sv, p.PK, nil
 }
 
+// isCursorScalar 报告 v 是否为游标允许的标量类型（nil、string、json.Number、bool）。
 func isCursorScalar(v any) bool {
 	switch v.(type) {
 	case nil, string, json.Number, bool:
@@ -147,6 +150,8 @@ func decodeCursorValue(v any, kind string) (any, error) {
 	}
 }
 
+// normalizeCursorValue 是旧版游标（无 VK 类型标签）的取值启发式：数字转 int64/float64，
+// 可解析为 RFC3339 的字符串转 time.Time，其余原样返回。
 func normalizeCursorValue(v any) any {
 	switch t := v.(type) {
 	case json.Number:

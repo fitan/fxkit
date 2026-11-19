@@ -39,24 +39,30 @@ type resourceField struct {
 	Column   string // 数据库列名，由 GORM NamingStrategy 推导
 	GoType   string // Go 类型字面量
 	GormTag  string // gorm:"..."（由固定的标记片段拼成）
+	// Required 表示字段带 required 标记（gorm tag 加 not null）。
 	Required bool
-	Unique   bool
-	Indexed  bool
+	// Unique 表示字段带 unique 标记（gorm tag 加 uniqueIndex）。
+	Unique bool
+	// Indexed 表示字段带 index 标记（gorm tag 加 index）。
+	Indexed bool
+	// Optional 表示字段带 optional 标记：请求结构体里用指针区分「未提供」与「显式零值」。
 	Optional bool
 }
 
 // resourceTemplate 拼接生成的模块源码。
 type resourceTemplate struct {
-	Package      string // Go 包名（由表名推导）
-	TypeName     string // PascalCase 结构体名
-	Table        string // GORM 表名
-	Path         string // URL 路径（/articles）
-	Tag          string // OpenAPI tag（Article）
-	Fields       []resourceField
-	SearchOn     []string    // 可搜索列（已归一为列名）
-	FilterOn     []string    // 可过滤列（已归一为列名）
-	SortBy       string      // 默认 ORDER BY（"created_at desc"）
-	SortFields   []sortField // List 的 ORDER BY 白名单（去重）
+	Package  string // Go 包名（由表名推导）
+	TypeName string // PascalCase 结构体名
+	Table    string // GORM 表名
+	Path     string // URL 路径（/articles）
+	Tag      string // OpenAPI tag（Article）
+	// Fields 是解析后的 --field 列表，供模板生成 model 与 DTO。
+	Fields     []resourceField
+	SearchOn   []string    // 可搜索列（已归一为列名）
+	FilterOn   []string    // 可过滤列（已归一为列名）
+	SortBy     string      // 默认 ORDER BY（"created_at desc"）
+	SortFields []sortField // List 的 ORDER BY 白名单（去重）
+	// ListFields 是生成 crudx.ListSpec.Fields 的列元数据。
 	ListFields   []specColumn
 	NilClientMsg string // NewService 里 nil client 的错误文案
 }
@@ -69,14 +75,18 @@ type sortField struct {
 
 // specColumn 是生成 ListSpec 时的一列。
 type specColumn struct {
-	Name     string // 列名，作为 map key
-	Column   string // 表限定列名（table.column）
-	Kind     string // crudx.FieldString / FieldNumber / FieldBool / FieldTime
-	Indexed  bool   // 该列在数据库上有索引
-	Like     bool   // 允许 ~ / !~ 模糊查询（只有 --search 指定的列）
+	Name    string // 列名，作为 map key
+	Column  string // 表限定列名（table.column）
+	Kind    string // crudx.FieldString / FieldNumber / FieldBool / FieldTime
+	Indexed bool   // 该列在数据库上有索引
+	Like    bool   // 允许 ~ / !~ 模糊查询（只有 --search 指定的列）
+	// Sortable 表示该列在 ORDER BY 白名单内。
 	Sortable bool
 }
 
+// genResourceCmd 构建 gen resource 子命令：生成 crudx.List + Huma resource 源码，
+// 默认写到 internal/<gorm 表名>/<包名>.go；--out 必须位于当前 module 内，已有文件需 --force 才覆盖。
+// 表名/列名由 GORM NamingStrategy 推导，--search/--filter/--sort 必须引用真实列，否则生成失败。
 func genResourceCmd() *cobra.Command {
 	var (
 		fieldsRaw []string
@@ -180,6 +190,7 @@ Example:
 	return cmd
 }
 
+// parseResourceArgs 解析并校验 gen resource 的参数，构造 [resourceTemplate]（表名、列名、ListSpec 等）。
 func parseResourceArgs(name, tableOverride string, fields, search, filters []string, sortSpec string) (*resourceTemplate, error) {
 	if err := validateName("resource", name); err != nil {
 		return nil, err
@@ -283,8 +294,10 @@ func (data *resourceTemplate) resolveTable(tableOverride string) error {
 	return nil
 }
 
+// tableNameRE 匹配合法的 --table 名（字母、数字、下划线，且不以数字开头）。
 var tableNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// validateTableName 校验 --table 只含字母、数字和下划线，且不以数字开头。
 func validateTableName(table string) error {
 	if !tableNameRE.MatchString(table) {
 		return fmt.Errorf("invalid --table %q: must match %s", table, tableNameRE.String())
@@ -292,8 +305,10 @@ func validateTableName(table string) error {
 	return nil
 }
 
+// goIdentifierRE 匹配合法的 Go 标识符。
 var goIdentifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// validateGoIdentifier 校验名字是合法 Go 标识符且不是关键字。
 func validateGoIdentifier(name string) error {
 	if !goIdentifierRE.MatchString(name) {
 		return fmt.Errorf("%q is not a valid Go identifier", name)
@@ -352,6 +367,7 @@ func (data *resourceTemplate) availableColumns() []string {
 	return cols
 }
 
+// resolveColumns 把 --search/--filter 的输入归一为列名并去重；未知列报错并列出可用列。
 func (data *resourceTemplate) resolveColumns(flag string, names []string) ([]string, error) {
 	out := make([]string, 0, len(names))
 	seen := make(map[string]bool, len(names))
@@ -388,6 +404,7 @@ func (data *resourceTemplate) resolveSort(spec string) (string, error) {
 	return col + " " + dir, nil
 }
 
+// fieldByColumn 按列名查找字段，找不到时返回 nil。
 func fieldByColumn(fields []resourceField, column string) *resourceField {
 	for i := range fields {
 		if fields[i].Column == column {
@@ -414,6 +431,8 @@ func (data *resourceTemplate) ensureSearchIndexes() {
 	}
 }
 
+// buildListSpec 构造 crudx.ListSpec 的列元数据：内置 id/created_at/updated_at 加上
+// --search/--filter 列，并同步 SortFields 与 Sortable（--search 列额外标 Likeable）。
 func (data *resourceTemplate) buildListSpec() {
 	addField := func(name, kind string, indexed bool) {
 		if name == "" {
@@ -507,11 +526,13 @@ func (data *resourceTemplate) buildListSpec() {
 	}
 }
 
+// sortFieldFromSpec 取 --sort 里的列名部分，忽略排序方向。
 func sortFieldFromSpec(spec string) string {
 	field, _ := crudx.ParseSort(spec)
 	return field
 }
 
+// fieldKindLiteral 把 Go 类型映射为 crudx.Field* 字面量，未知类型按字符串处理。
 func fieldKindLiteral(goType string) string {
 	switch goType {
 	case "int", "int32", "int64", "float64":
@@ -525,8 +546,11 @@ func fieldKindLiteral(goType string) string {
 	}
 }
 
+// fieldNameRE 匹配合法的 --field 字段名。
 var fieldNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// parseField 解析 name:type[:flags] 形式的 --field，生成 Go 名、JSON 名与 gorm tag。
+// 非法名字、类型或标记返回错误。
 func parseField(raw string) (resourceField, error) {
 	parts := strings.SplitN(raw, ":", 3)
 	if len(parts) < 2 {
@@ -596,6 +620,7 @@ func parseField(raw string) (resourceField, error) {
 	return f, nil
 }
 
+// appendGormTag 用分号把新标记追加到已有 gorm tag 后。
 func appendGormTag(tag, addition string) string {
 	if tag == "" {
 		return addition
@@ -603,6 +628,7 @@ func appendGormTag(tag, addition string) string {
 	return tag + ";" + addition
 }
 
+// splitCSV 按逗号切分，去掉空白与空项。
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -618,6 +644,7 @@ func splitCSV(s string) []string {
 	return out
 }
 
+// toPascal 以 _ 和 - 切分，各段首字母大写后拼接。
 func toPascal(s string) string {
 	parts := strings.FieldsFunc(s, func(r rune) bool { return r == '_' || r == '-' })
 	for i, p := range parts {
@@ -629,6 +656,7 @@ func toPascal(s string) string {
 	return strings.Join(parts, "")
 }
 
+// toCamel 在 [toPascal] 基础上前导大写转小写，保留紧跟小写字母前的那一个大写（APIKey → apiKey）。
 func toCamel(s string) string {
 	p := toPascal(s)
 	if p == "" {

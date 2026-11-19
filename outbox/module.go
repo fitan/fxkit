@@ -60,6 +60,7 @@ var Module = di.Module("fxkit/outbox",
 	},
 )
 
+// registerLifecycle 向生命周期注册启动/停止钩子：按配置迁移表、启动 relay 与清理循环。
 func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 	if lc == nil || inj == nil {
 		return
@@ -159,6 +160,7 @@ func registerLifecycle(lc *di.Lifecycle, inj di.Injector) {
 	})
 }
 
+// runPurgeLoop 按 cfg.PurgeInterval 周期调用 runPurgeOnce，直到 ctx 结束。
 func runPurgeLoop(ctx context.Context, store *Store, inbox *Inbox, cfg *Config, locker consulx.Locker) {
 	if cfg == nil || cfg.PurgeInterval <= 0 {
 		return

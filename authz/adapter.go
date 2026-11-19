@@ -14,19 +14,29 @@ import (
 // authz_api_permission.path；v3–v5 不进入唯一索引，使 MySQL utf8mb4
 // 保持在 3072 字节限制内。
 type casbinRule struct {
-	ID    uint   `gorm:"primaryKey;autoIncrement"`
+	// ID 自增主键。
+	ID uint `gorm:"primaryKey;autoIncrement"`
+	// Ptype 策略类型列（ptype），取值为 p 或 g。
 	Ptype string `gorm:"column:ptype;size:100;uniqueIndex:uk_casbin_rule"`
-	V0    string `gorm:"column:v0;size:100;uniqueIndex:uk_casbin_rule"`
-	V1    string `gorm:"column:v1;size:255;uniqueIndex:uk_casbin_rule"`
-	V2    string `gorm:"column:v2;size:100;uniqueIndex:uk_casbin_rule"`
-	V3    string `gorm:"column:v3;size:100;uniqueIndex:uk_casbin_rule"`
-	V4    string `gorm:"column:v4;size:100"`
-	V5    string `gorm:"column:v5;size:100"`
+	// V0 策略第 1 列（v0）：p 规则为 sub（角色），g 规则为用户。
+	V0 string `gorm:"column:v0;size:100;uniqueIndex:uk_casbin_rule"`
+	// V1 策略第 2 列（v1）：p 规则为 dom（租户 domain），g 规则为角色。
+	V1 string `gorm:"column:v1;size:255;uniqueIndex:uk_casbin_rule"`
+	// V2 策略第 3 列（v2）：p 规则为 obj（路径模式），g 规则为 dom。
+	V2 string `gorm:"column:v2;size:100;uniqueIndex:uk_casbin_rule"`
+	// V3 策略第 4 列（v3）：p 规则为 act（HTTP 方法）；g 规则不使用。
+	V3 string `gorm:"column:v3;size:100;uniqueIndex:uk_casbin_rule"`
+	// V4 策略第 5 列（v4）；当前模型不使用，恒为空串。
+	V4 string `gorm:"column:v4;size:100"`
+	// V5 策略第 6 列（v5）；当前模型不使用，恒为空串。
+	V5 string `gorm:"column:v5;size:100"`
 }
 
 // gormAdapter 通过 GORM 持久化 Casbin 策略（避免 gorm-adapter / dbresolver 冲突）。
 type gormAdapter struct {
-	db        *gorm.DB
+	// db 是策略表所在的 GORM 数据库连接。
+	db *gorm.DB
+	// tableName 是策略表名（默认 casbin_rule）。
 	tableName string
 }
 
@@ -47,10 +57,12 @@ func newGormAdapter(db *gorm.DB, tableName string, autoMigrate bool) (*gormAdapt
 	return a, nil
 }
 
+// table 返回指向策略表的 GORM 会话。
 func (a *gormAdapter) table() *gorm.DB {
 	return a.db.Table(a.tableName)
 }
 
+// LoadPolicy 读取策略表全部行并逐行加载进 Casbin 模型。
 func (a *gormAdapter) LoadPolicy(m model.Model) error {
 	var rows []casbinRule
 	if err := a.table().Find(&rows).Error; err != nil {
@@ -64,6 +76,7 @@ func (a *gormAdapter) LoadPolicy(m model.Model) error {
 	return nil
 }
 
+// SavePolicy 在一个事务内清空策略表，再写入模型中的全部 p/g 规则。
 func (a *gormAdapter) SavePolicy(m model.Model) error {
 	return a.db.Transaction(func(tx *gorm.DB) error {
 		t := tx.Table(a.tableName)
@@ -88,6 +101,7 @@ func (a *gormAdapter) SavePolicy(m model.Model) error {
 	})
 }
 
+// AddPolicy 幂等插入一条规则：已存在相同行时不做任何事。
 func (a *gormAdapter) AddPolicy(_ string, ptype string, rule []string) error {
 	row := ruleToRow(ptype, rule)
 	return a.table().Where(casbinRule{
@@ -95,6 +109,7 @@ func (a *gormAdapter) AddPolicy(_ string, ptype string, rule []string) error {
 	}).FirstOrCreate(&row).Error
 }
 
+// RemovePolicy 删除与给定规则完全匹配的行。
 func (a *gormAdapter) RemovePolicy(_ string, ptype string, rule []string) error {
 	row := ruleToRow(ptype, rule)
 	return a.table().Where(casbinRule{
@@ -102,6 +117,8 @@ func (a *gormAdapter) RemovePolicy(_ string, ptype string, rule []string) error 
 	}).Delete(&casbinRule{}).Error
 }
 
+// RemoveFilteredPolicy 删除 ptype 下按列值匹配的行；空值列不参与过滤。
+// fieldIndex 指定 fieldValues[0] 对应的列（0=v0），越界的列被忽略。
 func (a *gormAdapter) RemoveFilteredPolicy(_ string, ptype string, fieldIndex int, fieldValues ...string) error {
 	q := a.table().Where("ptype = ?", ptype)
 	cols := []string{"v0", "v1", "v2", "v3", "v4", "v5"}
@@ -125,6 +142,7 @@ func (a *gormAdapter) replaceGroupingsForUserDomain(user, dom string, rules [][]
 	return a.replaceRulesWhere("g", "v0 = ? AND v2 = ?", []any{user, dom}, rules)
 }
 
+// replaceRulesWhere 在一个事务内删除 ptype 且满足 where 的行，再批量写入 rules。
 func (a *gormAdapter) replaceRulesWhere(ptype, where string, args []any, rules [][]string) error {
 	return a.db.Transaction(func(tx *gorm.DB) error {
 		t := tx.Table(a.tableName).Where("ptype = ?", ptype).Where(where, args...)
@@ -152,6 +170,7 @@ func (a *gormAdapter) replaceGroupingsForUser(user string, rules [][]string) err
 	return a.replaceRules("g", user, rules)
 }
 
+// replaceRules 在一个事务内替换 ptype 下 v0 等于给定主体的全部规则。
 func (a *gormAdapter) replaceRules(ptype, v0 string, rules [][]string) error {
 	return a.db.Transaction(func(tx *gorm.DB) error {
 		t := tx.Table(a.tableName)
@@ -169,6 +188,7 @@ func (a *gormAdapter) replaceRules(ptype, v0 string, rules [][]string) error {
 	})
 }
 
+// ruleToRow 把 Casbin 规则转换为策略行，字段不足 6 个时补空串。
 func ruleToRow(ptype string, rule []string) casbinRule {
 	fields := padFields(rule, 6)
 	return casbinRule{
@@ -182,6 +202,7 @@ func ruleToRow(ptype string, rule []string) casbinRule {
 	}
 }
 
+// policyLine 把策略行拼成 Casbin 策略文本，并去掉末尾的空字段。
 func policyLine(row casbinRule) string {
 	parts := []string{row.Ptype, row.V0, row.V1, row.V2, row.V3, row.V4, row.V5}
 	for len(parts) > 1 && parts[len(parts)-1] == "" {
@@ -190,6 +211,7 @@ func policyLine(row casbinRule) string {
 	return strings.Join(parts, ", ")
 }
 
+// padFields 把 in 拷贝成长度为 n 的切片，不足部分留零值。
 func padFields(in []string, n int) []string {
 	out := make([]string, n)
 	for i := 0; i < n && i < len(in); i++ {

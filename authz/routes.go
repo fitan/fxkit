@@ -22,12 +22,18 @@ import (
 //	    OperationID: "listUsers", Method: "GET", Path: "/users", Summary: "列出用户",
 //	})
 type HTTPRoute struct {
-	Method      string
-	Path        string
-	OperationID string   // Huma OperationID
-	Summary     string   // Huma Summary（权限中文/说明）
-	Description string   // Huma Description
-	Tags        []string // Huma Tags
+	// Method HTTP 方法（如 GET）；空表示任意方法。
+	Method string
+	// Path 路由路径模板，与 Huma operation 一致，支持 `{id}` 占位。
+	Path string
+	// OperationID 是 Huma operation 的 ID，会写入权限目录。
+	OperationID string // Huma OperationID
+	// Summary 是 Huma summary，写入权限目录供展示。
+	Summary string // Huma Summary（权限中文/说明）
+	// Description 是 Huma description，写入权限目录。
+	Description string // Huma Description
+	// Tags 是 Huma tags，写入权限目录。
+	Tags []string // Huma Tags
 }
 
 // normalizeRequestPath 去掉首尾空白与末尾斜杠，使鉴权和 Casbin
@@ -95,10 +101,15 @@ func ProvideHTTPRoutesLazy(fn func(di.Injector) ([]HTTPRoute, error)) di.Option 
 
 // 路由表使用的 Method 常量。
 const (
-	MethodGet    = http.MethodGet
-	MethodPost   = http.MethodPost
-	MethodPut    = http.MethodPut
-	MethodPatch  = http.MethodPatch
+	// MethodGet 是 GET 方法常量。
+	MethodGet = http.MethodGet
+	// MethodPost 是 POST 方法常量。
+	MethodPost = http.MethodPost
+	// MethodPut 是 PUT 方法常量。
+	MethodPut = http.MethodPut
+	// MethodPatch 是 PATCH 方法常量。
+	MethodPatch = http.MethodPatch
+	// MethodDelete 是 DELETE 方法常量。
 	MethodDelete = http.MethodDelete
 )
 
@@ -170,6 +181,7 @@ func HTTPRoutesFromOpenAPI(api huma.API) []HTTPRoute {
 	return HTTPRoutesFromOperations(ops...)
 }
 
+// mergeHTTPRoutes 按 method+path 去重合并两组路由，base 中的项优先。
 func mergeHTTPRoutes(base, extra []HTTPRoute) []HTTPRoute {
 	key := func(r HTTPRoute) string {
 		return strings.ToUpper(strings.TrimSpace(r.Method)) + "\x00" + strings.TrimSpace(r.Path)

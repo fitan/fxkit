@@ -25,50 +25,90 @@ import (
 	"github.com/fitan/fxkit/server"
 )
 
+// agentService 是 GET /v1/agent/services 返回的单个服务条目（Consul agent API 的子集）。
 type agentService struct {
-	ID                string            `json:"ID"`
-	Service           string            `json:"Service"`
-	Address           string            `json:"Address"`
-	Port              int               `json:"Port"`
-	Meta              map[string]string `json:"Meta"`
-	Tags              []string          `json:"Tags"`
-	EnableTagOverride bool              `json:"EnableTagOverride"`
-	Kind              string            `json:"Kind,omitempty"`
-	Weights           map[string]int    `json:"Weights,omitempty"`
+	// ID 服务 ID，在 agent 内唯一。
+	ID string `json:"ID"`
+	// Service 服务名，即 catalog 中的逻辑服务名。
+	Service string `json:"Service"`
+	// Address 服务地址（注册时写入的地址）。
+	Address string `json:"Address"`
+	// Port 服务端口。
+	Port int `json:"Port"`
+	// Meta 服务元数据键值对。
+	Meta map[string]string `json:"Meta"`
+	// Tags 服务标签。
+	Tags []string `json:"Tags"`
+	// EnableTagOverride 是否允许通过 catalog 接口修改标签。
+	EnableTagOverride bool `json:"EnableTagOverride"`
+	// Kind 服务类型（如 connect-proxy、terminating-gateway）；空表示普通服务。
+	Kind string `json:"Kind,omitempty"`
+	// Weights 服务权重（Passing/Warning）。
+	Weights map[string]int `json:"Weights,omitempty"`
 }
 
+// agentCheck 是 GET /v1/agent/checks 返回的检查定义（Consul agent API 的子集）。
 type agentCheck struct {
-	CheckID                        string              `json:"CheckID,omitempty"`
-	Name                           string              `json:"Name,omitempty"`
-	Notes                          string              `json:"Notes,omitempty"`
-	Status                         string              `json:"Status,omitempty"`
-	ServiceID                      string              `json:"ServiceID,omitempty"`
-	HTTP                           string              `json:"HTTP,omitempty"`
-	TCP                            string              `json:"TCP,omitempty"`
-	GRPC                           string              `json:"GRPC,omitempty"`
-	GRPCUseTLS                     bool                `json:"GRPCUseTLS,omitempty"`
-	Interval                       string              `json:"Interval,omitempty"`
-	Timeout                        string              `json:"Timeout,omitempty"`
-	TTL                            string              `json:"TTL,omitempty"`
-	DeregisterCriticalServiceAfter string              `json:"DeregisterCriticalServiceAfter,omitempty"`
-	TLSSkipVerify                  bool                `json:"TLSSkipVerify,omitempty"`
-	Method                         string              `json:"Method,omitempty"`
-	Header                         map[string][]string `json:"Header,omitempty"`
-	SuccessBeforePassing           int                 `json:"SuccessBeforePassing,omitempty"`
-	FailuresBeforeCritical         int                 `json:"FailuresBeforeCritical,omitempty"`
+	// CheckID 检查 ID；服务级 TTL 检查通常为 service:<服务ID>。
+	CheckID string `json:"CheckID,omitempty"`
+	// Name 检查名称。
+	Name string `json:"Name,omitempty"`
+	// Notes 检查备注。
+	Notes string `json:"Notes,omitempty"`
+	// Status 检查状态（passing/warning/critical）；重新注册时会被丢弃。
+	Status string `json:"Status,omitempty"`
+	// ServiceID 所属服务 ID；为空表示节点级检查。
+	ServiceID string `json:"ServiceID,omitempty"`
+	// HTTP 健康检查请求的 URL。
+	HTTP string `json:"HTTP,omitempty"`
+	// TCP 健康检查的目标地址（host:port）。
+	TCP string `json:"TCP,omitempty"`
+	// GRPC 健康检查的目标地址（host:port）。
+	GRPC string `json:"GRPC,omitempty"`
+	// GRPCUseTLS gRPC 检查是否使用 TLS。
+	GRPCUseTLS bool `json:"GRPCUseTLS,omitempty"`
+	// Interval 检查间隔（如 "10s"）。
+	Interval string `json:"Interval,omitempty"`
+	// Timeout 检查超时（如 "1s"）。
+	Timeout string `json:"Timeout,omitempty"`
+	// TTL 检查存活时长（如 "15s"）；需通过 /v1/agent/check/pass 定期续期。
+	TTL string `json:"TTL,omitempty"`
+	// DeregisterCriticalServiceAfter 检查持续 critical 超过该时长后自动注销服务（如 "1m"）。
+	DeregisterCriticalServiceAfter string `json:"DeregisterCriticalServiceAfter,omitempty"`
+	// TLSSkipVerify 检查请求是否跳过 TLS 证书校验。
+	TLSSkipVerify bool `json:"TLSSkipVerify,omitempty"`
+	// Method HTTP 检查使用的请求方法，空表示 GET。
+	Method string `json:"Method,omitempty"`
+	// Header HTTP 检查附带的请求头。
+	Header map[string][]string `json:"Header,omitempty"`
+	// SuccessBeforePassing 从 warning/critical 转为 passing 前需要的连续成功次数。
+	SuccessBeforePassing int `json:"SuccessBeforePassing,omitempty"`
+	// FailuresBeforeCritical 转为 critical 前允许的连续失败次数。
+	FailuresBeforeCritical int `json:"FailuresBeforeCritical,omitempty"`
 }
 
+// registerServiceRequest 是 PUT /v1/agent/service/register 的请求体。
 type registerServiceRequest struct {
-	ID                string            `json:"ID"`
-	Name              string            `json:"Name"`
-	Address           string            `json:"Address,omitempty"`
-	Port              int               `json:"Port"`
-	Meta              map[string]string `json:"Meta,omitempty"`
-	Tags              []string          `json:"Tags,omitempty"`
-	EnableTagOverride bool              `json:"EnableTagOverride,omitempty"`
-	Kind              string            `json:"Kind,omitempty"`
-	Weights           map[string]int    `json:"Weights,omitempty"`
-	Checks            []agentCheck      `json:"Checks,omitempty"`
+	// ID 服务 ID；同机同端口的多个副本必须各自唯一。
+	ID string `json:"ID"`
+	// Name 服务名，即 catalog 中的逻辑服务名。
+	Name string `json:"Name"`
+	// Address 服务地址；为空时 Consul 使用 agent 自身的地址。
+	Address string `json:"Address,omitempty"`
+	// Port 服务端口。
+	Port int `json:"Port"`
+	// Meta 服务元数据键值对。
+	Meta map[string]string `json:"Meta,omitempty"`
+	// Tags 服务标签。
+	Tags []string `json:"Tags,omitempty"`
+	// EnableTagOverride 是否允许通过 catalog 接口修改标签。
+	EnableTagOverride bool `json:"EnableTagOverride,omitempty"`
+	// Kind 服务类型；空表示普通服务。
+	Kind string `json:"Kind,omitempty"`
+	// Weights 服务权重（Passing/Warning）。
+	Weights map[string]int `json:"Weights,omitempty"`
+	// Checks 注册时一并创建的健康检查。
+	Checks []agentCheck `json:"Checks,omitempty"`
 }
 
 // registerStartupMeta 装配 Fx OnStart hook，为配置端口上匹配 app.name 的注册项补全 Consul agent 元数据。
@@ -150,6 +190,8 @@ func consulServiceID(name, addr string, port int) string {
 	return name + "-" + sanitizeConsulIDPart(addr) + "-" + strconv.Itoa(port)
 }
 
+// sanitizeConsulIDPart 把字符串转换为可写入 Consul 服务 ID 的片段：
+// 仅保留字母、数字与 . - _，其余字符替换为 '-'；结果为空时返回 "unknown"。
 func sanitizeConsulIDPart(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -171,6 +213,8 @@ func sanitizeConsulIDPart(s string) string {
 	return out
 }
 
+// patchConsulServiceMeta 列出 agent 上的服务与检查，对同名同端口的注册项
+// 合并 extraMeta 后重新注册；没有任何匹配项时返回错误。
 func patchConsulServiceMeta(
 	ctx context.Context,
 	client *http.Client,
@@ -211,6 +255,8 @@ func patchConsulServiceMeta(
 	return nil
 }
 
+// listAgentServices 调用 GET /v1/agent/services，把返回的 map 展开为切片；
+// 非 2xx 时返回带状态码与响应体的错误。
 func listAgentServices(ctx context.Context, client *http.Client, base string) ([]agentService, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/agent/services", nil)
 	if err != nil {
@@ -237,6 +283,8 @@ func listAgentServices(ctx context.Context, client *http.Client, base string) ([
 	return out, nil
 }
 
+// listAgentChecksByService 调用 GET /v1/agent/checks，按 ServiceID 分组返回检查定义。
+// 只保留定义类字段（丢弃 status/runtime），便于重新注册；ServiceID 为空的检查被跳过。
 func listAgentChecksByService(ctx context.Context, client *http.Client, base string) (map[string][]agentCheck, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/agent/checks", nil)
 	if err != nil {
@@ -287,6 +335,8 @@ func listAgentChecksByService(ctx context.Context, client *http.Client, base str
 	return out, nil
 }
 
+// registerServiceWithMeta 以「原 meta + extraMeta（同名覆盖）」重新注册服务，
+// 跳过键或值为空白的项，随后补发一次 TTL pass；pass 失败仅告警。
 func registerServiceWithMeta(
 	ctx context.Context,
 	client *http.Client,

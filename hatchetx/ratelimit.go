@@ -20,13 +20,20 @@ type RateLimitListParams = rest.RateLimitListParams
 type RateLimitList = rest.RateLimitList
 
 const (
+	// RateLimitSecond 是 1 秒的限流窗口。
 	RateLimitSecond RateLimitDuration = types.Second
+	// RateLimitMinute 是 1 分钟的限流窗口。
 	RateLimitMinute RateLimitDuration = types.Minute
-	RateLimitHour   RateLimitDuration = types.Hour
-	RateLimitDay    RateLimitDuration = types.Day
-	RateLimitWeek   RateLimitDuration = types.Week
-	RateLimitMonth  RateLimitDuration = types.Month
-	RateLimitYear   RateLimitDuration = types.Year
+	// RateLimitHour 是 1 小时的限流窗口。
+	RateLimitHour RateLimitDuration = types.Hour
+	// RateLimitDay 是 1 天的限流窗口。
+	RateLimitDay RateLimitDuration = types.Day
+	// RateLimitWeek 是 1 周的限流窗口。
+	RateLimitWeek RateLimitDuration = types.Week
+	// RateLimitMonth 是 1 个月的限流窗口。
+	RateLimitMonth RateLimitDuration = types.Month
+	// RateLimitYear 是 1 年的限流窗口。
+	RateLimitYear RateLimitDuration = types.Year
 )
 
 // UpsertRateLimit 创建或更新全局限流规则。

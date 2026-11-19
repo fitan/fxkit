@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// initCmd 构建 init 子命令：在 --out（默认 ./<name>）渲染 templates/repo 生成 monorepo，
+// 并解析 fxkit 版本或注入 --fxkit-path 的 replace；除非 --skip-tidy，最后在目标目录跑 go mod tidy。
 func initCmd() *cobra.Command {
 	var (
 		modulePath string

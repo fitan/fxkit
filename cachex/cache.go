@@ -1,3 +1,8 @@
+// Package cachex 提供基于 Redis 的分布式缓存：统一的 [Cache] 接口、
+// [GetOrSet] 加载封装、singleflight 合并、负缓存与 TTL 抖动，不内置进程内缓存。
+//
+// [Module] 注册 *Config、[Cache] 与 *Resolver；cache.driver 为空时退化为
+// [DisabledCache]，仅 driver=redis 时注册 Redis 健康检查并在 Lifecycle 中关闭客户端。
 package cachex
 
 import (

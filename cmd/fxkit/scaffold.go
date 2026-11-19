@@ -169,6 +169,7 @@ func validateModulePath(p string) error {
 	return nil
 }
 
+// validateName 校验仓库/服务/资源名：拒绝空值、路径分隔符、空白与控制字符、引号/反引号/反斜杠。
 func validateName(kind, name string) error {
 	if name == "" || name == "." || name == ".." {
 		return fmt.Errorf("%s name is required", kind)
@@ -189,6 +190,7 @@ func validateName(kind, name string) error {
 	return nil
 }
 
+// resolveFxkitPath 把 --fxkit-path 转为绝对路径；为空时返回空串。
 func resolveFxkitPath(fxkitPath string) (string, error) {
 	if fxkitPath == "" {
 		return "", nil
@@ -241,6 +243,7 @@ type renderOptions struct {
 	Force bool
 }
 
+// renderTemplate 是 [renderTemplateWith] 的薄封装，不允许覆盖已有文件。
 func renderTemplate(root, target string, data scaffoldData) error {
 	return renderTemplateWith(root, target, data, renderOptions{})
 }
@@ -261,6 +264,8 @@ func renderTemplateWith(root, target string, data scaffoldData, opts renderOptio
 	return writeTemplates(root, target, data)
 }
 
+// writeTemplates 遍历嵌入的 templates/<root>，建目录、渲染 .tmpl 并原子写盘。
+// 已存在的 .gitignore 只追加缺失条目，不整体覆盖。
 func writeTemplates(root, target string, data scaffoldData) error {
 	return fs.WalkDir(templatesFS, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -400,6 +405,7 @@ func mergeGitignore(path string, generated []byte) error {
 	return nil
 }
 
+// runGoModTidy 在 dir 下执行 go mod tidy，输出直通 stdout/stderr，失败时提示可用 --skip-tidy。
 func runGoModTidy(dir string) error {
 	fmt.Println("running `go mod tidy`...")
 	tidy := exec.Command("go", "mod", "tidy")
@@ -412,6 +418,7 @@ func runGoModTidy(dir string) error {
 	return nil
 }
 
+// findRepoRoot 从 start 向上查找 go.mod，返回所在目录与 module 路径；找不到时报错。
 func findRepoRoot(start string) (root, modulePath string, err error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
@@ -434,6 +441,7 @@ func findRepoRoot(start string) (root, modulePath string, err error) {
 	}
 }
 
+// parseModulePath 读取 go.mod 的 module 行；缺失或为空时报错。
 func parseModulePath(goMod string) (string, error) {
 	f, err := os.Open(goMod)
 	if err != nil {
@@ -457,6 +465,7 @@ func parseModulePath(goMod string) (string, error) {
 	return "", fmt.Errorf("no module line in %s", goMod)
 }
 
+// ensureDir 创建目录；目标已存在时报错。
 func ensureDir(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("target directory %q already exists", path)

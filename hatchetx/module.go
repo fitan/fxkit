@@ -53,6 +53,7 @@ import (
 
 // Client 是 Hatchet SDK client 的包装。hatchet 禁用时为 nil。
 type Client struct {
+	// SDK 是底层 Hatchet SDK client；hatchet 禁用时为 nil。
 	SDK *hatchet.Client
 }
 
@@ -176,6 +177,7 @@ func NewClient(cfg *Config) (*Client, error) {
 	return &Client{SDK: sdk}, nil
 }
 
+// envMu 串行化 applyHatchetEnv 对环境变量的读改写。
 var envMu sync.Mutex
 
 // applyHatchetEnv 把 fxkit 的 yaml 配置桥接为 SDK 读取的环境变量。
@@ -214,6 +216,7 @@ func applyHatchetEnv(hcfg Config) error {
 	return nil
 }
 
+// isLoopbackHostPort 判断 host:port 中的 host 是否为 localhost 或回环 IP。
 func isLoopbackHostPort(hp string) bool {
 	hp = strings.TrimSpace(hp)
 	if hp == "" {
@@ -233,6 +236,7 @@ func isLoopbackHostPort(hp string) bool {
 	return false
 }
 
+// setenvIfEmpty 仅在环境变量为空时写入 value。
 func setenvIfEmpty(key, value string) {
 	if os.Getenv(key) == "" {
 		_ = os.Setenv(key, value)
@@ -382,11 +386,17 @@ func (c *Client) Workflows() *features.WorkflowsClient {
 	return c.SDK.Workflows()
 }
 
+// lifecycleParams 是 registerLifecycle 的依赖。
 type lifecycleParams struct {
-	LC       *di.Lifecycle
+	// LC 用于注册 worker 的启停钩子。
+	LC *di.Lifecycle
+	// Injector 用于在 OnStart 时解析 Config、Client 与 Registrar group。
 	Injector di.Injector
 }
 
+// registerLifecycle 注册 worker 的启停钩子：OnStart 装配并启动 worker，OnStop 执行清理。
+//
+// 未注册任何 workflow 时不启动 worker。
 func registerLifecycle(p lifecycleParams) {
 	if p.LC == nil || p.Injector == nil {
 		return

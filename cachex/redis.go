@@ -12,6 +12,7 @@ import (
 type RedisCache struct {
 	sfHolder
 
+	// client 是底层 go-redis 客户端。
 	client redis.UniversalClient
 }
 
@@ -44,6 +45,7 @@ func (r *RedisCache) Close() error {
 	return r.client.Close()
 }
 
+// Get 读取 key；redis.Nil 转换为 ErrCacheMiss，其它错误原样返回。
 func (r *RedisCache) Get(ctx context.Context, key string) ([]byte, error) {
 	val, err := r.client.Get(ctx, key).Bytes()
 	if err != nil {
@@ -55,6 +57,7 @@ func (r *RedisCache) Get(ctx context.Context, key string) ([]byte, error) {
 	return val, nil
 }
 
+// Set 写入 key，负 TTL 归一到 0（永不过期）。
 func (r *RedisCache) Set(ctx context.Context, key string, val []byte, ttl time.Duration) error {
 	return r.client.Set(ctx, key, val, normalizeRedisTTL(ttl)).Err()
 }
@@ -70,10 +73,12 @@ func normalizeRedisTTL(ttl time.Duration) time.Duration {
 	return ttl
 }
 
+// Delete 删除 key，key 不存在也返回 nil。
 func (r *RedisCache) Delete(ctx context.Context, key string) error {
 	return r.client.Del(ctx, key).Err()
 }
 
+// MGet 批量读取 key，结果只包含命中的键；空入参返回空 map。
 func (r *RedisCache) MGet(ctx context.Context, keys ...string) (map[string][]byte, error) {
 	if len(keys) == 0 {
 		return map[string][]byte{}, nil
@@ -98,6 +103,7 @@ func (r *RedisCache) MGet(ctx context.Context, keys ...string) (map[string][]byt
 	return res, nil
 }
 
+// MSet 批量写入：ttl<=0 用原生 MSET，否则用 pipeline 逐条 SET 以带上 TTL；空入参直接返回 nil。
 func (r *RedisCache) MSet(ctx context.Context, pairs map[string][]byte, ttl time.Duration) error {
 	if len(pairs) == 0 {
 		return nil

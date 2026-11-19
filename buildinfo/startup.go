@@ -7,6 +7,7 @@ import (
 	"github.com/fitan/fxkit/di"
 )
 
+// registerStartupLog 在 lc 非空时注册 OnStart 钩子，启动时以 Info 级别打印构建信息。
 func registerStartupLog(lc *di.Lifecycle) {
 	if lc == nil {
 		return

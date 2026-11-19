@@ -7,6 +7,7 @@ import (
 	"text/template"
 )
 
+// renderResource 渲染 [resourceTmpl] 并用 go/format 格式化；格式化失败视为 fxkit bug。
 func renderResource(data *resourceTemplate) ([]byte, error) {
 	tmpl, err := template.New("resource").Funcs(funcs).Parse(resourceTmpl)
 	if err != nil {
@@ -76,6 +77,13 @@ type {{.TypeName}}Detail struct {
 	UpdatedAt time.Time ` + "`json:\"updatedAt\"`" + `
 }
 
+// Create{{.TypeName}}Req 是创建请求；optional 字段用指针区分「未提供」与「显式零值」。
+type Create{{.TypeName}}Req struct {
+{{- range .Fields}}
+	{{.Name}} {{if .Optional}}*{{end}}{{.GoType}} ` + "`json:\"{{.JSONName}}{{if .Optional}},omitempty{{end}}\"`" + `
+{{- end}}
+}
+
 type Update{{.TypeName}}Req struct {
 	ID string ` + "`json:\"id\"`" + `
 {{- range .Fields}}
@@ -136,11 +144,16 @@ func (s *Service) Get(ctx context.Context, id string) ({{.TypeName}}Detail, erro
 }
 
 func (s *Service) Create(ctx context.Context, req Create{{.TypeName}}Req) ({{.TypeName}}Detail, error) {
-	u := {{.TypeName}}{
+	u := {{.TypeName}}{}
 {{- range .Fields}}
-		{{.Name}}: req.{{.Name}},
-{{- end}}
+{{- if .Optional}}
+	if req.{{.Name}} != nil {
+		u.{{.Name}} = *req.{{.Name}}
 	}
+{{- else}}
+	u.{{.Name}} = req.{{.Name}}
+{{- end}}
+{{- end}}
 	crudx.ZeroPrimaryKey[{{.TypeName}}](&u)
 	if err := s.client.Conn(ctx).Create(&u).Error; err != nil {
 		return {{.TypeName}}Detail{}, crudx.MapDBError(err)

@@ -18,7 +18,9 @@ import (
 )
 
 const (
-	defaultMaxFailover       = 5
+	// defaultMaxFailover 是 ClientInput.MaxFailover 未设置（<=0）时的默认尝试端点数。
+	defaultMaxFailover = 5
+	// defaultMaxRewindBodySize 是故障转移时缓冲请求体的字节上限。
 	defaultMaxRewindBodySize = 4 * 1024 * 1024 // 缓冲请求体的上限 4MB
 )
 
@@ -35,15 +37,23 @@ const (
 // context 里，这样即使 Consul 返回裸 IP，TLS SNI / 证书校验也能使用
 // 服务 DNS 名。参见 [ClientInput.ServerName]。
 type resolveTransport struct {
-	pool        *endpointPool
-	scheme      string
-	name        string
+	// pool 是待选端点池。
+	pool *endpointPool
+	// scheme 是改写请求 URL 时使用的 scheme。
+	scheme string
+	// name 是逻辑服务名，用于错误信息。
+	name string
+	// maxFailover 是单次请求最多尝试的端点数。
 	maxFailover int
-	next        http.RoundTripper
+	// next 是下游 RoundTripper（通常是 otelhttp 包装后的基础传输层）。
+	next http.RoundTripper
 
-	preserveHost     bool
+	// preserveHost 为 true 时保留逻辑 host，实际端点经拨号 context 传递。
+	preserveHost bool
+	// autoPreserveHost 为 true 时只对 IP 端点保留逻辑 host。
 	autoPreserveHost bool
-	logicalHost      string
+	// logicalHost 是保留 host 模式下写入 URL 的逻辑服务名。
+	logicalHost string
 
 	// closeIdleFn 在 preserveHost 模式下清理底层连接池；
 	// 否则所有 endpoint 共享同一个 URL.Host key，
@@ -51,14 +61,22 @@ type resolveTransport struct {
 	closeIdleFn func()
 }
 
+// RoundTrip 依次尝试可用端点，按需改写 host，并在传输层失败或 502/503/504 时故障转移。
+// 非幂等请求（POST/PATCH）仅在带 Idempotency-Key 时允许换端点重试。
 func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	attemptsUsed := 0
+	result := "ok"
+	defer func() { recordRequest(req.Context(), result, attemptsUsed) }()
+
 	if err := ensureRewindableBody(req); err != nil {
+		result = "error"
 		return nil, fmt.Errorf("reqx(%s): rewind body: %w", t.name, err)
 	}
 	// 用快照而不是「next + i--」。Consul watch 会在请求中把池变小，
 	// 已试过的端点再被抽中时，i-- 会在 len(tried) < 旧长度 上一直转。
 	eps := failoverOrder(t.pool)
 	if len(eps) == 0 {
+		result = "no_endpoints"
 		return nil, fmt.Errorf("reqx(%s): no healthy endpoints", t.name)
 	}
 
@@ -84,12 +102,14 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	hasUnrewindableBody := req.Body != nil && req.Body != http.NoBody && req.GetBody == nil
 
 	for i, ep := range eps {
+		attemptsUsed = i + 1
 		r2, err := cloneForEndpoint(req, ep, endpointRewrite{
 			scheme:       scheme,
 			preserveHost: t.shouldPreserveHost(ep),
 			logicalHost:  t.logicalHost,
 		})
 		if err != nil {
+			result = "error"
 			return nil, fmt.Errorf("reqx(%s): %w", t.name, err)
 		}
 
@@ -113,6 +133,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 		lastErr = err
 		if !isFailoverError(err) || i+1 >= len(eps) || hasUnrewindableBody {
+			result = "error"
 			return nil, fmt.Errorf("reqx(%s): endpoint %s: %w", t.name, ep, err)
 		}
 		if t.preserveHost {
@@ -123,6 +144,7 @@ func (t *resolveTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("reqx(%s): no healthy endpoints", t.name)
 	}
+	result = "error"
 	return nil, lastErr
 }
 
@@ -170,6 +192,7 @@ func retryableRequest(req *http.Request) bool {
 	return strings.TrimSpace(req.Header.Get("Idempotency-Key")) != ""
 }
 
+// closeIdleConnections 调用底层传输层清理空闲连接（若已配置）。
 func (t *resolveTransport) closeIdleConnections() {
 	if t.closeIdleFn != nil {
 		t.closeIdleFn()
@@ -189,6 +212,7 @@ func (t *resolveTransport) shouldPreserveHost(ep string) bool {
 	return isIPEndpoint(ep)
 }
 
+// endpointHost 去掉端点中的端口，返回裸 host（兼容 IPv6 方括号）。
 func endpointHost(ep string) string {
 	if host, _, err := net.SplitHostPort(ep); err == nil {
 		return host
@@ -196,16 +220,23 @@ func endpointHost(ep string) string {
 	return strings.Trim(strings.TrimSpace(ep), "[]")
 }
 
+// isIPEndpoint 报告端点 host 是否为 IP 字面量。
 func isIPEndpoint(ep string) bool {
 	return net.ParseIP(endpointHost(ep)) != nil
 }
 
+// endpointRewrite 是 cloneForEndpoint 的 host 改写参数。
 type endpointRewrite struct {
-	scheme       string
+	// scheme 是写入请求 URL 的 scheme。
+	scheme string
+	// preserveHost 为 true 时保留逻辑 host，端点写入拨号 context。
 	preserveHost bool
-	logicalHost  string
+	// logicalHost 是保留 host 模式下使用的逻辑服务名。
+	logicalHost string
 }
 
+// cloneForEndpoint 克隆请求并把 host/scheme 改写为该端点；preserveHost 时保留逻辑 host，
+// 实际端点写入 context 供自定义 DialContext 使用，并按 GetBody 回卷请求体。
 func cloneForEndpoint(req *http.Request, ep string, o endpointRewrite) (*http.Request, error) {
 	if req.URL == nil {
 		return nil, fmt.Errorf("nil request URL")
@@ -238,12 +269,15 @@ func cloneForEndpoint(req *http.Request, ep string, o endpointRewrite) (*http.Re
 	return r2, nil
 }
 
+// dialEndpointKey 是拨号目标端点存入 context 时使用的键类型。
 type dialEndpointKey struct{}
 
+// withDialEndpoint 把拨号目标端点写入 context。
 func withDialEndpoint(ctx context.Context, ep string) context.Context {
 	return context.WithValue(ctx, dialEndpointKey{}, ep)
 }
 
+// dialEndpointFromContext 从 context 读取拨号目标端点。
 func dialEndpointFromContext(ctx context.Context) (string, bool) {
 	ep, ok := ctx.Value(dialEndpointKey{}).(string)
 	if !ok || ep == "" {
@@ -299,6 +333,7 @@ func prepareEndpointDialer(rt http.RoundTripper, serverName string, own bool) (h
 	}
 }
 
+// cloneTLSConfig 返回 cfg 的副本；cfg 为 nil 时返回空配置。
 func cloneTLSConfig(cfg *tls.Config) *tls.Config {
 	if cfg == nil {
 		return &tls.Config{}
@@ -306,6 +341,8 @@ func cloneTLSConfig(cfg *tls.Config) *tls.Config {
 	return cfg.Clone()
 }
 
+// wrapEndpointDialer 包装拨号函数：context 中存在端点时改用它作为拨号地址。
+// orig 为 nil 时使用 30s 超时/保活的默认 net.Dialer。
 func wrapEndpointDialer(orig func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	if orig == nil {
 		d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
@@ -319,10 +356,13 @@ func wrapEndpointDialer(orig func(ctx context.Context, network, addr string) (ne
 	}
 }
 
+// ensureRewindableBody 按 4MB 上限尝试为请求体设置 GetBody，以便故障转移时重放。
 func ensureRewindableBody(req *http.Request) error {
 	return rewindBody(req, defaultMaxRewindBodySize)
 }
 
+// rewindBody 缓冲请求体（上限 max 字节）并设置 GetBody，使请求可重放。
+// 已有 GetBody、无 body、body 超过上限或 max<=0 时不做处理。
 func rewindBody(req *http.Request, max int64) error {
 	if req == nil || req.GetBody != nil || req.Body == nil || req.Body == http.NoBody {
 		return nil
@@ -360,11 +400,13 @@ func rewindBody(req *http.Request, max int64) error {
 	return nil
 }
 
+// readCloser 组合 Reader 与 Closer；用于回卷超限时保留原始 body 的剩余内容。
 type readCloser struct {
 	io.Reader
 	io.Closer
 }
 
+// shouldFailoverStatus 报告该状态码是否值得换端点重试（502/503/504）。
 func shouldFailoverStatus(code int) bool {
 	switch code {
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
@@ -374,6 +416,8 @@ func shouldFailoverStatus(code int) bool {
 	}
 }
 
+// isFailoverError 报告该错误是否为连接层失败（net.Error）或对端提前关闭（EOF），
+// 这两类可以安全换端点重试。
 func isFailoverError(err error) bool {
 	if err == nil {
 		return false
@@ -392,6 +436,8 @@ func isFailoverError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
+// buildTransport 组装解析传输层：按需注入端点拨号器、包一层 otelhttp，并设置故障转移次数。
+// Base 为 nil 时使用调优后的默认传输层；MaxFailover<=0 时取默认 5。
 func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
 	base := in.Base
 	if base == nil {
@@ -442,6 +488,7 @@ func buildTransport(in buildTransportInput) (http.RoundTripper, error) {
 	}, nil
 }
 
+// cloneDefaultTransport 克隆并调优 http.DefaultTransport；类型不符时原样返回。
 func cloneDefaultTransport() http.RoundTripper {
 	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
 		c := dt.Clone()
@@ -451,6 +498,8 @@ func cloneDefaultTransport() http.RoundTripper {
 	return http.DefaultTransport
 }
 
+// tuneStdTransport 为 *http.Transport 补上 keep-alive 与空闲连接默认值，
+// 避免继承全局默认的每 host 2 连接。
 func tuneStdTransport(t *http.Transport) {
 	if t == nil {
 		return
@@ -467,18 +516,29 @@ func tuneStdTransport(t *http.Transport) {
 	}
 }
 
+// buildTransportInput 是 buildTransport 的入参。
 type buildTransportInput struct {
-	Pool         *endpointPool
-	Scheme       string
-	Name         string
-	LogicalHost  string
-	Base         http.RoundTripper
-	OwnBase      bool
-	OTel         bool
-	MaxFailover  int
+	// Pool 是待选端点池。
+	Pool *endpointPool
+	// Scheme 是改写请求 URL 时使用的 scheme。
+	Scheme string
+	// Name 是逻辑服务名，用于错误信息。
+	Name string
+	// LogicalHost 是保留 host 模式下写入 URL 的逻辑服务名。
+	LogicalHost string
+	// Base 是底层传输层；nil 时克隆并调优 http.DefaultTransport。
+	Base http.RoundTripper
+	// OwnBase 表示 Base 为本 client 独占，可直接修改而无需克隆。
+	OwnBase bool
+	// OTel 为 true 时用 otelhttp 包装 Base。
+	OTel bool
+	// MaxFailover 是单次请求最多尝试的端点数；<=0 时取默认 5。
+	MaxFailover int
+	// PreserveHost 为 true 时保留逻辑 host，实际端点经拨号 context 传递。
 	PreserveHost bool
 	// AutoPreserve 表示 PreserveHost 是推断出来的（https + 命名服务，
 	// 未显式设置 ServerName），应只对 IP 端点生效。
 	AutoPreserve bool
-	ServerName   string
+	// ServerName 是保留 host 模式下写入 TLS 配置的服务器名。
+	ServerName string
 }

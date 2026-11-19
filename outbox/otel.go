@@ -25,3 +25,18 @@ func startPublishSpan(ctx context.Context, topic string) (context.Context, trace
 func injectTraceContext(ctx context.Context, carrier map[string]string) {
 	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(carrier))
 }
+
+// ExtractTrace 从事件 metadata 恢复发布方的 trace context，供消费端续接链路。
+//
+// 消费端在 handler 开头调用一次即可：
+//
+//	ctx = outbox.ExtractTrace(ctx, metadata)
+//	defer outbox.Inbox{}.Once(ctx, ...) // 或者直接开业务 span
+//
+// metadata 里没有 traceparent 时原样返回 ctx（noop propagator 同理）。
+func ExtractTrace(ctx context.Context, metadata map[string]string) context.Context {
+	if len(metadata) == 0 {
+		return ctx
+	}
+	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(metadata))
+}

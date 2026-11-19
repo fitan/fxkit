@@ -8,6 +8,7 @@ import (
 
 // ServiceOption 用于定制 [Service] 声明。
 type ServiceOption struct {
+	// options 是该项贡献给宿主模块的 di.Option 列表。
 	options []di.Option
 }
 

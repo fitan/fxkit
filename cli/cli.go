@@ -21,14 +21,20 @@ import (
 )
 
 const (
+	// defaultStartTimeout 是 serve 启动（OnStart）的默认超时。
 	defaultStartTimeout = 60 * time.Second
-	defaultStopTimeout  = 30 * time.Second
+	// defaultStopTimeout 是 serve 停机（OnStop / HTTP Shutdown）的默认超时。
+	defaultStopTimeout = 30 * time.Second
 )
 
 var (
-	rootName      = "fxkit-app"
-	rootShort     = "fxkit service"
-	rootCmd       *cobra.Command
+	// rootName 是 cobra 根命令 Use 的默认值，可由 [SetRootName] 覆盖。
+	rootName = "fxkit-app"
+	// rootShort 是 cobra 根命令 Short 的默认值，可由 [SetRootName] 覆盖。
+	rootShort = "fxkit service"
+	// rootCmd 是 [Run] 构建的根命令，仅在 Run 内赋值。
+	rootCmd *cobra.Command
+	// extraCommands 是 [AddCommand] 登记、由 [Run] 挂到根命令下的额外命令。
 	extraCommands []*cobra.Command
 )
 
@@ -88,6 +94,8 @@ func Run(opts ...di.Option) {
 	}
 }
 
+// buildServeCmd 构建 serve 子命令：装配对象图并启动生命周期，收到 SIGINT/SIGTERM 后停机。
+// --di-graph 只构建并打印对象图后退出，不监听端口。
 func buildServeCmd(opts []di.Option) *cobra.Command {
 	var (
 		diGraph    bool
@@ -190,9 +198,12 @@ func buildServeCmd(opts []di.Option) *cobra.Command {
 
 // warmup 模式的取值。命名成常量而不是裸字符串，避免 CLI flag 拼错时静默无效。
 const (
-	warmupOff         = "off"
+	// warmupOff 关闭预热，是 --warmup 的默认值。
+	warmupOff = "off"
+	// warmupBeforeStart 在监听端口前构造全部服务，任一失败即中止启动。
 	warmupBeforeStart = "before-start"
-	warmupReport      = "report"
+	// warmupReport 只打印预热结果，需配合 --di-graph 使用。
+	warmupReport = "report"
 )
 
 // printWarmup 打印预热结果（不中止流程）。
@@ -238,6 +249,7 @@ func warmupOrFail(root di.Injector) error {
 	return nil
 }
 
+// timeoutsFromCmd 读取 --start-timeout / --stop-timeout；缺失、非法或非正值时回退到默认值。
 func timeoutsFromCmd(cmd *cobra.Command) (start, stop time.Duration) {
 	start, stop = defaultStartTimeout, defaultStopTimeout
 	if cmd == nil {
@@ -252,6 +264,8 @@ func timeoutsFromCmd(cmd *cobra.Command) (start, stop time.Duration) {
 	return
 }
 
+// newApp 把命令行 flag 装成 [config.Options]，再叠加调用方 opts 与 extra，构造 DI 根作用域。
+// 返回的根作用域由调用方负责 Shutdown。
 func newApp(cmd *cobra.Command, opts []di.Option, extra ...di.Option) *di.RootScope {
 	configFile, _ := cmd.Flags().GetString("config")
 	consulAddr, _ := cmd.Flags().GetString("consul")
@@ -273,6 +287,7 @@ func newApp(cmd *cobra.Command, opts []di.Option, extra ...di.Option) *di.RootSc
 	return di.New(all...)
 }
 
+// buildVersionCmd 构建 version 子命令，把 [buildinfo.Get] 的结果打印到 stdout。
 func buildVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",

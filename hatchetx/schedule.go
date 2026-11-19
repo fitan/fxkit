@@ -18,20 +18,30 @@ type WorkflowScheduledListParams = rest.WorkflowScheduledListParams
 // 与周期性 cron 定时提醒（[CreateReminder]）不同，ScheduleOnce 只在 RunAt
 // 触发一次，可通过返回的 scheduledRunID 查询或取消。
 type ScheduleOnceInput struct {
-	WorkflowName string         // 目标 workflow 名称
-	RunAt        time.Time      // workflow 应执行的时间
-	Input        any            // 投递给 workflow 的载荷
-	Priority     *RunPriority   // 可选优先级
-	Metadata     map[string]any // 附加到定时运行的可选 metadata
+	// WorkflowName 是要触发的 workflow 名称，必填。
+	WorkflowName string // 目标 workflow 名称
+	// RunAt 是计划执行时间，必填；零值会返回错误。
+	RunAt time.Time // workflow 应执行的时间
+	// Input 是投递给 workflow 的载荷，会经 JSON 转成 map。
+	Input any // 投递给 workflow 的载荷
+	// Priority 是可选的运行优先级。
+	Priority *RunPriority // 可选优先级
+	// Metadata 是附加到定时运行的可选 metadata。
+	Metadata map[string]any // 附加到定时运行的可选 metadata
 }
 
 // ScheduledRun 表示一次性的定时 workflow 运行。
 type ScheduledRun struct {
-	ID           string                   `json:"id"`
-	WorkflowName string                   `json:"workflowName"`
-	TriggerAt    time.Time                `json:"triggerAt"`
-	Status       string                   `json:"status,omitempty"`
-	Raw          *rest.ScheduledWorkflows `json:"-"`
+	// ID 是定时运行 id，可用于 [CancelScheduled]。
+	ID string `json:"id"`
+	// WorkflowName 是定时运行要触发的 workflow 名称。
+	WorkflowName string `json:"workflowName"`
+	// TriggerAt 是计划执行时间，来自 [ScheduleOnceInput.RunAt]。
+	TriggerAt time.Time `json:"triggerAt"`
+	// Status 是关联 workflow 运行的状态；尚未产生运行时为空字符串。
+	Status string `json:"status,omitempty"`
+	// Raw 是 Hatchet 返回的原始记录，不参与 JSON 序列化。
+	Raw *rest.ScheduledWorkflows `json:"-"`
 }
 
 // ScheduleOnce 安排 workflow 在未来某一时刻执行一次（dueTime 语义）。

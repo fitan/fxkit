@@ -14,12 +14,14 @@ import (
 
 // Registrar 向共享 API 实例挂载一个或多个 Huma operation。
 type Registrar interface {
+	// Register 在共享 [huma.API] 上注册 operation。
 	Register(api huma.API)
 }
 
 // FuncRegistrar 将普通 func 适配为通过闭包注册的模块。
 type FuncRegistrar func(api huma.API)
 
+// Register 调用被包装的函数完成 operation 注册。
 func (f FuncRegistrar) Register(api huma.API) { f(api) }
 
 // Middleware 是 Huma 中间件签名（见 [huma.API.UseMiddleware]）。
@@ -27,20 +29,27 @@ type Middleware = func(ctx huma.Context, next func(huma.Context))
 
 // MiddlewareRegistrar 在拿到共享 [huma.API] 后构造一个 [Middleware]。
 type MiddlewareRegistrar interface {
+	// Middleware 用共享 [huma.API] 构造中间件；返回 nil 表示不挂载。
 	Middleware(api huma.API) Middleware
 }
 
 // MiddlewareFunc 将普通 func 适配为 [MiddlewareRegistrar]。
 type MiddlewareFunc func(api huma.API) Middleware
 
+// Middleware 调用被包装的函数构造中间件。
 func (f MiddlewareFunc) Middleware(api huma.API) Middleware { return f(api) }
 
+// registrarParams 汇总待安装的中间件与待执行的 operation 注册器。
 type registrarParams struct {
-	API         huma.API
+	// API 是共享 [huma.API] 实例；为 nil 时不执行任何安装。
+	API huma.API
+	// Middlewares 按顺序逐个安装，返回 nil 的中间件会被跳过。
 	Middlewares []MiddlewareRegistrar
-	Registrars  []Registrar
+	// Registrars 在中间件安装完毕后逐个执行。
+	Registrars []Registrar
 }
 
+// invokeRegistrars 先安装所有中间件，再执行所有 registrar；API 为 nil 时直接返回。
 func invokeRegistrars(p registrarParams) {
 	if p.API == nil {
 		return

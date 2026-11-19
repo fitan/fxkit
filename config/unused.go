@@ -18,8 +18,10 @@ import (
 // 因此 value 是 []reflect.Type 而不是单个类型——否则后注册者会覆盖前者，
 // 导致 `app validate` 校验错结构体、`Unused()` 误报死键。
 var (
+	// consumerRegistryMu 保护 consumerRegistry。
 	consumerRegistryMu sync.RWMutex
-	consumerRegistry   = map[string][]reflect.Type{}
+	// consumerRegistry 记录每个配置段被哪些结构体消费。
+	consumerRegistry = map[string][]reflect.Type{}
 )
 
 // RegisterConsumer 声明某个配置段由类型 T 消费。
@@ -161,7 +163,9 @@ func topSections(k *koanf.Koanf) []string {
 
 // UnusedKey 是 [Config.Unused] 返回的单条结果。
 type UnusedKey struct {
-	Key    string
+	// Key 配置树中的完整键路径（例如 "probe.typo_key"）；整段无人消费时是该顶级段名。
+	Key string
+	// Reason 判定为未使用的原因：没有模块消费该段，或消费方结构体缺少对应的 yaml 字段。
 	Reason string
 }
 
@@ -201,6 +205,7 @@ func yamlFields(t reflect.Type) map[string]struct{} {
 	return out
 }
 
+// collectYAMLFields 递归收集结构体的 yaml 字段路径（深度超过 4 即停止），跳过 time.Time。
 func collectYAMLFields(t reflect.Type, prefix string, out map[string]struct{}, depth int) {
 	if depth > 4 {
 		return
@@ -253,6 +258,7 @@ func yamlFieldName(f reflect.StructField) string {
 	return name
 }
 
+// topSegment 返回键路径的第一段，即顶级段名。
 func topSegment(key string) string {
 	if idx := strings.Index(key, "."); idx >= 0 {
 		return key[:idx]
@@ -260,6 +266,7 @@ func topSegment(key string) string {
 	return key
 }
 
+// normalizeSection 去掉键两端的空白与点号。
 func normalizeSection(key string) string {
 	return strings.Trim(strings.TrimSpace(key), ".")
 }

@@ -11,7 +11,7 @@ type Config struct {
 	Enabled bool `yaml:"enabled"`
 	// ServiceName 资源属性。空则回退 app.name。
 	ServiceName string `yaml:"service_name"`
-	// ServiceVersion 资源属性。
+	// ServiceVersion 资源属性；为空时回退 buildinfo.Version（未注入时为 "dev"）。
 	ServiceVersion string `yaml:"service_version"`
 	// Environment 如 development / production。默认 development。
 	Environment string `yaml:"environment"`
@@ -22,28 +22,38 @@ type Config struct {
 	// Insecure 明文 gRPC/HTTP。本地默认 true。
 	Insecure bool `yaml:"insecure"`
 	// Sampling：always_on | always_off | trace_id_ratio:0.5 | parent_based_always_on | parent_based_trace_id_ratio:0.5
-	Sampling string        `yaml:"sampling"`
-	Traces   TracesConfig  `yaml:"traces"`
-	Metrics  MetricsConfig `yaml:"metrics"`
-	Logs     LogsConfig    `yaml:"logs"`
+	Sampling string `yaml:"sampling"`
+	// Traces 控制 trace 管道；默认启用，exporter 默认 otlp。
+	Traces TracesConfig `yaml:"traces"`
+	// Metrics 控制 metrics 管道；默认启用，exporter 默认 otlp。
+	Metrics MetricsConfig `yaml:"metrics"`
+	// Logs 控制 log 管道；默认启用，slog 会 fanout 到 OTLP。
+	Logs LogsConfig `yaml:"logs"`
 }
 
 // TracesConfig 控制 trace 管道。
 type TracesConfig struct {
-	Enabled  bool   `yaml:"enabled"`  // 默认 true（总开关仍看 otel.enabled）
+	// Enabled 控制 trace 管道是否启用。
+	Enabled bool `yaml:"enabled"` // 默认 true（总开关仍看 otel.enabled）
+	// Exporter 选择 trace exporter。
 	Exporter string `yaml:"exporter"` // otlp | stdout
 }
 
 // MetricsConfig 控制 metrics 管道。
 type MetricsConfig struct {
-	Enabled        bool   `yaml:"enabled"`         // 默认 true
-	Exporter       string `yaml:"exporter"`        // otlp | stdout
-	RuntimeMetrics bool   `yaml:"runtime_metrics"` // 进程 runtime 指标，默认 true
+	// Enabled 控制 metrics 管道是否启用。
+	Enabled bool `yaml:"enabled"` // 默认 true
+	// Exporter 选择 metrics exporter。
+	Exporter string `yaml:"exporter"` // otlp | stdout
+	// RuntimeMetrics 控制是否注册进程 runtime 指标。
+	RuntimeMetrics bool `yaml:"runtime_metrics"` // 进程 runtime 指标，默认 true
 }
 
 // LogsConfig 控制 log 管道。
 type LogsConfig struct {
-	Enabled  bool   `yaml:"enabled"`  // 默认 true；slog fanout 到 OTLP
+	// Enabled 控制 log 管道是否启用。
+	Enabled bool `yaml:"enabled"` // 默认 true；slog fanout 到 OTLP
+	// Exporter 选择 log exporter。
 	Exporter string `yaml:"exporter"` // otlp | stdout
 	// ReplaceSlogDefault 是否把 slog.Default 替换为带 trace 注入的 handler。
 	// 默认 true。作为库嵌入已有服务时设为 false，避免覆盖宿主已配置的 handler。
@@ -62,6 +72,7 @@ func (c *Config) SetDefaults() {
 	c.Logs = LogsConfig{Enabled: true, Exporter: "otlp", ReplaceSlogDefault: boolPtr(true)}
 }
 
+// boolPtr 返回 v 的指针，用于填充 *bool 默认值。
 func boolPtr(v bool) *bool { return &v }
 
 // HTTPEnabled 报告 chi 是否应安装 otelhttp（trace 和/或 metrics）。
@@ -91,6 +102,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// validateExporter 校验 exporter 取值是否为 otlp 或 stdout，空值视为默认。
 func validateExporter(path, v string) error {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "otlp", "stdout":

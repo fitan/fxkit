@@ -20,6 +20,7 @@ import (
 // 再校验 issuer / audience / organization / scopes。
 // 参见 https://docs.logto.io/api-protection/go/chi
 type TokenValidator interface {
+	// Validate 校验原始 token 并返回规范化后的 [Subject]；token 非法或过期返回错误。
 	Validate(ctx context.Context, rawToken string) (Subject, error)
 }
 
@@ -104,15 +105,24 @@ func NewValidator(p validatorParams) (TokenValidator, error) {
 	return v, nil
 }
 
+// jwksValidator 是基于缓存 JWKS 的 [TokenValidator] 实现。
 type jwksValidator struct {
-	issuer     string
-	audience   string
-	jwksURL    string
-	orgClaim   string
+	// issuer 期望的 token issuer。
+	issuer string
+	// audience 期望的 token audience。
+	audience string
+	// jwksURL 是 JWKS 端点地址（默认 {issuer}/jwks）。
+	jwksURL string
+	// orgClaim 是写入 [Subject.OrgID] 的 claim 名。
+	orgClaim string
+	// requireOrg 为真时，缺少 org claim 的 token 被拒绝。
 	requireOrg bool
-	cache      *jwk.Cache
+	// cache 是 jwx 的 JWKS 缓存，会自动刷新公钥。
+	cache *jwk.Cache
 }
 
+// Validate 用缓存的 JWKS 校验 token 签名、issuer 与 audience，并提取 [Subject]。
+// requireOrg 为真且 token 缺少 org claim 时返回错误。
 func (v *jwksValidator) Validate(ctx context.Context, rawToken string) (Subject, error) {
 	rawToken = strings.TrimSpace(rawToken)
 	if rawToken == "" {
@@ -120,6 +130,7 @@ func (v *jwksValidator) Validate(ctx context.Context, rawToken string) (Subject,
 	}
 
 	set, err := v.cache.Lookup(ctx, v.jwksURL)
+	recordJWKSFetch(ctx, err)
 	if err != nil {
 		return Subject{}, fmt.Errorf("auth: fetch jwks: %w", err)
 	}
@@ -151,6 +162,7 @@ func (v *jwksValidator) Validate(ctx context.Context, rawToken string) (Subject,
 	}, nil
 }
 
+// collectPermissions 从 scope/scp/permissions claim 汇总去重后的权限列表。
 func collectPermissions(tok jwt.Token) []string {
 	var out []string
 	seen := map[string]struct{}{}
@@ -179,6 +191,7 @@ func collectPermissions(tok jwt.Token) []string {
 	return out
 }
 
+// claimString 把 claim 读成去空白的字符串；缺失或无法转换时返回空串。
 func claimString(tok jwt.Token, key string) string {
 	var s string
 	if err := tok.Get(key, &s); err == nil {
@@ -194,6 +207,7 @@ func claimString(tok jwt.Token, key string) string {
 	return strings.TrimSpace(fmt.Sprint(v))
 }
 
+// claimStringSlice 把 claim 读成字符串切片，支持 []string、[]any 与空格分隔字符串；缺失时返回 nil。
 func claimStringSlice(tok jwt.Token, key string) []string {
 	var ss []string
 	if err := tok.Get(key, &ss); err == nil {

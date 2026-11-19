@@ -20,30 +20,45 @@ import (
 // 于是需要「启动同步」、会在两次部署之间漂移，还多出 5 个写接口和一处 TOCTOU。
 // 现在直接派生，三者天然一致。
 type APIPermission struct {
-	Method      string   `json:"method"`
-	Path        string   `json:"path"`
-	Pattern     string   `json:"pattern"`
-	OperationID string   `json:"operation_id"`
-	Summary     string   `json:"summary"`
-	Description string   `json:"description"`
-	Tags        []string `json:"tags"`
+	// Method 路由的 HTTP 方法（已转大写）。
+	Method string `json:"method"`
+	// Path 路由路径模板，可能含 Huma 的 `{id}` 占位符。
+	Path string `json:"path"`
+	// Pattern 转换为 Casbin keyMatch2 后的路径（`{id}` → `:id`），用于匹配策略。
+	Pattern string `json:"pattern"`
+	// OperationID Huma operation 的 OperationID。
+	OperationID string `json:"operation_id"`
+	// Summary Huma Summary，供目录展示。
+	Summary string `json:"summary"`
+	// Description Huma Description，供目录展示。
+	Description string `json:"description"`
+	// Tags 路由所属的 Huma tags。
+	Tags []string `json:"tags"`
 	// Grants 是当前被授予该 (obj, act) 的角色/主体（来自 Casbin p 规则）。
 	Grants []string `json:"grants"`
 }
 
 // ListRouteCatalogInput 对权限目录做分页/过滤。
 type ListRouteCatalogInput struct {
-	Start          int
-	Limit          int
-	Q              string
+	// Start 分页起始偏移；负数按 0 处理。
+	Start int
+	// Limit 每页条数；<=0 时默认 20，超过 1000 按 1000 处理。
+	Limit int
+	// Q 关键字过滤，大小写不敏感地匹配 method/path/pattern/operationID/summary/description/tags；空表示不过滤。
+	Q string
+	// ReplyWithCount 为 true 时在结果中返回过滤后的 Total。
 	ReplyWithCount bool
 }
 
 // ListRouteCatalogResult 是分页后的目录响应。
 type ListRouteCatalogResult struct {
+	// Items 当前页的目录项，按 Path、Method 升序排序。
 	Items []APIPermission
+	// Total 过滤后的总条数；仅在输入 ReplyWithCount 为 true 时非 nil。
 	Total *int64
+	// Start 实际生效的起始偏移（已裁剪到 [0, 过滤后条数]）。
 	Start int
+	// Limit 实际生效的每页条数（默认 20，上限 1000）。
 	Limit int
 }
 
@@ -125,6 +140,7 @@ func (e *Enforcer) ListRouteCatalogPage(ctx context.Context, routes []HTTPRoute,
 	return ListRouteCatalogResult{Items: items[start:end], Total: total, Start: start, Limit: limit}, nil
 }
 
+// catalogMatches 判断目录项的任一文本字段是否包含 q；q 需已转小写。
 func catalogMatches(p APIPermission, q string) bool {
 	fields := []string{p.Method, p.Path, p.Pattern, p.OperationID, p.Summary, p.Description}
 	for _, f := range fields {

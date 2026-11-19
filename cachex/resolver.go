@@ -13,8 +13,10 @@ import (
 //
 // 或者对单次调用覆盖：resolver.GetOrSet(ctx, key, load, cachex.WithTTL(time.Minute))
 type Resolver struct {
+	// cache 是底层缓存实例。
 	cache Cache
-	def   Options
+	// def 是来自模块配置的默认选项。
+	def Options
 }
 
 // NewResolver 用配置构造 Resolver。cfg 为 nil 时使用内置默认值。

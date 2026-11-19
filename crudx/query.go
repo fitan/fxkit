@@ -37,6 +37,7 @@ func ParseSort(spec string) (field, dir string) {
 	return field, dir
 }
 
+// normalizeSortDir 把排序方向归一为 "asc" / "desc"，无法识别时返回 ""。
 func normalizeSortDir(dir string) string {
 	switch strings.ToLower(strings.TrimSpace(dir)) {
 	case "", "asc", "ascending", "+":

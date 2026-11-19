@@ -24,6 +24,8 @@ var migrationsFS embed.FS
 
 // MigrationDialects 返回内置 DDL 支持的方言。
 func MigrationDialects() []string { return []string{"postgres", "mysql", "sqlite"} }
+
+// normalizeDialect 把方言别名归一化为 postgres / mysql / sqlite，不支持时返回错误。
 func normalizeDialect(d string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(d)) {
 	case "postgres", "postgresql", "pg":
@@ -100,7 +102,9 @@ type SchemaCheckOptions struct {
 // gormx 不再反向硬编码它们的表结构 —— 否则只用 gormx 的服务开启
 // `db.check_schema: true` 时，会因为「缺 outbox_events 表」而启动失败。
 var (
-	schemaContractMu       sync.RWMutex
+	// schemaContractMu 保护 schemaContractRegistry 的读写。
+	schemaContractMu sync.RWMutex
+	// schemaContractRegistry 是「表名 → 必需列」的登记表。
 	schemaContractRegistry = map[string][]string{}
 )
 
@@ -118,6 +122,7 @@ func RegisterSchemaContract(table string, columns ...string) {
 	schemaContractRegistry[table] = append([]string(nil), columns...)
 }
 
+// snapshotSchemaContracts 返回已登记契约的深拷贝，供校验时无锁读取。
 func snapshotSchemaContracts() map[string][]string {
 	schemaContractMu.RLock()
 	defer schemaContractMu.RUnlock()

@@ -13,14 +13,18 @@ import (
 
 // middlewareHost 由 *hatchet.Worker 满足。
 type middlewareHost interface {
+	// Use 追加 worker 中间件。
 	Use(mws ...worker.MiddlewareFunc)
 }
 
 var (
-	spanProcessorMu           sync.Mutex
+	// spanProcessorMu 保护 registeredTracerProviders。
+	spanProcessorMu sync.Mutex
+	// registeredTracerProviders 记录已注册 Hatchet 属性处理器的 provider。
 	registeredTracerProviders = make(map[*sdktrace.TracerProvider]struct{})
 )
 
+// registerHatchetSpanProcessor 为 tp 注册 Hatchet 属性处理器，同一 provider 只注册一次。
 func registerHatchetSpanProcessor(tp *sdktrace.TracerProvider) {
 	spanProcessorMu.Lock()
 	defer spanProcessorMu.Unlock()
@@ -69,7 +73,14 @@ func attachWorkerTracing(w middlewareHost, enabled bool) bool {
 // 而不持有 exporter。otelx 已通过自己的处理器导出。
 type passthroughSpanProcessor struct{}
 
+// OnStart 为空实现，不处理 span 开始事件。
 func (passthroughSpanProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
-func (passthroughSpanProcessor) OnEnd(sdktrace.ReadOnlySpan)                     {}
-func (passthroughSpanProcessor) Shutdown(context.Context) error                  { return nil }
-func (passthroughSpanProcessor) ForceFlush(context.Context) error                { return nil }
+
+// OnEnd 为空实现，导出由 otelx 的处理器负责。
+func (passthroughSpanProcessor) OnEnd(sdktrace.ReadOnlySpan) {}
+
+// Shutdown 为空实现，始终返回 nil。
+func (passthroughSpanProcessor) Shutdown(context.Context) error { return nil }
+
+// ForceFlush 为空实现，始终返回 nil。
+func (passthroughSpanProcessor) ForceFlush(context.Context) error { return nil }

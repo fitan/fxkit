@@ -16,11 +16,15 @@ import (
 )
 
 const (
-	ansiRed    = "\033[31m"
+	// ansiRed 是 ERROR 级别整行使用的 ANSI 红色前缀。
+	ansiRed = "\033[31m"
+	// ansiYellow 是 WARN 级别整行使用的 ANSI 黄色前缀。
 	ansiYellow = "\033[33m"
-	ansiReset  = "\033[0m"
+	// ansiReset 重置 ANSI 颜色，写在着色行末尾。
+	ansiReset = "\033[0m"
 )
 
+// defaultInstalled 记录 [SetupDefault] 是否已执行过，保证只安装一次。
 var defaultInstalled atomic.Bool
 
 // SetupDefault 在 stderr 为 TTY 时安装彩色 slog handler。可多次调用；仅首次生效。
@@ -60,7 +64,9 @@ func isStdlibDefault(h slog.Handler) bool {
 // 早期实现把 attrs 与 groups 分开保存、并总是先 WithGroup 再 WithAttrs，
 // 导致 `logger.With("a", 1).WithGroup("g")` 里的 a 被错误地嵌进 g（与 log/slog 语义相反）。
 type step struct {
+	// group 非空表示这一步是 WithGroup；为空表示这一步携带 attrs。
 	group string
+	// attrs 是这一步要追加的属性。
 	attrs []slog.Attr
 }
 
@@ -69,17 +75,27 @@ type step struct {
 // 关键优化：内层 TextHandler 与缓冲区复用，避免每条日志都重建 handler
 // （早期 Enabled 也会重建一次，即使该 level 最终被过滤）。
 type sharedState struct {
-	mu  sync.Mutex
+	// mu 串行化对 buf 的写入，所有派生 handler 共用同一把锁。
+	mu sync.Mutex
+	// buf 是内层 TextHandler 的输出缓冲，每次 Handle 前 Reset。
 	buf bytes.Buffer
 }
 
+// colorHandler 是 [NewConsoleHandler] 返回的 slog handler：内层 TextHandler 负责渲染，
+// 外层按级别给整行加 ANSI 颜色。
 type colorHandler struct {
-	w      io.Writer
-	opts   *slog.HandlerOptions
-	steps  []step
-	color  bool
+	// w 是最终的日志输出目标。
+	w io.Writer
+	// opts 是构造时传入的 handler 选项（级别过滤与文本格式）。
+	opts *slog.HandlerOptions
+	// steps 记录 WithAttrs/WithGroup 的调用顺序，用于重建内层 handler。
+	steps []step
+	// color 表示输出目标为 TTY，需要给 WARN/ERROR 行着色。
+	color bool
+	// shared 是与派生 handler 共享的缓冲区与锁。
 	shared *sharedState
-	inner  slog.Handler
+	// inner 是按 steps 预构建的内层 TextHandler。
+	inner slog.Handler
 
 	// initOnce 兼容直接字面量构造（测试）的场景：首次使用时惰性补齐 shared/inner。
 	initOnce sync.Once
@@ -104,6 +120,7 @@ func NewConsoleHandler(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
 	return h
 }
 
+// Enabled 按 opts.Level 判定是否记录该级别，未设置时最低为 Info。
 func (h *colorHandler) Enabled(_ context.Context, level slog.Level) bool {
 	minLevel := slog.LevelInfo
 	if h.opts != nil && h.opts.Level != nil {
@@ -125,6 +142,7 @@ func (h *colorHandler) state() *sharedState {
 	return h.shared
 }
 
+// Handle 用内层 TextHandler 渲染到共享缓冲区，再按级别给整行加 ANSI 颜色后写入 w。
 func (h *colorHandler) Handle(ctx context.Context, r slog.Record) error {
 	s := h.state()
 	s.mu.Lock()
@@ -159,6 +177,7 @@ func (h *colorHandler) Handle(ctx context.Context, r slog.Record) error {
 	return nil
 }
 
+// WithAttrs 返回追加了属性的派生 handler；attrs 落在最近一次 WithGroup 之内，空 attrs 返回自身。
 func (h *colorHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
@@ -176,6 +195,7 @@ func (h *colorHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return h.derive(steps)
 }
 
+// WithGroup 返回新增一层分组的派生 handler；空名字返回自身。
 func (h *colorHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h

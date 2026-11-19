@@ -45,6 +45,7 @@ func MergeJSON(base []byte, overlays ...[]byte) ([]byte, error) {
 	return json.Marshal(doc)
 }
 
+// parseDoc 把 YAML/JSON 解析为顶层 map；空文档返回空 map 而不是 nil。
 func parseDoc(raw []byte) (map[string]any, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -56,6 +57,8 @@ func parseDoc(raw []byte) (map[string]any, error) {
 	return doc, nil
 }
 
+// mergeDocs 合并两份文档：openapi 取较新版本，info/paths/components/tags/servers
+// 分别合并，其余顶层键以覆盖层优先。
 func mergeDocs(base, overlay map[string]any) map[string]any {
 	out := cloneMap(base)
 	if overlay == nil {
@@ -102,6 +105,7 @@ func cloneValue(v any) any {
 	}
 }
 
+// mergeInfo 逐键合并 info，覆盖层的键优先。
 func mergeInfo(base, overlay map[string]any) map[string]any {
 	if len(overlay) == 0 {
 		return base
@@ -118,6 +122,7 @@ func mergeInfo(base, overlay map[string]any) map[string]any {
 	return out
 }
 
+// mergeStringMaps 合并同名键的 map，冲突项由 [mergePathItem] 处理。
 func mergeStringMaps(base, overlay map[string]any) map[string]any {
 	if len(overlay) == 0 {
 		return base
@@ -133,6 +138,7 @@ func mergeStringMaps(base, overlay map[string]any) map[string]any {
 	return out
 }
 
+// mergePathItem 逐键合并 path item 或 component，覆盖层优先。
 func mergePathItem(base, overlay map[string]any) map[string]any {
 	if len(overlay) == 0 {
 		return base
@@ -144,11 +150,14 @@ func mergePathItem(base, overlay map[string]any) map[string]any {
 	return out
 }
 
+// componentSections 是 components 下参与合并的分类名；
+// 合并规则：同名条目由覆盖层覆盖，未列出的分类只保留 base 内容。
 var componentSections = []string{
 	"schemas", "responses", "parameters", "examples",
 	"requestBodies", "headers", "securitySchemes", "links", "callbacks",
 }
 
+// mergeComponents 合并 components 下各已知分类（schemas、responses 等）。
 func mergeComponents(base, overlay map[string]any) map[string]any {
 	if len(overlay) == 0 {
 		return base
@@ -163,8 +172,10 @@ func mergeComponents(base, overlay map[string]any) map[string]any {
 	return out
 }
 
+// mergeTags 按 name 去重合并 tags（base 在前，overlay 在后）。
 func mergeTags(base, overlay any) any { return mergeByKey(base, overlay, "name") }
 
+// mergeServers 按 url 去重合并 servers（base 在前，overlay 在后）。
 func mergeServers(base, overlay any) any { return mergeByKey(base, overlay, "url") }
 
 // mergeByKey 按 key 字段去重合并两个数组（base 在前，overlay 在后）。
@@ -203,6 +214,7 @@ func mergeByKey(base, overlay any, key string) any {
 	return out
 }
 
+// asSlice 把值断言为 []any，失败时返回 nil。
 func asSlice(v any) []any {
 	if s, ok := v.([]any); ok {
 		return s
@@ -210,6 +222,7 @@ func asSlice(v any) []any {
 	return nil
 }
 
+// asMap 把值断言为 map[string]any，失败时返回 nil。
 func asMap(v any) map[string]any {
 	if v == nil {
 		return nil
@@ -221,6 +234,7 @@ func asMap(v any) map[string]any {
 	return m
 }
 
+// cloneMap 浅拷贝 map；空输入返回空 map。
 func cloneMap(m map[string]any) map[string]any {
 	if len(m) == 0 {
 		return map[string]any{}
@@ -247,6 +261,7 @@ func versionGT(a, b string) bool {
 	return len(ap) > len(bp)
 }
 
+// splitVersion 提取版本字符串中的数字段（"3.1.0" → [3 1 0]）。
 func splitVersion(v string) []int {
 	var parts []int
 	var n int

@@ -16,8 +16,11 @@ import (
 
 // MuxParams 是 [NewMux] 的输入。
 type MuxParams struct {
-	Server           *Config
-	Otel             *otelx.Config
+	// Server 是 server 配置，决定 CORS/安全头/CSRF/pprof/SSE 等中间件；nil 时跳过依赖配置的中间件。
+	Server *Config
+	// Otel 是 otel 配置；HTTPEnabled() 为 true 时安装 otelhttp 与 route-pattern 中间件。
+	Otel *otelx.Config
+	// ExtraMiddlewares 是其他模块贡献的中间件，按顺序追加在默认链之后。
 	ExtraMiddlewares []Middleware
 }
 
@@ -70,7 +73,9 @@ func NewMux(p MuxParams) *chi.Mux {
 
 // RouterParams 收集 [RegisterRoutes] 消费的所有 [Route] 值。
 type RouterParams struct {
-	Mux    *chi.Mux
+	// Mux 是共享 chi mux；nil 时注册失败。
+	Mux *chi.Mux
+	// Routes 是待挂载的路由集合，注册前会整体校验。
 	Routes []Route
 	// MaxBodyBytes 是默认请求体上限（来自 [Config.MaxBodyBytes]）。
 	// 单条 [Route] 可用 MaxBodyBytes 覆盖；<=0 表示不限制。
@@ -186,15 +191,20 @@ func validateRoute(r Route) error {
 
 // Runtime 控制 HTTP listener 行为。缺省则正常监听。
 type Runtime struct {
+	// SkipListen 为 true 时只构造 [http.Server] 不绑定端口（测试或自行监听时使用）。
 	SkipListen bool
 }
 
 // ServerParams 列出 [NewHTTPServer] 的输入。
 type ServerParams struct {
+	// Lifecycle 用于注册 bind/shutdown 钩子；nil 时不注册，server 不会自动启动。
 	Lifecycle *di.Lifecycle
-	Server    *Config
-	Mux       *chi.Mux
-	Runtime   *Runtime
+	// Server 是 server 配置（端口与超时）；nil 会 panic。
+	Server *Config
+	// Mux 是 [http.Server] 的 handler。
+	Mux *chi.Mux
+	// Runtime 为 nil 时正常监听；SkipListen 为 true 时跳过 bind。
+	Runtime *Runtime
 }
 
 // HTTPServer 是 [http.Server] 的薄封装。

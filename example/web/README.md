@@ -10,7 +10,7 @@ pnpm install
 pnpm dev          # http://127.0.0.1:3000
 ```
 
-后端可以用 `example` 下的 `make demo`（SQLite catalog + storefront）或
+后端可以用 `example` 下的 `make demo`（PostgreSQL catalog + storefront）或
 `make verify`（完整 Traefik/Consul 链路）。
 
 ## 页面

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fitan/fxkit/buildinfo"
 	"github.com/fitan/fxkit/config"
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/logx"
@@ -53,6 +54,11 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 			return fmt.Errorf("otel.service_name is empty and app.name is empty")
 		}
 		cfg.ServiceName = strings.TrimSpace(app.Name)
+	}
+	if strings.TrimSpace(cfg.ServiceVersion) == "" {
+		// 与 service_name 回退 app.name 一致：未显式配置时用 -ldflags 注入的构建版本
+		// （未注入时为 "dev"），避免资源上完全没有 service.version。
+		cfg.ServiceVersion = strings.TrimSpace(buildinfo.Version)
 	}
 
 	ctx := context.Background()
@@ -170,6 +176,7 @@ func Setup(lc *di.Lifecycle, otelCfg *Config, app *config.App) error {
 	return nil
 }
 
+// newResource 构造带 service 名、版本、环境与主机信息的 OTel resource。
 func newResource(c Config) (*resource.Resource, error) {
 	return resource.New(context.Background(),
 		resource.WithAttributes(
@@ -183,6 +190,7 @@ func newResource(c Config) (*resource.Resource, error) {
 	)
 }
 
+// newTracerProvider 按 sampling 与 traces.exporter 构造带 batch 导出的 TracerProvider。
 func newTracerProvider(ctx context.Context, c Config, res *resource.Resource) (*sdktrace.TracerProvider, error) {
 	sampler, err := parseSampler(c.Sampling)
 	if err != nil {
@@ -212,6 +220,7 @@ func newTracerProvider(ctx context.Context, c Config, res *resource.Resource) (*
 	return sdktrace.NewTracerProvider(tpOpts...), nil
 }
 
+// newMeterProvider 按 metrics.exporter 构造带周期性 reader 的 MeterProvider。
 func newMeterProvider(ctx context.Context, c Config, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
 	mpOpts := []sdkmetric.Option{sdkmetric.WithResource(res)}
 
@@ -233,6 +242,7 @@ func newMeterProvider(ctx context.Context, c Config, res *resource.Resource) (*s
 	return sdkmetric.NewMeterProvider(mpOpts...), nil
 }
 
+// newLoggerProvider 按 logs.exporter 构造带 batch processor 的 LoggerProvider。
 func newLoggerProvider(ctx context.Context, c Config, res *resource.Resource) (*sdklog.LoggerProvider, error) {
 	lpOpts := []sdklog.LoggerProviderOption{sdklog.WithResource(res)}
 
@@ -262,6 +272,7 @@ func otlpUsesHTTP(c Config) bool {
 	return strings.EqualFold(c.Protocol, "http")
 }
 
+// newTraceExporter 按 protocol 构造 OTLP HTTP 或 gRPC 的 trace exporter。
 func newTraceExporter(ctx context.Context, c Config) (sdktrace.SpanExporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
 	if otlpUsesHTTP(c) {
@@ -278,6 +289,7 @@ func newTraceExporter(ctx context.Context, c Config) (sdktrace.SpanExporter, err
 	return otlptracegrpc.New(ctx, opts...)
 }
 
+// newMetricExporter 按 protocol 构造 OTLP HTTP 或 gRPC 的 metric exporter。
 func newMetricExporter(ctx context.Context, c Config) (sdkmetric.Exporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
 	if otlpUsesHTTP(c) {
@@ -294,6 +306,7 @@ func newMetricExporter(ctx context.Context, c Config) (sdkmetric.Exporter, error
 	return otlpmetricgrpc.New(ctx, opts...)
 }
 
+// newLogExporter 按 protocol 构造 OTLP HTTP 或 gRPC 的 log exporter。
 func newLogExporter(ctx context.Context, c Config) (sdklog.Exporter, error) {
 	ep := normalizeOTLPEndpoint(c.Endpoint)
 	if otlpUsesHTTP(c) {
@@ -353,6 +366,7 @@ func parseSampler(s string) (sdktrace.Sampler, error) {
 	}
 }
 
+// parseRatio 解析 "key:ratio" 形式的字符串，ratio 须在 [0,1] 内。
 func parseRatio(s string) (float64, error) {
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {

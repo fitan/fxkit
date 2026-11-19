@@ -24,6 +24,7 @@ func extractDBName(driver, dsn string) string {
 	}
 }
 
+// extractPostgresDBName 从 postgres URL 的 path 或 key=value 形式的 dbname 提取库名，失败返回 ""。
 func extractPostgresDBName(dsn string) string {
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 		if u, err := url.Parse(dsn); err == nil {
@@ -40,6 +41,7 @@ func extractPostgresDBName(dsn string) string {
 	return ""
 }
 
+// extractMySQLDBName 用 mysql.ParseDSN 解析库名，解析失败返回 ""。
 func extractMySQLDBName(dsn string) string {
 	// 交给驱动解析：手写按第一个 '/' 切分会把
 	// user:pass@unix(/tmp/mysql.sock)/dbname 解析成 tmp/mysql.sock)/dbname。
@@ -57,6 +59,9 @@ func prepareDSN(driver, dsn string) string {
 	return ensureSQLitePragmas(dsn)
 }
 
+// ensureSQLitePragmas 为 sqlite DSN 补齐 _busy_timeout / _journal_mode / _fk 默认值，已有值不覆盖。
+//
+// query 无法解析时原样返回 DSN。
 func ensureSQLitePragmas(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {

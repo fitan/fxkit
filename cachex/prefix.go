@@ -11,10 +11,13 @@ import (
 type prefixedCache struct {
 	sfHolder
 
+	// prefix 是统一添加的键前缀。
 	prefix string
-	cache  Cache
+	// cache 是被包装的底层缓存。
+	cache Cache
 }
 
+// wrapPrefix 在 prefix 非空且 cache 非 nil 时用 prefixedCache 包装，否则原样返回 cache。
 func wrapPrefix(prefix string, cache Cache) Cache {
 	if prefix == "" || cache == nil {
 		return cache
@@ -25,26 +28,32 @@ func wrapPrefix(prefix string, cache Cache) Cache {
 	}
 }
 
+// k 返回加上前缀后的完整 key。
 func (p *prefixedCache) k(key string) string {
 	return p.prefix + key
 }
 
+// unk 去掉 key 的前缀。
 func (p *prefixedCache) unk(key string) string {
 	return strings.TrimPrefix(key, p.prefix)
 }
 
+// Get 给 key 加前缀后读取底层缓存。
 func (p *prefixedCache) Get(ctx context.Context, key string) ([]byte, error) {
 	return p.cache.Get(ctx, p.k(key))
 }
 
+// Set 给 key 加前缀后写入底层缓存。
 func (p *prefixedCache) Set(ctx context.Context, key string, val []byte, ttl time.Duration) error {
 	return p.cache.Set(ctx, p.k(key), val, ttl)
 }
 
+// Delete 给 key 加前缀后删除底层缓存。
 func (p *prefixedCache) Delete(ctx context.Context, key string) error {
 	return p.cache.Delete(ctx, p.k(key))
 }
 
+// MGet 给所有 key 加前缀后批量读取，并把结果 key 还原为不带前缀的形式；空入参返回空 map。
 func (p *prefixedCache) MGet(ctx context.Context, keys ...string) (map[string][]byte, error) {
 	if len(keys) == 0 {
 		return map[string][]byte{}, nil
@@ -64,6 +73,7 @@ func (p *prefixedCache) MGet(ctx context.Context, keys ...string) (map[string][]
 	return out, nil
 }
 
+// MSet 给所有 key 加前缀后批量写入；空入参直接返回 nil。
 func (p *prefixedCache) MSet(ctx context.Context, pairs map[string][]byte, ttl time.Duration) error {
 	if len(pairs) == 0 {
 		return nil

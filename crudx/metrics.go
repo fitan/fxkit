@@ -16,12 +16,17 @@ import (
 //
 // 使用全局 MeterProvider（otelx 安装）；未启用 OTel 时是 noop。
 var (
+	// listMetricsOnce 保证列表指标只注册一次。
 	listMetricsOnce sync.Once
-	listDuration    metric.Float64Histogram
-	listRows        metric.Int64Histogram
-	listErrors      metric.Int64Counter
+	// listDuration 记录 crudx.list.duration（单次 List 耗时，单位秒）。
+	listDuration metric.Float64Histogram
+	// listRows 记录 crudx.list.rows（单次 List 返回的行数）。
+	listRows metric.Int64Histogram
+	// listErrors 统计 crudx.list.errors（按错误原因码）。
+	listErrors metric.Int64Counter
 )
 
+// initListMetrics 用全局 MeterProvider 惰性创建列表查询指标，仅执行一次。
 func initListMetrics() {
 	listMetricsOnce.Do(func() {
 		m := otel.Meter("github.com/fitan/fxkit/crudx")
@@ -41,6 +46,7 @@ func initListMetrics() {
 	})
 }
 
+// recordList 记录一次 List 的耗时、返回行数与错误原因。
 func recordList(ctx context.Context, d time.Duration, rows int, err error) {
 	initListMetrics()
 	result := "ok"

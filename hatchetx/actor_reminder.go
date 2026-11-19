@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/rest"
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
@@ -19,25 +18,39 @@ import (
 //   - 错过的调度不会补跑
 //   - Upsert 为 true 时，替换同一 workflow 和 Name 下已存在的定时提醒
 type CreateReminderInput struct {
+	// WorkflowName 是目标 workflow 名称，必填。
 	WorkflowName string // actor / standalone task 名称
-	Name         string // cron 触发器名称；默认 reminderName-<len>-actorId（无歧义）
-	ActorType    string
-	ActorID      string // 必填；作为 actorId 写入输入，用于并发
+	// Name 是 cron 触发器名称；为空时由 ReminderName 与 ActorID 生成。
+	Name string // cron 触发器名称；默认 reminderName-<len>-actorId（无歧义）
+	// ActorType 是可选的目标 actor 类型名；非空时写入 payload 与 metadata fxkit_actor_type。
+	ActorType string
+	// ActorID 是目标 actor 实例 id，必填；写入输入作为并发键。
+	ActorID string // 必填；作为 actorId 写入输入，用于并发
+	// ReminderName 是提醒名称，必填；写入 payload 与 metadata fxkit_reminder，并参与默认 cron 名。
 	ReminderName string
-	Period       string         // 标准 cron（例如 "*/15 * * * * *"）或 @hourly、@daily
-	Data         string         // 可选载荷数据
-	Metadata     map[string]any // 可选 Hatchet cron metadata
-	Input        map[string]any // 可选完整 cron 输入；默认使用 ReminderPayload 字段
-	Upsert       bool           // 为 true 时替换同名已存在的 cron
+	// Period 是标准 cron 表达式或 @hourly、@daily 等别名。
+	Period string // 标准 cron（例如 "*/15 * * * * *"）或 @hourly、@daily
+	// Data 是投递给 workflow 的可选载荷数据。
+	Data string // 可选载荷数据
+	// Metadata 是可选 Hatchet cron metadata，与 fxkit_* 键合并（同名键覆盖）。
+	Metadata map[string]any // 可选 Hatchet cron metadata
+	// Input 是可选完整 cron 输入；为 nil 时用 ReminderPayload 字段构造。
+	Input map[string]any // 可选完整 cron 输入；默认使用 ReminderPayload 字段
+	// Upsert 为 true 时替换同名已存在的 cron（先建后删，避免无提醒窗口）。
+	Upsert bool // 为 true 时替换同名已存在的 cron
 }
 
 // ReminderPayload 是投递给 actor 定时提醒 workflow 的默认输入结构。
 // 内嵌 [ActorRef]，以便设置目标 actor 的并发键（input.actorId）。
 type ReminderPayload struct {
+	// ActorRef 提供目标 actor 的 actorId，用于并发键 input.actorId。
 	ActorRef
-	ActorType    string `json:"actorType"`
+	// ActorType 是目标 actor 的类型名，原样投递。
+	ActorType string `json:"actorType"`
+	// ReminderName 是提醒名称，原样投递。
 	ReminderName string `json:"reminderName"`
-	Data         string `json:"data,omitempty"`
+	// Data 是可选的自定义载荷；为空时 JSON 中省略。
+	Data string `json:"data,omitempty"`
 }
 
 // CreateReminder 给 workflow 挂上周期性 Hatchet cron（类似定时提醒的滴答）。
@@ -221,14 +234,8 @@ func DeleteReminderByName(ctx context.Context, client *Client, workflowName, cro
 // DeleteReminder 按 id 删除 Hatchet cron。
 // 正在进行的运行不会被取消；只是停止后续的 cron 触发。
 //
-// 已知 SDK 问题：Hatchet 服务端对 DELETE 返回 204 No Content，而 Go SDK（截至
-// v0.116.x）的 CronsClient.Delete 只接受 200，会把成功当失败返回。
-//
-// 这里**不解析错误文本**（"got status 204" 是 SDK 内部字符串，升级即失效），
-// 而是回读确认：
-//   - 列表中已不存在 → 删除成功
-//   - 列表中仍存在 → 返回原始错误
-//   - 列表被截断/查询失败 → 无法确认 → 返回错误（不假装成功）
+// 服务端对 DELETE 返回 204 No Content；Go SDK 自 v0.120.7 起接受任意 2xx，
+// 因此直接以 SDK 返回值为准，不再需要回读兜底。
 func DeleteReminder(ctx context.Context, client *Client, cronID string) error {
 	if client == nil || !client.Enabled() || client.Crons() == nil {
 		return fmt.Errorf("hatchetx: client disabled")
@@ -237,73 +244,10 @@ func DeleteReminder(ctx context.Context, client *Client, cronID string) error {
 	if cronID == "" {
 		return fmt.Errorf("hatchetx: cron id is required")
 	}
-
-	delErr := client.Crons().Delete(ctx, cronID)
-	if delErr == nil {
-		return nil
+	if err := client.Crons().Delete(ctx, cronID); err != nil {
+		return fmt.Errorf("hatchetx: delete reminder: %w", err)
 	}
-
-	// 删除返回错误：可能是 SDK 对 204 的误报，也可能真的失败。回读确认。
-	for attempt := 0; attempt < deleteVerifyAttempts; attempt++ {
-		state, verifyErr := cronState(ctx, client, cronID)
-		switch state {
-		case cronAbsent:
-			return nil
-		case cronPresent:
-			return fmt.Errorf("hatchetx: delete reminder: %w", delErr)
-		}
-		if verifyErr != nil {
-			return fmt.Errorf("hatchetx: delete reminder: %w (verify: %w)", delErr, verifyErr)
-		}
-		if attempt == deleteVerifyAttempts-1 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(deleteVerifyInterval):
-		}
-	}
-	return fmt.Errorf("hatchetx: delete reminder: %w (could not verify deletion)", delErr)
-}
-
-const (
-	deleteVerifyAttempts = 5
-	deleteVerifyInterval = 200 * time.Millisecond
-)
-
-type cronPresence int
-
-const (
-	cronUnknown cronPresence = iota
-	cronAbsent
-	cronPresent
-)
-
-// cronState 通过列表确认 cron 是否存在。
-//
-// 用 List 而不是 Get：SDK 的 Get 对已删除的记录仍可能返回 200。
-// 列表被 Limit 截断时，「没找到」不能当作「已删除」——否则 cron 总数超过
-// Limit 时会假成功（真正没删掉却报告成功）。
-func cronState(ctx context.Context, client *Client, cronID string) (cronPresence, error) {
-	limit := int64(200)
-	res, err := client.Crons().List(ctx, rest.CronWorkflowListParams{Limit: &limit})
-	if err != nil {
-		return cronUnknown, err
-	}
-	if res == nil || res.Rows == nil {
-		return cronUnknown, nil
-	}
-	rows := *res.Rows
-	for _, row := range rows {
-		if row.Metadata.Id == cronID {
-			return cronPresent, nil
-		}
-	}
-	if int64(len(rows)) >= limit {
-		return cronUnknown, nil
-	}
-	return cronAbsent, nil
+	return nil
 }
 
 // reminderCronName 构造无歧义的 cron 名。
@@ -314,6 +258,7 @@ func reminderCronName(reminder, actorID string) string {
 	return fmt.Sprintf("%s-%d-%s", reminder, len(actorID), actorID)
 }
 
+// toInputMap 把 v 经 JSON 往返转换为 map[string]any。
 func toInputMap(v any) (map[string]any, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -326,6 +271,7 @@ func toInputMap(v any) (map[string]any, error) {
 	return m, nil
 }
 
+// cloneMap 返回 map 的浅拷贝，便于安全覆盖单个键。
 func cloneMap(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in)+1)
 	for k, v := range in {

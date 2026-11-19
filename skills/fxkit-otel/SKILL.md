@@ -44,7 +44,23 @@ otel:
 - 出站：`reqx` 默认经 `otelhttp` 传播（见 `fxkit-reqx`）。
 - Hatchet：SDK `Run()` 打 producer span；`hatchetx` 在 `hatchet.otel`（默认 true）时给 worker 挂 middleware（`hatchet.start_step_run`），复用本包 TracerProvider。见 `fxkit-hatchet`。
 - Runtime metrics 挂在全局 MeterProvider，随 shutdown 结束。
+- `service_version` 留空时回退 `buildinfo.Version`（未注入 `-ldflags` 时为 `dev`）。
 - Endpoint 带 `http://` / `https://` 时会规范化为 `host:port`。
+
+## 业务指标与 span
+
+各子系统向同一个 MeterProvider 上报业务指标（未启用 otel 时是 noop）。完整清单见 README §13，常看的：
+
+| 关注点 | 指标 |
+|---|---|
+| 消息可靠性 | `outbox.publish.results`、`outbox.event.lag`、`outbox.inbox.results{result=busy}` |
+| 幂等 | `idempotency.requests{result=replayed\|conflict}` |
+| 鉴权 | `authz.enforce.results`、`authz.jwks.fetch`、`authz.casbin.reload` |
+| 资金 | `payment.transitions`、`ledger.posts`、`reconciliation.diffs` |
+| 出站调用 | `reqx.requests{result=no_endpoints}`、`reqx.attempts` |
+| 服务发现 | `consulx.register.ttl`、`consulx.lock.lost` |
+
+消费 outbox 事件时，能拿到事件 metadata 就用 `outbox.ExtractTrace(ctx, metadata)` 续接发布方链路。
 
 ## 采样字符串
 

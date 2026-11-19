@@ -20,6 +20,7 @@ import (
 // 通过 [ProvidePublisher] 注入实现（当 hatchet.outbox_publisher 为 true 时
 // Hatchet 由 hatchetx 提供）。最后一个非 nil 的 publisher 生效。
 type EventPublisher interface {
+	// PublishEvent 投递一条消息；返回 nil 后 relay 会把该事件标记为 published。
 	PublishEvent(ctx context.Context, pubsubName, topicName string, data []byte, metadata map[string]string) error
 }
 
@@ -40,24 +41,34 @@ func ProvidePublisher(fn any) di.Option {
 
 // Relay 轮询 outbox 表并投递 pending 事件。
 type Relay struct {
-	client    *gormx.Client
+	// client 是 outbox 表所在的数据库客户端。
+	client *gormx.Client
+	// publisher 是当前生效的投递实现，由 pubMu 保护。
 	publisher EventPublisher
-	cfg       Config
+	// cfg 是 relay 使用的配置副本（[NewRelay] 时拷贝）。
+	cfg Config
 
 	// pubMu 只保护 publisher。与下面生命周期用的 mu 分开：
 	// 前者是低频读写，后者保护 start/stop 竞态。
 	pubMu sync.RWMutex
 
-	mu     sync.Mutex
+	// mu 保护 cancel 与 wg，避免 Start/Stop 竞态。
+	mu sync.Mutex
+	// cancel 是轮询循环的取消函数；nil 表示未启动。
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// wg 等待轮询 goroutine 退出。
+	wg sync.WaitGroup
+	// notify 用于 [Relay.Notify] 非阻塞地唤醒轮询循环，容量为 1。
 	notify chan struct{}
 }
 
 // NewRelayParams 是 [NewRelay] 的 Fx 友好构造函数入参。
 type NewRelayParams struct {
-	Client     *gormx.Client
-	Outbox     *Config
+	// Client 是 outbox 表的数据库客户端。
+	Client *gormx.Client
+	// Outbox 是 outbox 配置；nil 时使用 [Config] 零值。
+	Outbox *Config
+	// Publishers 是 fx group 中的候选 publisher；[NewRelay] 取最后一个非 nil 的。
 	Publishers []EventPublisher
 }
 
@@ -79,6 +90,7 @@ func NewRelay(p NewRelayParams) *Relay {
 	}
 }
 
+// pickPublisher 返回列表中最后一个非 nil 的 publisher。
 func pickPublisher(pubs []EventPublisher) EventPublisher {
 	var pub EventPublisher
 	for _, p := range pubs {
@@ -110,6 +122,7 @@ func (r *Relay) Publisher() EventPublisher {
 	return r.publisher
 }
 
+// Notify 非阻塞地唤醒轮询循环立即处理一批（供写入方触发）。
 func (r *Relay) Notify() {
 	if r == nil {
 		return
@@ -122,8 +135,10 @@ func (r *Relay) Notify() {
 
 // batchResult 是一次 [Relay.processBatch] 调用的结果。
 type batchResult struct {
+	// Published 是本次被标记为 published 的条数。
 	Published int
-	Claimed   int
+	// Claimed 是本次认领的条数。
+	Claimed int
 	// Failed 是本次「领取后投递失败」的条数。用于判断能否立刻继续 drain：
 	// 只有真正有进展（成功发布过）才值得立刻进入下一轮，
 	// 否则会形成「批量领取 → 全部投递失败 → 立刻重领」的 CPU 热循环。
@@ -137,6 +152,8 @@ func (r *Relay) ProcessBatch(ctx context.Context) (int, error) {
 	return res.Published, err
 }
 
+// processBatch 认领一批事件并按配置串行、并发或按 partition_field 分组投递。
+// 返回本次的发布/认领/失败计数；状态回写错误会合并返回。
 func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 	if r == nil || r.client == nil || !r.client.Enabled() {
 		return batchResult{}, fmt.Errorf("outbox: relay has no configured database")
@@ -154,6 +171,7 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 		Limit:       batchSize,
 		StaleBefore: staleBefore,
 	})
+	recordClaim(ctx, err)
 	if err != nil {
 		return batchResult{}, err
 	}
@@ -235,9 +253,12 @@ func (r *Relay) processBatch(ctx context.Context) (batchResult, error) {
 	return out, errors.Join(markErrs...)
 }
 
+// publishOutcome 是 [Relay.publishOne] 对单条事件的投递结果。
 type publishOutcome struct {
+	// published 为 true 表示已投递并成功标记为 published。
 	published bool
-	failed    bool
+	// failed 为 true 表示本次投递失败（已按重试策略回写状态）。
+	failed bool
 	// markErr 非 nil 表示消息已投递、但状态未能标记成功（会在租约过期后重投）。
 	markErr error
 }
@@ -397,6 +418,7 @@ func (r *Relay) publishOne(ctx context.Context, pub EventPublisher, ev OutboxEve
 	return out
 }
 
+// publishMetadata 组装投递元数据：幂等键与 W3C traceparent；为空时返回 nil。
 func publishMetadata(ctx context.Context, ev OutboxEvent) map[string]string {
 	meta := make(map[string]string, 2)
 	if key := idempotencyKeyValue(ev); key != "" {
@@ -410,6 +432,7 @@ func publishMetadata(ctx context.Context, ev OutboxEvent) map[string]string {
 	return meta
 }
 
+// idempotencyKeyValue 返回事件的幂等键，未设置时返回空串。
 func idempotencyKeyValue(ev OutboxEvent) string {
 	if ev.IdempotencyKey == nil {
 		return ""
@@ -424,6 +447,8 @@ func terminalWriteContext(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
+// heartbeat 在批次处理期间周期刷新租约行的 locked_at，避免被其他副本重新认领。
+// interval 取 claimTimeout/3（下限 1s），ctx 结束时退出。
 func (r *Relay) heartbeat(ctx context.Context, leaseID string, claimTimeout time.Duration) {
 	if leaseID == "" {
 		return
@@ -440,9 +465,14 @@ func (r *Relay) heartbeat(ctx context.Context, leaseID string, claimTimeout time
 			return
 		case <-ticker.C:
 			now := time.Now().UTC()
-			if err := r.client.Conn(ctx).Model(&OutboxEvent{}).
+			err := r.client.Conn(ctx).Model(&OutboxEvent{}).
 				Where("lease_id = ? AND status = ?", leaseID, StatusProcessing).
-				Update("locked_at", now).Error; err != nil && !errors.Is(err, context.Canceled) {
+				Update("locked_at", now).Error
+			if errors.Is(err, context.Canceled) {
+				continue
+			}
+			recordHeartbeat(ctx, err)
+			if err != nil {
 				slog.WarnContext(ctx, "outbox: lease heartbeat failed",
 					"lease_id", leaseID, "error", err,
 				)
@@ -451,6 +481,7 @@ func (r *Relay) heartbeat(ctx context.Context, leaseID string, claimTimeout time
 	}
 }
 
+// markPublished 以 lease 为 CAS 条件把事件标记为 published；返回受影响行数。
 func (r *Relay) markPublished(ctx context.Context, ev OutboxEvent) (int64, error) {
 	now := time.Now().UTC()
 	res := r.client.Conn(ctx).Model(&OutboxEvent{}).
@@ -465,6 +496,8 @@ func (r *Relay) markPublished(ctx context.Context, ev OutboxEvent) (int64, error
 	return res.RowsAffected, res.Error
 }
 
+// markFailed 以 lease 为 CAS 条件递增 attempts，并按 maxRetries 决定回到 pending 还是 failed，
+// 同时写入 last_error 与下次重试时间；返回受影响行数。
 func (r *Relay) markFailed(ctx context.Context, ev OutboxEvent, maxRetries int, pubErr error) (int64, error) {
 	// attempts 只在真正投递失败时递增：租约过期被重新认领不算一次业务重试。
 	// max_retries 仍是「总失败次数上限」：0 = 第一次失败就落 failed。
@@ -489,7 +522,7 @@ func (r *Relay) markFailed(ctx context.Context, ev OutboxEvent, maxRetries int, 
 	res := r.client.Conn(ctx).Exec(
 		`UPDATE outbox_events SET
 			status = CASE WHEN attempts + 1 >= ? THEN ? ELSE ? END,
-			next_attempt_at = CASE WHEN attempts + 1 >= ? THEN NULL ELSE ` + nextExpr + ` END,
+			next_attempt_at = CASE WHEN attempts + 1 >= ? THEN NULL ELSE `+nextExpr+` END,
 			attempts = attempts + 1,
 			last_error = ?,
 			locked_at = NULL,
@@ -586,6 +619,8 @@ func (r *Relay) Run(ctx context.Context) {
 	r.runLoop(runCtx, interval)
 }
 
+// runLoop 周期执行 processBatch，直到 runCtx 结束或收到 Notify。
+// 满批且确有发布进展时才立即继续，避免全部失败时的热循环。
 func (r *Relay) runLoop(runCtx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

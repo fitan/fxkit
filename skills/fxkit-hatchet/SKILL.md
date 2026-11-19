@@ -255,6 +255,8 @@ task := client.NewStandaloneTask("send-email", sendEmailFn,
 | 多消费者扇出 | **不同** task 名订阅同一个 event key |
 | 消费幂等 | `inbox.Once`：至少一次投递。已完成返回 nil；还在处理返回 `outbox.ErrInboxBusy`，交给 Hatchet 重试 |
 
+可观测：relay 发布打 `outbox.publish` span；`inbox.Once` 上报 `outbox.inbox.results{result=ok\|skipped\|busy\|error}` 与 `outbox.inbox.duration`。消费端能拿到事件 metadata 时，用 `outbox.ExtractTrace(ctx, metadata)` 续接发布方链路。
+
 ### 生产（事务安全）
 
 ```go

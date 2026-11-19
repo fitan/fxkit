@@ -20,6 +20,7 @@ const DefaultActorConcurrencyExpr = "input.actorId"
 // ActorRef 必须被匿名嵌入到 actor 命令载荷中，使并发 Expression "input.actorId" 生效。
 // 嵌入时不得再给它 json 名字（例如 `json:"ref"`），否则 actorId 会被嵌套。
 type ActorRef struct {
+	// ActorID 是 actor 实例 id，作为 Hatchet 并发键 input.actorId。
 	ActorID string `json:"actorId"`
 }
 
@@ -34,6 +35,7 @@ func (a ActorRef) ActorRefValue() ActorRef { return a }
 // 它要求载荷提供 ActorRef，从而在编译期排除 map、raw JSON、任意字段等
 // 无法保证顶层 actorId 的输入；NewActor 还会在启动期校验 JSON 形状。
 type ActorInput interface {
+	// ActorRefValue 返回载荷顶层携带的 [ActorRef]。
 	ActorRefValue() ActorRef
 }
 
@@ -46,17 +48,24 @@ type ActorHandler[In, Out any] func(ctx context.Context, in In) (Out, error)
 // 每个 actorId 一个队列，以 MaxRuns=1 和 GROUP_ROUND_ROBIN 处理。
 // 它不提供粘性 worker，也不提供内存内 actor 激活。
 type Actor[In, Out any] struct {
-	name    string
+	// name 是 Hatchet workflow / task 名称。
+	name string
+	// handler 是业务处理器（已包装运行指标记录）。
 	handler ActorHandler[In, Out]
-	opts    actorOptions
+	// opts 是并发、描述等选项。
+	opts actorOptions
 	// extract 从已约束的 ActorInput 中提取 actorId；NewActor 注入。
 	extract func(In) string
 }
 
+// actorOptions 是 [NewActor] 解析后的选项。
 type actorOptions struct {
-	description     string
+	// description 是 Hatchet workflow 描述。
+	description string
+	// concurrencyExpr 是 Hatchet CEL 并发键表达式，默认为 input.actorId。
 	concurrencyExpr string
-	maxRuns         int32
+	// maxRuns 是并发 group 的最大并行数，默认为 1。
+	maxRuns int32
 	// actorIDRequired 为 true 时，Call/CallAsync 强制校验输入里有 actorId。
 	//
 	// 默认：使用内置并发表达式时为 true；用 WithActorConcurrencyExpr 覆盖后为 false
@@ -200,6 +209,7 @@ func (a *Actor[In, Out]) Register(client *Client) ([]WorkflowBase, error) {
 	return []WorkflowBase{task}, nil
 }
 
+// requiresActorID 报告 actor 是否要求输入带 actorId；nil 接收者返回 true。
 func (a *Actor[In, Out]) requiresActorID() bool {
 	if a == nil {
 		return true
@@ -207,6 +217,7 @@ func (a *Actor[In, Out]) requiresActorID() bool {
 	return a.opts.actorIDRequired
 }
 
+// actorIDCheckValue 是启动期校验 JSON 形状时填入的哨兵 actorId。
 const actorIDCheckValue = "fxkit-actor-id-check"
 
 // validateActorInput 在启动期校验 actor 输入类型：
@@ -271,6 +282,7 @@ func embeddedJSONName(tag reflect.StructTag) string {
 	return t
 }
 
+// extractActorID 用 actor 的提取函数取出并去除首尾空白的 actorId；nil actor 或未设置提取函数时返回 ""。
 func (a *Actor[In, Out]) extractActorID(in In) string {
 	if a == nil || a.extract == nil {
 		return ""
@@ -278,6 +290,7 @@ func (a *Actor[In, Out]) extractActorID(in In) string {
 	return strings.TrimSpace(a.extract(in))
 }
 
+// validateActorID 在不要求 actorId 时直接通过，否则要求提取结果非空。
 func (a *Actor[In, Out]) validateActorID(in In) error {
 	if !a.requiresActorID() {
 		return nil

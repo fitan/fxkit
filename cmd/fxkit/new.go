@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// newCmd 构建 new 子命令：在当前 monorepo 的 services/<name>（或 --out）渲染 templates/service，
+// 并在仓库根目录执行 go mod tidy（--skip-tidy 可跳过）。
 func newCmd() *cobra.Command {
 	var (
 		minimal  bool
@@ -80,6 +82,7 @@ so --out ./internal/api generates "example.com/app/internal/api/internal/hello"
 	return cmd
 }
 
+// refuseFxkitLibrary 阻止把服务生成进 fxkit 库仓库本身（未显式指定 --out 时）。
 func refuseFxkitLibrary(modulePath, outDir string) error {
 	if outDir == "" && modulePath == "github.com/fitan/fxkit" {
 		return fmt.Errorf("refusing to add a service to the fxkit library repo; run `fxkit init <name>` first (or pass --out)")

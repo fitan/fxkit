@@ -8,7 +8,9 @@ import (
 
 // Versioned 是乐观锁模型需要实现的接口。
 type Versioned interface {
+	// GetVersion 返回当前记录的 version 列值。
 	GetVersion() int64
+	// SetVersion 由 GORM 在查询/更新后写回 version 列。
 	SetVersion(int64)
 }
 

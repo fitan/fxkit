@@ -14,12 +14,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// mergedSpec 缓存 base YAML 与 live Huma spec 的合并结果（YAML 与 JSON 各一份）。
 type mergedSpec struct {
-	mu       sync.Mutex
+	// mu 保护各缓存字段；合并与缓存写入都在其临界区内完成。
+	mu sync.Mutex
+	// baseYAML 是调用方提供的静态 base 规范；为空时输出只含 Huma spec。
 	baseYAML []byte
-	api      huma.API
-	yaml     []byte
-	json     []byte
+	// api 是当前生效的 Huma API；为 nil 时直接输出 baseYAML。
+	api huma.API
+	// yaml 是合并后的 YAML 缓存；非 nil 即命中。
+	yaml []byte
+	// json 是合并后的 JSON 缓存；非 nil 即命中。
+	json []byte
 }
 
 // bytes 返回合并后的 YAML；成功结果缓存，失败不缓存（避免一次抖动永久 500）。
@@ -75,8 +81,11 @@ func (m *mergedSpec) jsonBytes() ([]byte, error) {
 
 // RouteOptions 控制文档挂载路径与 Scalar 资源。
 type RouteOptions struct {
-	BasePath  string
+	// BasePath 挂载前缀（例如 "/api"）；默认空表示直接挂在根路径，会规范化为以 "/" 开头且无尾斜杠。
+	BasePath string
+	// ScalarURL Scalar UI 脚本地址；空值回退到默认的 jsdelivr CDN。
 	ScalarURL string
+	// ScalarSRI 可选的 Subresource Integrity hash（如 "sha384-..."）；空表示不校验。
 	ScalarSRI string
 }
 
@@ -157,6 +166,7 @@ func registerMerged(i di.Injector, baseYAML []byte) {
 	server.ProvideRoutes(mergedRoutesFor(i, baseYAML)...)(i)
 }
 
+// mergedRoutesFor 从容器读取 Huma API 与 docs 配置，生成合并后的文档路由。
 func mergedRoutesFor(i di.Injector, baseYAML []byte) []server.Route {
 	api, _ := di.Invoke[huma.API](i)
 	cfg, _ := di.Invoke[*Config](i)

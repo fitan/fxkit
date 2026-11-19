@@ -68,16 +68,19 @@ func New(c *Config) (*Client, error) {
 	if pool == nil {
 		return nil, nil
 	}
-	return &Client{pool: pool, autoMigrate: cfg.AutoMigrate}, nil
+	return &Client{pool: pool, autoMigrate: cfg.AutoMigrate, driver: cfg.Driver}, nil
 }
 
 // otelsql.Register 每次调用都会占用一个 database/sql 驱动槽（全局上限 1000）。
 // 同一进程内反复 New（测试、多库实例）会耗尽槽位，因此按 driver+db.name 复用。
 var (
-	otelDriverMu    sync.Mutex
+	// otelDriverMu 保护 otelDriverNames。
+	otelDriverMu sync.Mutex
+	// otelDriverNames 缓存 driver|dbName 到已注册 otelsql 驱动名的映射，避免重复注册耗尽驱动槽。
 	otelDriverNames = map[string]string{}
 )
 
+// registerOTelDriver 按 driver+dbName 复用 otelsql 驱动名，避免耗尽 database/sql 的驱动槽。
 func registerOTelDriver(driver, dbName string, opts []otelsql.Option) (string, error) {
 	key := driver + "|" + dbName
 	otelDriverMu.Lock()
@@ -93,6 +96,7 @@ func registerOTelDriver(driver, dbName string, opts []otelsql.Option) (string, e
 	return name, nil
 }
 
+// openPool 用 otelsql 插桩驱动打开连接池并 Ping；driver/dsn 为空时返回 (nil, nil)。
 func openPool(c *Config) (*gorm.DB, error) {
 	if c == nil || c.Driver == "" || c.DSN == "" {
 		slog.Info("gormx disabled: db.driver/db.dsn not set")
@@ -192,10 +196,13 @@ func sqlDriverName(driver string) (string, error) {
 
 // slogAdapter 将 GORM 的 logger.Interface 转发到全局 slog handler。
 type slogAdapter struct {
-	level         slog.Level
+	// level 是输出阈值；低于它的日志被丢弃。
+	level slog.Level
+	// slowThreshold 是慢查询阈值，0 表示不输出慢查询告警。
 	slowThreshold time.Duration
 }
 
+// newSlogAdapter 按 db.log_level 构造 GORM logger，未知级别按 warn 处理。
 func newSlogAdapter(level string, slowThreshold time.Duration) logger.Interface {
 	var l slog.Level
 	switch strings.ToLower(strings.TrimSpace(level)) {
@@ -211,6 +218,7 @@ func newSlogAdapter(level string, slowThreshold time.Duration) logger.Interface 
 	return &slogAdapter{level: l, slowThreshold: slowThreshold}
 }
 
+// LogMode 返回切换级别后的新 adapter，不修改原实例。
 func (a *slogAdapter) LogMode(level logger.LogLevel) logger.Interface {
 	next := *a
 	switch level {
@@ -226,24 +234,30 @@ func (a *slogAdapter) LogMode(level logger.LogLevel) logger.Interface {
 	return &next
 }
 
+// Info 在级别允许时把 GORM 日志转发到 slog.InfoContext。
 func (a *slogAdapter) Info(ctx context.Context, msg string, data ...any) {
 	if slog.LevelInfo >= a.level {
 		slog.InfoContext(ctx, msg, data...)
 	}
 }
 
+// Warn 在级别允许时把 GORM 日志转发到 slog.WarnContext。
 func (a *slogAdapter) Warn(ctx context.Context, msg string, data ...any) {
 	if slog.LevelWarn >= a.level {
 		slog.WarnContext(ctx, msg, data...)
 	}
 }
 
+// Error 在级别允许时把 GORM 日志转发到 slog.ErrorContext。
 func (a *slogAdapter) Error(ctx context.Context, msg string, data ...any) {
 	if slog.LevelError >= a.level {
 		slog.ErrorContext(ctx, msg, data...)
 	}
 }
 
+// Trace 按 GORM logger 契约输出错误、慢查询与普通查询，ErrRecordNotFound 直接忽略。
+//
+// 仅在实际要输出时调用 fc() 格式化 SQL。
 func (a *slogAdapter) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
 	elapsed := time.Since(begin)
 	// fc() 会格式化整条 SQL；只在确定要输出时才调用，避免每条查询都做一次
@@ -355,6 +369,7 @@ var Module = di.Module("fxkit/gormx",
 
 // dbHealthChecker 实现 [server.HealthChecker]，对连接池做 Ping。
 type dbHealthChecker struct {
+	// client 是待 Ping 的连接池持有者。
 	client *Client
 }
 

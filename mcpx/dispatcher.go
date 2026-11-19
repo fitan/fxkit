@@ -15,12 +15,17 @@ import (
 // bufferRecorder 是可完全重置的 ResponseWriter（httptest.ResponseRecorder 的
 // wroteHeader 未导出，复用时会忽略第二次 WriteHeader）。
 type bufferRecorder struct {
-	header  http.Header
-	code    int
-	buf     bytes.Buffer
+	// header 是响应头，首次调用 Header 时惰性创建。
+	header http.Header
+	// code 是首个写入的状态码；未写入时为 0（按 200 处理）。
+	code int
+	// buf 缓存响应体。
+	buf bytes.Buffer
+	// flushed 标记是否发生过 Flush，用于识别流式（SSE）端点。
 	flushed bool
 }
 
+// Header 返回响应头集合，首次调用时惰性创建。
 func (r *bufferRecorder) Header() http.Header {
 	if r.header == nil {
 		r.header = make(http.Header)
@@ -28,12 +33,14 @@ func (r *bufferRecorder) Header() http.Header {
 	return r.header
 }
 
+// WriteHeader 只记录首个状态码。
 func (r *bufferRecorder) WriteHeader(code int) {
 	if r.code == 0 {
 		r.code = code
 	}
 }
 
+// Write 把响应体写入内部缓冲区，未写状态码时按 200 处理。
 func (r *bufferRecorder) Write(p []byte) (int, error) {
 	if r.code == 0 {
 		r.code = http.StatusOK
@@ -48,6 +55,7 @@ func (r *bufferRecorder) Write(p []byte) (int, error) {
 // 早期这里是空实现，结果是「看起来成功、内容是空的」。
 func (r *bufferRecorder) Flush() { r.flushed = true }
 
+// reset 清空状态码、Flush 标记、缓冲区与响应头，供池化复用。
 func (r *bufferRecorder) reset() {
 	r.code = 0
 	r.flushed = false
@@ -64,7 +72,9 @@ var recorderPool = sync.Pool{New: func() any { return &bufferRecorder{} }}
 // 它完全绕过外部网络 IO 和监听端口，直接构造内存级 HTTP 请求投递给当前微服务的 http.Handler (即 chi.Mux / Huma)。
 // 原生触发 Huma 完整的 Path/Query/Body 反序列化与严格字段校验规则。
 type InProcessDispatcher struct {
+	// handler 是进程内直通的 HTTP handler（通常是 chi.Mux）。
 	handler http.Handler
+	// headers 是转发时附带的固定请求头。
 	headers map[string]string
 }
 
@@ -76,6 +86,8 @@ func NewInProcessDispatcher(handler http.Handler, headers map[string]string) *In
 	}
 }
 
+// Dispatch 在内存中执行 tool 对应的 HTTP 请求并返回响应体。
+// 流式响应（发生过 Flush）或非 2xx 响应会返回错误。
 func (d *InProcessDispatcher) Dispatch(ctx context.Context, tool Tool, args map[string]any) (string, error) {
 	if d.handler == nil {
 		return "", fmt.Errorf("in-process handler is not set")

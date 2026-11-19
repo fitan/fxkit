@@ -14,8 +14,11 @@ import (
 
 // Message 是一条待提交后投递的 outbox 条目。
 type Message struct {
-	Pubsub  string
-	Topic   string
+	// Pubsub 是投递后端名；为空时 [Store.Enqueue] 默认 "hatchet"。
+	Pubsub string
+	// Topic 是投递目标（Hatchet event key）；为空时 Enqueue 返回错误。
+	Topic string
+	// Payload 是消息体；为空时 Enqueue 返回错误。
 	Payload []byte
 	// IdempotencyKey 可选地对生产端的 Enqueue 去重，
 	// 并作为投递 metadata 转发（[MetadataIdempotencyKey]）。
@@ -24,6 +27,7 @@ type Message struct {
 
 // Store 使用 [gormx.Client.Conn] 写入 outbox 行；存在外层事务时会加入该事务。
 type Store struct {
+	// client 是 outbox 表所在的数据库客户端。
 	client *gormx.Client
 }
 
@@ -137,6 +141,7 @@ func (s *Store) ListFailed(ctx context.Context, limit int) ([]OutboxEvent, error
 	return rows, nil
 }
 
+// purgeBatchSize 是 [Store.purgeWhere] 每批删除的行数。
 const purgeBatchSize = 1000
 
 // purgeWhere 按 id 分批删除，避免一次 DELETE 锁住大范围行（Postgres 不支持 DELETE LIMIT）。
@@ -216,10 +221,15 @@ func (s *Store) RequeueFailed(ctx context.Context, f RequeueFilter) (int64, erro
 // EnqueueTopicInput 是 [EnqueueTopicMsg] 的结构体形式。
 // Topic 是 Hatchet event key。PubsubName 为兼容 DB 而保留（默认 "hatchet"）。
 type EnqueueTopicInput[T any] struct {
-	Store          *Store
-	PubsubName     string
-	Topic          string
-	Msg            T
+	// Store 是写入 outbox 的存储；必须非 nil。
+	Store *Store
+	// PubsubName 为兼容 DB 而保留；空时由 [Store.Enqueue] 默认 "hatchet"。
+	PubsubName string
+	// Topic 是 Hatchet event key；入队前会去掉首尾空白。
+	Topic string
+	// Msg 会被序列化为 JSON 作为 payload。
+	Msg T
+	// IdempotencyKey 可选，用于生产端去重并作为 metadata 转发给消费端。
 	IdempotencyKey string
 }
 

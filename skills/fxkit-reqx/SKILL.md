@@ -54,6 +54,8 @@ resp, err := cli.R().SetContext(ctx).Get("/v1/users")
 3. **传输错误**或响应 **502 / 503 / 504** → 换下一端点重试（至多 `MaxFailover`）。
 4. 无 Consul 时可用 `Seeds` alone 跑通本地。
 
+可观测：每次逻辑请求上报 `reqx.requests{reqx.result=ok\|error\|no_endpoints}` 与 `reqx.attempts`（实际尝试的端点数），异常时优先看 `no_endpoints` 与 attempts 分布。
+
 依赖配置：`discovery.consul_address`（见 `fxkit-discovery` / config checklist）。ACL：`CONSUL_HTTP_TOKEN`。
 
 ## Typed OpenAPI client

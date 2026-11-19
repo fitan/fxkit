@@ -7,11 +7,15 @@ import (
 	"time"
 )
 
+// maxFieldDepth 是 q= 字段路径的最大段数（如 a.b.c）；更深的关联路径会被拒绝。
 const maxFieldDepth = 3
 
+// opToken 是操作符后缀到 [Operator] 的映射项。
 type opToken struct {
+	// suffix 是操作符在表达式中的字面量后缀，如 "="、".in:"。
 	suffix string
-	op     Operator
+	// op 是对应的操作符。
+	op Operator
 }
 
 // 更长、更具体的操作符必须排在前面。
@@ -143,6 +147,7 @@ func ParseQGroups(spec ListSpec, rawQs []string) ([]ConditionGroup, error) {
 	return groups, nil
 }
 
+// parseOneCondition 解析单个 q= 表达式，例如 "name=alice"、"id.in:1,2"、"deleted_at.isnull"。
 func parseOneCondition(raw string) (Condition, error) {
 	field, op, valueRaw, err := splitFieldOpValue(raw)
 	if err != nil {
@@ -163,6 +168,7 @@ func parseOneCondition(raw string) (Condition, error) {
 	return Condition{Field: field, Op: op, Values: values, RawQ: raw}, nil
 }
 
+// splitFieldOpValue 按 opTokens 中位置最靠前的操作符切分字段、操作符与原始值。
 func splitFieldOpValue(expr string) (field string, op Operator, valueRaw string, err error) {
 	bestIdx := -1
 	var bestTok opToken
@@ -191,6 +197,7 @@ func splitFieldOpValue(expr string) (field string, op Operator, valueRaw string,
 	return field, bestTok.op, valueRaw, nil
 }
 
+// parseValues 按操作符解析值：in / notin 用逗号分隔，= 用 | 分隔多值，isnull / notnull 无值。
 func parseValues(op Operator, valueRaw, raw string) ([]any, error) {
 	valueRaw = strings.TrimSpace(valueRaw)
 	switch op {
@@ -246,6 +253,7 @@ func parseValues(op Operator, valueRaw, raw string) ([]any, error) {
 	}
 }
 
+// splitList 按 sep 切分并跳过引号内的分隔符，丢弃空白项。
 func splitList(s string, sep byte) []string {
 	var parts []string
 	start := 0
@@ -277,6 +285,7 @@ func splitList(s string, sep byte) []string {
 	return parts
 }
 
+// parseLiteral 解析字面量：引号包裹的取引号内文本，"null" 转为 nil，其余保留原文。
 func parseLiteral(s string) (any, error) {
 	s = strings.TrimSpace(s)
 	// 带引号的字符串："hello"、'hello'
@@ -294,6 +303,7 @@ func parseLiteral(s string) (any, error) {
 	return s, nil
 }
 
+// isNumberLiteral 报告 s 是否为十进制数字面量（可带符号与一个小数点）。
 func isNumberLiteral(s string) bool {
 	if s == "" {
 		return false
@@ -323,6 +333,7 @@ func isNumberLiteral(s string) bool {
 	return hasDigit
 }
 
+// validateCondition 校验字段是否存在、值类型是否匹配、是否允许 ~ 以及 IN 值个数上限。
 func validateCondition(spec ListSpec, lim Limits, c *Condition) error {
 	fs, err := resolveFieldSpec(spec, c.Field)
 	if err != nil {
@@ -348,6 +359,7 @@ func validateCondition(spec ListSpec, lim Limits, c *Condition) error {
 	return nil
 }
 
+// validateValueTypes 按字段 Kind 就地转换 c.Values（多值 = 视为 in），类型不符返回 errInvalid。
 func validateValueTypes(c *Condition, fs FieldSpec) error {
 	if c.Op == OpIsNull || c.Op == OpNotNull {
 		return nil
@@ -430,6 +442,7 @@ func validateValueTypes(c *Condition, fs FieldSpec) error {
 	return nil
 }
 
+// stringValue 把字符串、整数、浮点或布尔转成字符串；其他类型返回 false。
 func stringValue(v any) (string, bool) {
 	switch x := v.(type) {
 	case string:
@@ -445,6 +458,7 @@ func stringValue(v any) (string, bool) {
 	}
 }
 
+// numericValue 返回 int64 或 float64 原值；其他类型返回 false。
 func numericValue(v any) (any, bool) {
 	switch x := v.(type) {
 	case int64, float64:
@@ -454,6 +468,7 @@ func numericValue(v any) (any, bool) {
 	}
 }
 
+// coerceNumber 把数值或数字字符串转换为 int64 / float64。
 func coerceNumber(v any) (any, bool) {
 	if n, ok := numericValue(v); ok {
 		return n, true
@@ -476,6 +491,7 @@ func coerceNumber(v any) (any, bool) {
 	return i, true
 }
 
+// coerceBool 把布尔或 "true"/"false" 字符串转换为 bool。
 func coerceBool(v any) (any, bool) {
 	switch x := v.(type) {
 	case bool:
@@ -491,6 +507,7 @@ func coerceBool(v any) (any, bool) {
 	return nil, false
 }
 
+// coerceTimeValueOK 校验时间值：数字放行，字符串交由 [validateTimeLiteral] 校验。
 func coerceTimeValueOK(v any) error {
 	switch x := v.(type) {
 	case int64, float64:
@@ -526,8 +543,10 @@ func validateTimeLiteral(s string) error {
 	return errInvalid
 }
 
+// errInvalid 是内部解析/校验失败时使用的哨兵错误（复用 strconv.ErrSyntax）。
 var errInvalid = strconv.ErrSyntax
 
+// resolveFieldSpec 按点号路径（最多三段）查 spec 中的 [FieldSpec]。
 func resolveFieldSpec(spec ListSpec, path string) (FieldSpec, error) {
 	parts := strings.Split(path, ".")
 	if len(parts) > maxFieldDepth {

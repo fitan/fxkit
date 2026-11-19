@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// invalidIdentRegexp 匹配工具名中的非法标识符字符，命中后替换为下划线。
 var invalidIdentRegexp = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
 // ParseOpenAPI 从 OpenAPI 3.0 或 3.1 YAML/JSON 字节流中提取所有 operations 并转为 []Tool。
@@ -100,6 +101,8 @@ func ParseHuma(api huma.API) ([]Tool, error) {
 	return ParseOpenAPI(b)
 }
 
+// extractOperation 把一个 OpenAPI operation 转换为 Tool：生成名称与描述、内联 schema、
+// 合并 path/query/header 参数与 requestBody，并记录每个参数的位置。
 func extractOperation(root map[string]any, method, path string, op map[string]any, parentParams []any) (Tool, error) {
 	// 1. 获取 Tool 标识名称 (Name)
 	name := ""

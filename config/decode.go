@@ -10,6 +10,7 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
+// unmarshalYAML 按 yaml tag 解码 path 处的配置；path 不存在时返回 nil 且不改动 out。
 func unmarshalYAML(k *koanf.Koanf, path string, out any) error {
 	if k == nil {
 		return fmt.Errorf("nil koanf")

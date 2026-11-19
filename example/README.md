@@ -71,14 +71,19 @@ cd example
 make tidy && make build
 make edge                 # Traefik + Consul + Redis（docker compose）
 make web-install          # 首次：安装 Nuxt 前端依赖
-make demo                 # SQLite catalog/storefront + Consul + Traefik + Redis
+make demo                 # PostgreSQL catalog/storefront + Consul + Traefik + Redis
 make web-dev              # 另开终端：Nuxt dev :3000，API 经 Traefik :8880
 make web-dev-direct       # 备用：Nuxt dev :3000，API 直连 8081/8082
 make verify               # 完整链路：2×catalog + storefront + Traefik；结束后服务继续跑
 make verify-local         # SQLite 单机端到端冒烟（不需要 Docker/Postgres/Consul）
-make demo-down            # 停掉 demo 的 catalog/storefront + Consul/Traefik/Redis
+make demo-down            # 停掉 demo 的 catalog/storefront + Postgres/Consul/Traefik/Redis
 make down                 # 停掉所有 catalog/storefront + Traefik
 ```
+
+`make demo` 使用 **PostgreSQL**（docker compose 的 `postgres` 服务，`fxkit/fxkit@127.0.0.1:5432`），数据保存在 `fxkit-postgres` volume。
+`make verify-local` 仍使用 SQLite，只作为“无 Docker/Postgres 依赖”的冒烟测试，不是 demo 数据路径。
+
+旧版 demo 的 `example/tmp/*.db` 不再被使用；如需清空 Postgres 数据，执行 `docker compose down -v` 后再 `make demo`。
 
 迁移：`make migrate-baseline` 生成 Atlas 基线，随后用 `make atlas-status/lint/apply`；详见 [`migrations/README.md`](migrations/README.md) 与 [`docs/migrations-atlas.md`](../docs/migrations-atlas.md)。
 

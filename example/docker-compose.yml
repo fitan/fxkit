@@ -1,6 +1,23 @@
 name: fxkit-example
 
 services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fxkit
+      POSTGRES_PASSWORD: fxkit
+      POSTGRES_DB: fxkit
+    ports:
+      - "5432:5432"
+    volumes:
+      - fxkit-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fxkit -d fxkit"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   consul:
     image: ${CONSUL_IMAGE:-docker.m.daocloud.io/hashicorp/consul:1.20}
     restart: unless-stopped
@@ -28,3 +45,6 @@ services:
     ports:
       - "6379:6379"
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+volumes:
+  fxkit-postgres:

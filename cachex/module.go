@@ -60,6 +60,7 @@ var Module = di.Module("fxkit/cachex",
 
 // cacheHealthChecker 实现 [server.HealthChecker]，对 Redis 做 PING。
 type cacheHealthChecker struct {
+	// cache 是被探测的缓存实现。
 	cache Cache
 }
 

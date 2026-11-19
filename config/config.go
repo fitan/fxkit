@@ -40,8 +40,11 @@ type Options struct {
 
 // Config 是运行时配置句柄。并发安全；用 [UnmarshalKey] / [Load] 解出自有段。
 type Config struct {
-	mu   sync.RWMutex
-	k    *koanf.Koanf
+	// mu 保护 k 的并发访问。
+	mu sync.RWMutex
+	// k 是已加载的配置树。
+	k *koanf.Koanf
+	// opts 是构造时的覆盖项；[Config.Watch] 用它判断是否长轮询 Consul。
 	opts Options
 }
 
@@ -66,6 +69,8 @@ func New(opts Options) (*Config, error) {
 	return &Config{k: k, opts: opts}, nil
 }
 
+// loadKoanf 按 本地 YAML → Consul KV → --port 覆盖 的顺序构建 koanf 实例。
+// Consul 地址与 config key 必须成对提供，否则返回错误。
 func loadKoanf(ctx context.Context, opts Options) (*koanf.Koanf, error) {
 	k := koanf.New(".")
 
@@ -114,6 +119,7 @@ func loadKoanf(ctx context.Context, opts Options) (*koanf.Koanf, error) {
 	return k, nil
 }
 
+// isConfigFileNotFound 报告 err 是否表示配置文件不存在。
 func isConfigFileNotFound(err error) bool {
 	return err != nil && (os.IsNotExist(err) || errors.Is(err, os.ErrNotExist))
 }

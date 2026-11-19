@@ -77,6 +77,7 @@ var Module = di.Module("fxkit/idempotency",
 	},
 )
 
+// runPurgeLoop 按 interval 周期调用 runPurgeOnce，直到 ctx 结束。
 func runPurgeLoop(ctx context.Context, store *DBStore, interval time.Duration, locker consulx.Locker) {
 	if interval <= 0 {
 		return
@@ -93,6 +94,7 @@ func runPurgeLoop(ctx context.Context, store *DBStore, interval time.Duration, l
 	}
 }
 
+// runPurgeOnce 删除过期幂等记录；有 Consul 锁时先抢锁，锁不可用时退化为单进程执行。
 func runPurgeOnce(ctx context.Context, store *DBStore, locker consulx.Locker) {
 	purge := func(ctx context.Context) error {
 		n, err := store.PurgeExpired(ctx, time.Now().UTC())

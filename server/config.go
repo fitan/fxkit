@@ -8,16 +8,23 @@ import (
 )
 
 const (
+	// defaultReadHeaderTimeout 是读取请求头的默认超时。
 	defaultReadHeaderTimeout = 30 * time.Second
-	defaultReadTimeout       = 60 * time.Second
-	defaultWriteTimeout      = 120 * time.Second
-	defaultIdleTimeout       = 120 * time.Second
+	// defaultReadTimeout 是读取完整请求的默认超时。
+	defaultReadTimeout = 60 * time.Second
+	// defaultWriteTimeout 是写响应的默认超时。
+	defaultWriteTimeout = 120 * time.Second
+	// defaultIdleTimeout 是 keep-alive 空闲连接的默认超时。
+	defaultIdleTimeout = 120 * time.Second
 )
 
 var (
+	// defaultCORSAllowedHeaders 是未配置 CORSAllowedHeaders 时预检允许的请求头。
 	defaultCORSAllowedHeaders = []string{"Content-Type", "Authorization"}
+	// defaultCORSAllowedMethods 是未配置 CORSAllowedMethods 时预检允许的方法。
 	defaultCORSAllowedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	defaultCORSExposeHeaders  = []string{"Content-Type"}
+	// defaultCORSExposeHeaders 是未配置 CORSExposeHeaders 时暴露给浏览器的响应头。
+	defaultCORSExposeHeaders = []string{"Content-Type"}
 )
 
 // Config 配置内嵌 chi HTTP 服务器（yaml: server）。
@@ -69,21 +76,29 @@ type Config struct {
 
 // PprofConfig 控制 net/http/pprof 端点。
 type PprofConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Prefix  string `yaml:"prefix"`
+	// Enabled 为 true 时挂载 /debug/pprof/*；默认关闭。
+	Enabled bool `yaml:"enabled"`
+	// Prefix 是 pprof 路由前缀，默认 /debug/pprof/；启用时不可为空。
+	Prefix string `yaml:"prefix"`
 }
 
 // SecurityHeadersConfig 控制安全响应头。
 type SecurityHeadersConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	HSTS    bool   `yaml:"hsts"`
-	CSP     string `yaml:"csp"`
+	// Enabled 为 true 时输出安全响应头；默认开启。
+	Enabled bool `yaml:"enabled"`
+	// HSTS 为 true 且请求走 TLS 时输出 Strict-Transport-Security。
+	HSTS bool `yaml:"hsts"`
+	// CSP 非空时作为 Content-Security-Policy 响应头；空则不输出。
+	CSP string `yaml:"csp"`
 }
 
 // CSRFConfig 是 double-submit cookie 校验配置。
 type CSRFConfig struct {
-	Enabled    bool   `yaml:"enabled"`
+	// Enabled 为 true 时校验非安全方法（GET/HEAD/OPTIONS/TRACE 跳过）；仅 cookie 认证需要。
+	Enabled bool `yaml:"enabled"`
+	// CookieName 是携带 token 的 cookie 名，默认 csrf_token；启用时不可为空。
 	CookieName string `yaml:"cookie_name"`
+	// HeaderName 是携带 token 的请求头名，默认 X-CSRF-Token；启用时不可为空。
 	HeaderName string `yaml:"header_name"`
 }
 
@@ -144,6 +159,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// durationOr 返回 d；d <= 0 时返回 fallback。
 func durationOr(d, fallback time.Duration) time.Duration {
 	if d > 0 {
 		return d

@@ -18,6 +18,7 @@ func AsError(err error) error {
 	}
 
 	fe := fxerrors.Wrap(err)
+	recordError(fe.Kind)
 
 	var detailErrs []error
 	if len(fe.Details) > 0 {

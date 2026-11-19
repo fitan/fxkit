@@ -19,6 +19,7 @@ import (
 // DefaultDomain 是全局（跨租户）策略/角色绑定的 domain。
 const DefaultDomain = "*"
 
+// normalizeDomain 去除首尾空白，空值回退为 [DefaultDomain]。
 func normalizeDomain(d string) string {
 	d = strings.TrimSpace(d)
 	if d == "" {
@@ -56,47 +57,71 @@ m = (r.dom == p.dom || p.dom == "*") && (g(r.sub, p.sub, r.dom) || g(r.sub, p.su
 // 缺失租户信息的 token 不能被当成全局身份。
 // 跨租户管理员通过 Dom="*" 的 g/p 规则实现。
 type EnforceInput struct {
+	// Sub 主体标识（用户 ID 或角色），空 = 拒绝。
 	Sub string
+	// Dom 是租户 domain，通常取自 JWT 的 org claim；空一律拒绝。
 	Dom string // 租户 domain；空 = 拒绝
+	// Obj 是请求路径，由中间件传入规范化后的路径。
 	Obj string // 例如 "/users/1" 或 "/users"
+	// Act 是 HTTP 方法，比较前统一转大写。
 	Act string // 例如 "GET"
 }
 
 // Policy 是一条 casbin p 规则：角色/用户可以在 Dom 下对 Obj 执行 Act。
 type Policy struct {
+	// Sub 角色或主体（json: sub）。
 	Sub string `json:"sub"` // 角色或主体
+	// Dom 租户 domain（json: dom）；"*" 表示全局。
 	Dom string `json:"dom"` // 租户 domain；"*" = 全局
+	// Obj 路径模式（json: obj），例如 "/users/:id"。
 	Obj string `json:"obj"` // 路径模式，例如 "/users/:id"
+	// Act HTTP 方法或 "*"（json: act）。
 	Act string `json:"act"` // HTTP 方法或 "*"
 }
 
 // RoleBinding 是一条 casbin g 规则：用户在某 domain 下继承角色。
 type RoleBinding struct {
+	// User 主体标识（g 规则第一列）。
 	User string `json:"user"`
+	// Role 主体继承的角色名。
 	Role string `json:"role"`
-	Dom  string `json:"dom"` // 租户 domain；"*" = 全局角色
+	// Dom 租户 domain；"*" = 全局角色
+	Dom string `json:"dom"` // 租户 domain；"*" = 全局角色
 }
 
 // Enforcer 是 fxkit 的 Casbin 门面。
 type Enforcer struct {
-	mu      sync.RWMutex
-	e       *casbin.Enforcer
-	db      *gorm.DB // 权限目录（内存执行器为 nil）
+	// mu 保护底层 Casbin 执行器：判定持读锁，策略变更持写锁。
+	mu sync.RWMutex
+	// e 是底层 Casbin 执行器；未启用时为 nil。
+	e *casbin.Enforcer
+	// db 是角色元数据与权限目录所用的数据库；内存执行器为 nil。
+	db *gorm.DB // 权限目录（内存执行器为 nil）
+	// enabled 标记 Casbin 授权是否生效。
 	enabled bool
 
 	// auto-bind 缓存（Huma / mux 中间件共用）。
-	bindMu   sync.Mutex
+	// bindMu 保护 bindSeen。
+	bindMu sync.Mutex
+	// bindSeen 记录已尝试 auto-bind 的 subject+domain，达到 4096 条后整体清空。
 	bindSeen map[string]struct{}
 
-	reloadMu     sync.Mutex
+	// reloadMu 保护 reloadCancel。
+	reloadMu sync.Mutex
+	// reloadCancel 取消后台策略重载循环；未启动时为 nil。
 	reloadCancel context.CancelFunc
-	reloadWG     sync.WaitGroup
+	// reloadWG 等待后台策略重载循环退出。
+	reloadWG sync.WaitGroup
 }
 
+// enforcerParams 是 [NewEnforcer] 的 Fx 入参。
 type enforcerParams struct {
+	// Config 是 auth 配置，决定 Casbin 是否启用。
 	Config *Config
-	DB     *gormx.Client `optional:"true"`
-	LC     *di.Lifecycle `optional:"true"`
+	// DB 是可选数据库客户端；Casbin 关闭时可为 nil。
+	DB *gormx.Client `optional:"true"`
+	// LC 是可选的钩子生命周期，用于挂载策略重载与关闭 hook。
+	LC *di.Lifecycle `optional:"true"`
 }
 
 // NewEnforcer 在 auth.casbin.enabled 时构建基于 Postgres 的 Casbin 执行器。
@@ -169,9 +194,13 @@ func (e *Enforcer) ReloadPolicies() error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.e.LoadPolicy()
+	err := e.e.LoadPolicy()
+	recordPolicyReload(context.Background(), err)
+	return err
 }
 
+// attachPolicyReloader 向生命周期注册定时重载策略的 hook。
+// 执行器未启用、lc 为 nil 或 interval<=0 时不注册。
 func (e *Enforcer) attachPolicyReloader(lc *di.Lifecycle, interval time.Duration) {
 	if e == nil || lc == nil || interval <= 0 || !e.Enabled() {
 		return
@@ -202,6 +231,7 @@ func (e *Enforcer) attachPolicyReloader(lc *di.Lifecycle, interval time.Duration
 	})
 }
 
+// reloadLoop 每隔 interval 调用 [Enforcer.ReloadPolicies]，ctx 取消后退出。
 func (e *Enforcer) reloadLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

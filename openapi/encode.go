@@ -23,14 +23,18 @@ const (
 type Format string
 
 const (
+	// FormatYAML 输出 YAML，是零值对应的默认格式。
 	FormatYAML Format = "yaml"
+	// FormatJSON 输出 JSON。
 	FormatJSON Format = "json"
 )
 
 // EncodeInput 控制 [Encode] 的行为。零值为 OpenAPI 3.0 YAML（oapi-codegen）。
 type EncodeInput struct {
+	// Version 是输出的 OpenAPI 版本。
 	Version SpecVersion // 默认 [Spec30]
-	Format  Format      // 默认 [FormatYAML]
+	// Format 是序列化格式。
+	Format Format // 默认 [FormatYAML]
 	// Base 是可选的静态规范，会合并到实时 Huma 文档之下
 	// （规则与 [MergeBaseHuma] 相同）。
 	Base []byte
@@ -94,6 +98,7 @@ func Encode(api huma.API, in EncodeInput) ([]byte, error) {
 	return raw, nil
 }
 
+// encodeHumaYAML 按版本输出 Huma 文档：3.0 走 DowngradeYAML，3.1 走原生 YAML。
 func encodeHumaYAML(api huma.API, ver SpecVersion) ([]byte, error) {
 	doc := api.OpenAPI()
 	if doc == nil {
@@ -117,6 +122,7 @@ func encodeHumaYAML(api huma.API, ver SpecVersion) ([]byte, error) {
 	}
 }
 
+// openAPIVersionString 返回写入文档 openapi 字段的版本号（3.1.0 或 3.0.3）。
 func openAPIVersionString(ver SpecVersion) string {
 	if ver == Spec31 {
 		return "3.1.0"
@@ -124,6 +130,7 @@ func openAPIVersionString(ver SpecVersion) string {
 	return "3.0.3"
 }
 
+// forceOpenAPIVersion 把 YAML 文档顶层的 openapi 字段改写为 ver。
 func forceOpenAPIVersion(raw []byte, ver string) ([]byte, error) {
 	doc, err := parseDoc(raw)
 	if err != nil {
@@ -137,6 +144,7 @@ func forceOpenAPIVersion(raw []byte, ver string) ([]byte, error) {
 	return out, nil
 }
 
+// yamlToJSON 把 YAML 转为两空格缩进的 JSON，并补上末尾换行。
 func yamlToJSON(raw []byte) ([]byte, error) {
 	var doc any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {

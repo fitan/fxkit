@@ -14,15 +14,20 @@ import (
 )
 
 const (
+	// defaultConsulKVTimeout 是读取 Consul KV 的默认超时。
 	defaultConsulKVTimeout = 8 * time.Second
-	envConsulHTTPToken     = "CONSUL_HTTP_TOKEN"
+	// envConsulHTTPToken 是携带 Consul ACL token 的环境变量名。
+	envConsulHTTPToken = "CONSUL_HTTP_TOKEN"
 )
 
 // fetchConsulKVInput 是 [fetchConsulKV] 的参数结构体。
 type fetchConsulKVInput struct {
+	// Address 是 Consul HTTP 地址。
 	Address string
-	Key     string
-	Token   string // 可选；为空时回退到 CONSUL_HTTP_TOKEN
+	// Key 是 Consul KV key，使用时去掉首尾斜杠。
+	Key   string
+	Token string // 可选；为空时回退到 CONSUL_HTTP_TOKEN
+	// Timeout 是请求超时；<=0 时用 defaultConsulKVTimeout。
 	Timeout time.Duration
 }
 

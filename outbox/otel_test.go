@@ -49,3 +49,35 @@ func TestPublishMetadataWithoutSpan(t *testing.T) {
 		t.Fatalf("expected nil metadata, got %v", meta)
 	}
 }
+
+// TestExtractTraceRestoresRemoteContext 验证消费端能从 metadata 续接发布方链路。
+func TestExtractTraceRestoresRemoteContext(t *testing.T) {
+	prev := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer otel.SetTextMapPropagator(prev)
+
+	want := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SpanID:     trace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	})
+	meta := map[string]string{}
+	otel.GetTextMapPropagator().Inject(trace.ContextWithSpanContext(context.Background(), want), propagation.MapCarrier(meta))
+
+	got := trace.SpanContextFromContext(ExtractTrace(context.Background(), meta))
+	if !got.IsValid() {
+		t.Fatal("extracted span context is invalid")
+	}
+	if got.TraceID() != want.TraceID() || got.SpanID() != want.SpanID() {
+		t.Fatalf("got %s/%s, want %s/%s", got.TraceID(), got.SpanID(), want.TraceID(), want.SpanID())
+	}
+}
+
+// TestExtractTraceWithoutMetadata 空 metadata 原样返回 ctx。
+func TestExtractTraceWithoutMetadata(t *testing.T) {
+	ctx := context.Background()
+	if got := ExtractTrace(ctx, nil); got != ctx {
+		t.Fatal("expected original context when metadata is empty")
+	}
+}

@@ -11,12 +11,18 @@ import (
 	"github.com/fitan/fxkit/di"
 )
 
+// autoRegisterParams 是启动时自动登记 Casbin 策略的入参。
 type autoRegisterParams struct {
-	LC       *di.Lifecycle
-	Config   *Config
+	// LC 是生命周期，用于挂载启动 hook。
+	LC *di.Lifecycle
+	// Config 是 auth 配置，读取其中的 casbin 段。
+	Config *Config
+	// Enforcer 是 Casbin 执行器；未启用时自动登记被跳过。
 	Enforcer *Enforcer
-	Routes   []HTTPRoute
-	API      huma.API
+	// Routes 是已通过 ProvideHTTPRoutes 登记的路由。
+	Routes []HTTPRoute
+	// API 是当前 Huma API，用于补齐未登记但已发布的 operation。
+	API huma.API
 }
 
 // registerRoutesOnStart 把 ProvideHTTPRoutes 与当前生效的 Huma OpenAPI operation

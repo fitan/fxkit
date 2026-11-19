@@ -10,17 +10,23 @@ import (
 	"gorm.io/gorm"
 )
 
+// txKey 是 context 中存放当前事务 *gorm.DB 的键类型。
 type txKey struct{}
 
+// afterCommitKey 是 context 中存放提交后回调集合的键类型。
 type afterCommitKey struct{}
 
+// afterCommitHooks 收集一次事务的提交后回调，事务提交成功后统一执行。
 type afterCommitHooks struct {
-	mu  sync.Mutex
+	// mu 保护 fns，允许事务执行期间并发注册回调。
+	mu sync.Mutex
+	// fns 是按注册顺序保存的回调列表。
 	fns []func(context.Context)
 	// ctx 是不带事务句柄的提交后 context（见 Transaction）。
 	ctx context.Context
 }
 
+// add 追加一个提交后回调；h 或 fn 为 nil 时忽略。
 func (h *afterCommitHooks) add(fn func(context.Context)) {
 	if h == nil || fn == nil {
 		return
@@ -30,6 +36,9 @@ func (h *afterCommitHooks) add(fn func(context.Context)) {
 	h.mu.Unlock()
 }
 
+// run 按注册顺序执行已收集的提交后回调，单个回调 panic 只记录日志、不影响其余回调。
+//
+// 回调使用不随原 ctx 取消、带 5s 超时的 context。
 func (h *afterCommitHooks) run() {
 	if h == nil {
 		return
@@ -98,8 +107,12 @@ func AfterCommit(ctx context.Context, fn func(context.Context)) {
 // Client 包装根连接池。应用代码应使用 [Client.Conn] 做请求级访问（trace/cancel），
 // 使用 [Client.Transaction] 做事务范围。仅在需要长期 *gorm.DB 句柄的集成时使用 [Client.Pool]。
 type Client struct {
-	pool        *gorm.DB
+	// pool 是根连接池；nil 表示未配置数据库。
+	pool *gorm.DB
+	// autoMigrate 对应 db.auto_migrate，决定是否允许框架自动建表。
 	autoMigrate bool
+	// driver 是归一化后的驱动名（mysql/postgres/sqlite），用于事务 span 的 db.system 属性。
+	driver string
 }
 
 // NewTestClient 包装一个已有的 DB 句柄用于单元测试。
@@ -152,9 +165,12 @@ func (c *Client) Transaction(ctx context.Context, fn func(ctx context.Context) e
 	}
 	hooks := &afterCommitHooks{ctx: ctx}
 	ctx = context.WithValue(ctx, afterCommitKey{}, hooks)
-	if err := c.pool.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	ctx, span := startTxSpan(ctx, c.driver)
+	err := c.pool.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(WithTx(ctx, tx))
-	}); err != nil {
+	})
+	endTxSpan(span, err)
+	if err != nil {
 		return err
 	}
 	hooks.run()

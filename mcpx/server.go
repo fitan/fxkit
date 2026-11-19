@@ -29,12 +29,18 @@ type ServerConfig struct {
 
 // Server 是基于 github.com/mark3labs/mcp-go 标准库构建的 Model Context Protocol 服务器。
 type Server struct {
-	cfg       ServerConfig
-	disp      *InProcessDispatcher
+	// cfg 是应用名称/版本默认值后的 [ServerConfig]。
+	cfg ServerConfig
+	// disp 是进程内直通执行器；未配置 Handler 时为 nil。
+	disp *InProcessDispatcher
+	// mcpServer 是底层 mcp-go 服务器实例。
 	mcpServer *mcpserver.MCPServer
-	toolsMu   sync.RWMutex
-	tools     map[string]Tool
-	maxResp   int
+	// toolsMu 保护 tools 的读写。
+	toolsMu sync.RWMutex
+	// tools 是按名称索引的已注册工具。
+	tools map[string]Tool
+	// maxResp 是单次调用返回的字节上限；<= 0 表示不限制。
+	maxResp int
 }
 
 // NewServer 创建并初始化一个 MCP Server 实例。
@@ -157,8 +163,10 @@ func (s *Server) executeToolCall(ctx context.Context, tool Tool, args map[string
 // identityHeadersKey 携带 MCP 调用者身份（从入站 HTTP header / stdio env 注入）。
 type identityHeadersKey struct{}
 
+// identityHeaderNames 是从入站请求或 stdio 环境变量提取并透传的身份头。
 var identityHeaderNames = []string{"Authorization", "X-User", "X-Org"}
 
+// withIdentityHeaders 把调用者身份头写入 context；h 为空时原样返回 ctx。
 func withIdentityHeaders(ctx context.Context, h http.Header) context.Context {
 	if len(h) == 0 {
 		return ctx
@@ -166,11 +174,13 @@ func withIdentityHeaders(ctx context.Context, h http.Header) context.Context {
 	return context.WithValue(ctx, identityHeadersKey{}, h)
 }
 
+// identityHeadersFromContext 从 context 读取调用者身份头（可能为 nil）。
 func identityHeadersFromContext(ctx context.Context) http.Header {
 	h, _ := ctx.Value(identityHeadersKey{}).(http.Header)
 	return h
 }
 
+// identityContextFromRequest 从入站请求提取 Authorization/X-User/X-Org 并写入 context。
 func identityContextFromRequest(ctx context.Context, r *http.Request) context.Context {
 	h := http.Header{}
 	for _, k := range identityHeaderNames {
@@ -181,6 +191,7 @@ func identityContextFromRequest(ctx context.Context, r *http.Request) context.Co
 	return withIdentityHeaders(ctx, h)
 }
 
+// stdioIdentityContext 从 MCP_AUTHORIZATION/MCP_USER/MCP_ORG 环境变量构造身份 context。
 func stdioIdentityContext(ctx context.Context) context.Context {
 	h := http.Header{}
 	for _, kv := range []struct{ env, header string }{

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/fitan/fxkit/di"
 	"github.com/fitan/fxkit/fxerrors"
@@ -20,8 +21,12 @@ import (
 )
 
 // Ledger 是复式记账入口。
-type Ledger struct{ db *gormx.Client }
+type Ledger struct {
+	// db 是账本读写使用的 gormx 客户端；未配置时各方法返回 Internal 错误。
+	db *gormx.Client
+}
 
+// New 用给定的 gormx 客户端构造 Ledger。
 func New(db *gormx.Client) *Ledger { return &Ledger{db: db} }
 
 // Migrate 创建/补齐 ledger 表。生产环境应使用 migrate print 的 DDL。
@@ -33,15 +38,22 @@ func (l *Ledger) Migrate(ctx context.Context) error {
 }
 
 // Post 在一个 DB 事务内写入 transaction 与 postings，并校验借贷平衡。
-func (l *Ledger) Post(ctx context.Context, txn Transaction, postings []Posting) error {
+func (l *Ledger) Post(ctx context.Context, txn Transaction, postings []Posting) (err error) {
+	start := time.Now()
+	result := "ok"
+	defer func() { recordPost(ctx, result, len(postings), time.Since(start)) }()
+
 	if l == nil || l.db == nil || !l.db.Enabled() {
+		result = "invalid"
 		return fxerrors.Internal("ledger: requires a configured database")
 	}
 	txn.ID = strings.TrimSpace(txn.ID)
 	if txn.ID == "" {
+		result = "invalid"
 		return fxerrors.BadRequest("ledger: transaction id is required")
 	}
 	if len(postings) < 2 {
+		result = "invalid"
 		return fxerrors.BadRequest("ledger: at least two postings are required")
 	}
 
@@ -51,13 +63,16 @@ func (l *Ledger) Post(ctx context.Context, txn Transaction, postings []Posting) 
 		p.TxnID = txn.ID
 		p.AccountID = strings.TrimSpace(p.AccountID)
 		if p.AccountID == "" {
+			result = "invalid"
 			return fxerrors.BadRequest("ledger: posting account_id is required")
 		}
 		if p.Amount == 0 {
+			result = "invalid"
 			return fxerrors.BadRequest("ledger: posting amount must not be zero")
 		}
 		m, err := money.New(p.Amount, p.Currency)
 		if err != nil {
+			result = "invalid"
 			return fxerrors.Wrap(err)
 		}
 		p.Currency = string(m.Currency)
@@ -65,11 +80,12 @@ func (l *Ledger) Post(ctx context.Context, txn Transaction, postings []Posting) 
 	}
 	for currency, sum := range sums {
 		if sum != 0 {
+			result = "unbalanced"
 			return fxerrors.BadRequest("ledger: postings for %s must sum to zero, got %d", currency, sum)
 		}
 	}
 
-	_, err := l.db.WithTxResult(ctx, func(txCtx context.Context) (struct{}, error) {
+	_, err = l.db.WithTxResult(ctx, func(txCtx context.Context) (struct{}, error) {
 		if err := l.db.Conn(txCtx).Create(&txn).Error; err != nil {
 			return struct{}{}, mapLedgerError(err)
 		}
@@ -78,6 +94,12 @@ func (l *Ledger) Post(ctx context.Context, txn Transaction, postings []Posting) 
 		}
 		return struct{}{}, nil
 	})
+	if err != nil {
+		result = "error"
+		if fxerrors.Wrap(err).Kind == fxerrors.KindConflict {
+			result = "conflict"
+		}
+	}
 	return err
 }
 
@@ -151,6 +173,7 @@ var Module = di.Module("fxkit/ledger",
 	},
 )
 
+// mapLedgerError 把唯一键冲突转为 Conflict，其余非 nil 错误包装为 fxerrors。
 func mapLedgerError(err error) error {
 	if err == nil {
 		return nil

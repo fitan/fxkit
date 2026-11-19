@@ -19,8 +19,11 @@ import (
 // Methods 非空时，每条目通过 [chi.Mux.Method] 注册（支持 "/items/{id}" 等路径参数）。
 // Methods 为空时使用 [chi.Mux.Handle] 及上述尾部斜杠通配规则。
 type Route struct {
+	// Pattern 是 chi 路由模板，必须以 / 开头；Methods 为空且以 / 结尾时会追加 * 以匹配子路径。
 	Pattern string
+	// Handler 是路由处理器；nil 会让启动失败。
 	Handler http.Handler
+	// Methods 为空时用 [chi.Mux.Handle] 注册前缀 handler；非空时逐条通过 [chi.Mux.Method] 注册。
 	Methods []string
 	// MaxBodyBytes 为该路由单独限制请求体大小。
 	//
@@ -55,9 +58,38 @@ func limitRequestBody(h http.Handler, max int64) http.Handler {
 		if r.Body != nil && r.Body != http.NoBody {
 			r.Body = http.MaxBytesReader(w, r.Body, max)
 		}
-		h.ServeHTTP(w, r)
+		h.ServeHTTP(&rejectionRecorder{ResponseWriter: w, ctx: r.Context()}, r)
 	})
 }
+
+// rejectionRecorder 观察 handler 回写的 413，用于请求体超限计数。
+// Unwrap/Flush 保留底层 writer 能力，避免影响流式响应。
+type rejectionRecorder struct {
+	http.ResponseWriter
+	// ctx 是请求 context，用于记录拒绝指标。
+	ctx context.Context
+	// counted 标记 413 是否已计数，避免重复记录。
+	counted bool
+}
+
+// WriteHeader 透传状态码；首次出现 413 时计入 body_too_large 拒绝。
+func (w *rejectionRecorder) WriteHeader(code int) {
+	if code == http.StatusRequestEntityTooLarge && !w.counted {
+		w.counted = true
+		recordRejection(w.ctx, "body_too_large")
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Flush 在底层 writer 支持 http.Flusher 时透传，保证 SSE 等流式响应不被缓冲。
+func (w *rejectionRecorder) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap 返回底层 ResponseWriter，供 http.ResponseController 透传能力。
+func (w *rejectionRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // IsBodyTooLarge 报告 err 是否由请求体超过 [Config.MaxBodyBytes] /
 // [Route.MaxBodyBytes] 引起，供裸 chi handler 回 413。

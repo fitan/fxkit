@@ -25,8 +25,8 @@ help:
 	@echo "make web-dev           # Nuxt dev :3000，API 经 Traefik :8880（先 make demo）"
 	@echo "make web-dev-direct    # Nuxt dev :3000，API 直连 8081/8082"
 	@echo "make web-check         # Nuxt typecheck + lint"
-	@echo "make demo              # SQLite catalog + storefront for the dashboard"
-	@echo "make demo-down         # stop the SQLite demo services"
+	@echo "make demo              # PostgreSQL catalog + storefront for the dashboard"
+	@echo "make demo-down         # stop the demo services (Postgres/Consul/Redis/Traefik)"
 	@echo "make edge              # docker compose: Traefik 3.7.12 (static + Consul)"
 	@echo "make edge-down"
 	@echo "make verify            # start services, probe, then leave them running"
@@ -91,7 +91,7 @@ demo:
 demo-down:
 	-pkill -f 'catalog serve -c .*catalog-demo.yaml'
 	-pkill -f 'storefront serve -c .*storefront-demo.yaml'
-	-docker compose stop consul traefik redis
+	-docker compose stop postgres consul traefik redis
 
 # Atlas 迁移（需要安装 atlas CLI：https://atlasgo.io）
 atlas-status:

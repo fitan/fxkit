@@ -12,6 +12,7 @@ import (
 
 // claimParams 配置单次 claimBatch 调用。
 type claimParams struct {
+	// Limit 是本次最多认领的行数；<=0 时 [claimBatch] 返回错误。
 	Limit       int
 	StaleBefore time.Time // LockedAt 早于此时间的 processing 行可被重新认领
 }
@@ -67,6 +68,8 @@ func markClaimed(claimed []OutboxEvent, now time.Time, leaseID string) {
 	}
 }
 
+// claimSkipLocked 用 SELECT ... FOR UPDATE SKIP LOCKED 认领一批事件并更新为 processing。
+// 适用于支持 SKIP LOCKED 的数据库（如 PostgreSQL）。
 func claimSkipLocked(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent, error) {
 	now := time.Now().UTC()
 	leaseID, err := newLeaseID()
@@ -102,6 +105,7 @@ func claimSkipLocked(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxE
 	return claimed, err
 }
 
+// claimSQLite 用单条带 RETURNING 的子查询 UPDATE 认领事件（SQLite 不支持 SKIP LOCKED）。
 func claimSQLite(ctx context.Context, db *gorm.DB, p claimParams) ([]OutboxEvent, error) {
 	now := time.Now().UTC()
 	leaseID, err := newLeaseID()

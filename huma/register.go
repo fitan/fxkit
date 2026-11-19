@@ -24,6 +24,7 @@ func Register[I, O any](api huma.API, op huma.Operation, handler func(context.Co
 	})
 }
 
+// operationIDTaken 报告 OpenAPI 文档中是否已存在该 OperationID。
 func operationIDTaken(doc *huma.OpenAPI, id string) bool {
 	if doc == nil || id == "" {
 		return false

@@ -8,12 +8,17 @@ import (
 
 // Subject 是已认证身份，注入 handler context。
 type Subject struct {
-	ID          string
-	OrgID       string
+	// ID 主体唯一标识（JWT sub 或 X-User），为空时请求被视为未认证。
+	ID string
+	// OrgID 租户/组织 ID（JWT org claim 或 X-Org），作为 Casbin domain；Casbin 启用时为空即拒绝。
+	OrgID string
+	// Permissions 是 JWT 中的 scopes/permissions，[Subject.Has] 据此判断。
 	Permissions []string // Logto scopes / permissions，如 "users:list"
-	Roles       []string // 可选。路由鉴权看 Casbin；handler 里可用 Has 看 Permissions
+	// Roles 是 JWT 的 roles claim；路由鉴权只看 Casbin，不读此字段。
+	Roles []string // 可选。路由鉴权看 Casbin；handler 里可用 Has 看 Permissions
 }
 
+// subjectCtxKey 是 Subject 在 context 中的键类型。
 type subjectCtxKey struct{}
 
 // WithSubject 将 Subject 存入 ctx。

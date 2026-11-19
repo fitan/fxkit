@@ -71,10 +71,10 @@ func TestDeleteReminder_Validation(t *testing.T) {
 	}
 }
 
-// TestDeleteReminder_ValidationOnly 确认删除失败时不再依赖 SDK 错误文本。
+// TestDeleteReminder_ValidationOnly 确认入参校验。
 //
-// 旧实现靠 isNoContentErr("got status 204") 判定，SDK 文案一变就失效；
-// 现在删除错误一律交给列表回读确认（见 cronState）。
+// 删除成功与否以 SDK 返回值为准（SDK 自 v0.120.7 起接受任意 2xx），
+// 不再依赖错误文本或回读列表。
 func TestDeleteReminder_ValidationOnly(t *testing.T) {
 	t.Parallel()
 	if err := DeleteReminder(context.Background(), nil, "c1"); err == nil {

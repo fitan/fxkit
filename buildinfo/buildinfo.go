@@ -28,26 +28,42 @@ var snapshot atomic.Pointer[Info]
 
 // 以下变量在构建时通过 -ldflags 注入。
 var (
-	Version   = "dev"
-	Commit    = "unknown"
+	// Version 是版本号，默认 "dev"；未注入时回退为 12 位 commit，工作区有改动时追加 "-dirty"。
+	Version = "dev"
+	// Commit 是提交哈希，默认 "unknown"；未注入时可由 vcs.revision 回填（截断为 12 位）。
+	Commit = "unknown"
+	// GitRemote 是仓库远端地址，默认 "unknown"；不从构建信息回填。
 	GitRemote = "unknown"
+	// GitBranch 是分支名，默认 "unknown"；不从构建信息回填。
 	GitBranch = "unknown"
-	Dirty     = "false"
+	// Dirty 是工作区是否有未提交改动的字符串，默认 "false"；解析时接受 true/1。
+	Dirty = "false"
+	// GoVersion 是构建所用 Go 版本，默认 "unknown"；未注入时回退 runtime 构建信息。
 	GoVersion = "unknown"
+	// BuildTime 是构建时间字符串，默认空；未注入时可由 vcs.time 回填。
 	BuildTime = ""
-	BuiltBy   = ""
+	// BuiltBy 是构建者标识，默认空；不从构建信息回填。
+	BuiltBy = ""
 )
 
 // Info 是构建元数据的不可变快照。
 type Info struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
+	// Version 版本号，默认 "dev"；未注入 -ldflags 时回退为 12 位 commit，工作区有改动时追加 "-dirty"。
+	Version string `json:"version"`
+	// Commit 提交哈希，默认 "unknown"；可从 go build 的 vcs.revision 回填（截断为 12 位）。
+	Commit string `json:"commit"`
+	// GitRemote 仓库远端地址，默认 "unknown"。
 	GitRemote string `json:"git_remote"`
+	// GitBranch 分支名，默认 "unknown"。
 	GitBranch string `json:"git_branch"`
-	Dirty     bool   `json:"dirty"`
+	// Dirty 工作区是否有未提交改动，由字符串 "true"/"1" 解析得到。
+	Dirty bool `json:"dirty"`
+	// GoVersion 构建所用 Go 版本，默认 "unknown"，可从 runtime 构建信息回填。
 	GoVersion string `json:"go_version"`
+	// BuildTime 构建时间字符串，默认空；未注入时可从 vcs.time 回填。
 	BuildTime string `json:"build_time"`
-	BuiltBy   string `json:"built_by"`
+	// BuiltBy 构建者标识，默认空。
+	BuiltBy string `json:"built_by"`
 }
 
 // Normalize 修剪空白并为未设置字段填入合理默认值。未应用链接时 -ldflags（例如 Air 使用裸 go build）时，
@@ -87,6 +103,7 @@ func buildInfoLocked() Info {
 	}
 }
 
+// normalizeLocked 在持有 mus 时先回填 VCS 元数据，再修剪空白并为空字段填默认值。
 func normalizeLocked() {
 	applyVCSFallback()
 	Version = strings.TrimSpace(Version)
@@ -159,6 +176,7 @@ func applyVCSFallback() {
 	}
 }
 
+// shortRevision 去掉首尾空白并截断到 12 位。
 func shortRevision(rev string) string {
 	rev = strings.TrimSpace(rev)
 	if len(rev) > 12 {

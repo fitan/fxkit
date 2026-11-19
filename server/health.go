@@ -29,7 +29,9 @@ type HealthChecker interface {
 
 // HealthParams 在共享 mux 上装配存活与就绪探针。
 type HealthParams struct {
-	Mux      *chi.Mux
+	// Mux 是挂载 /healthz、/readyz 与 /version 的共享 chi mux；nil 时注册失败。
+	Mux *chi.Mux
+	// Checkers 是 /readyz 并发聚合的检查项；不允许 nil（含 typed nil）。
 	Checkers []HealthChecker
 	// Timeout 是 /readyz 聚合检查的总超时，默认 2s。
 	Timeout time.Duration
@@ -37,7 +39,9 @@ type HealthParams struct {
 
 // healthReport 是 /readyz 的 JSON 响应体。
 type healthReport struct {
-	Status string            `json:"status"`
+	// Status 是聚合状态：全部检查通过为 "ok"，任一失败为 "unavailable"。
+	Status string `json:"status"`
+	// Checks 是各检查项的结果（"ok" 或错误文本）；没有检查项时省略。
 	Checks map[string]string `json:"checks,omitempty"`
 }
 

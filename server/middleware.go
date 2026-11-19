@@ -147,6 +147,7 @@ func otelMiddleware(prefixes []string) func(http.Handler) http.Handler {
 	}
 }
 
+// httpSpanName 返回 METHOD + 路由 pattern，优先 chi 路由、其次 r.Pattern，最后原始 URL 路径。
 func httpSpanName(_ string, r *http.Request) string {
 	if rc := chi.RouteContext(r.Context()); rc != nil {
 		if pattern := rc.RoutePattern(); pattern != "" {
@@ -305,6 +306,7 @@ func requestBodyLogMiddleware(ssePrefixes []string) func(http.Handler) http.Hand
 	}
 }
 
+// bodyReadCloser 把重放用的 Reader 与原始 body 的 Closer 组合成一个请求体。
 type bodyReadCloser struct {
 	io.Reader
 	io.Closer
@@ -317,12 +319,17 @@ type bodyReadCloser struct {
 // 且同时开启两层日志时会嵌套两层。
 type responseRecorder struct {
 	http.ResponseWriter
-	status    int
-	bytes     int
-	body      bytes.Buffer
+	// status 是首个写入的状态码；尚未写入时为 0（调用方按 200 处理）。
+	status int
+	// bytes 是已写入响应体的字节数。
+	bytes int
+	// body 在 bodyLimit > 0 时截留响应体，用于日志预览。
+	body bytes.Buffer
+	// bodyLimit 是响应体截留上限（字节）；0 表示不截留。
 	bodyLimit int
 }
 
+// WriteHeader 记录首个状态码并转发给底层 ResponseWriter。
 func (w *responseRecorder) WriteHeader(code int) {
 	if w.status == 0 {
 		w.status = code
@@ -330,6 +337,7 @@ func (w *responseRecorder) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Write 记录状态码与写入字节数，bodyLimit > 0 时按上限截留响应体。
 func (w *responseRecorder) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -348,14 +356,17 @@ func (w *responseRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Flush 在底层支持时转发 http.Flusher.Flush。
 func (w *responseRecorder) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
+// Unwrap 返回底层 ResponseWriter，供 http.ResponseController 透传。
 func (w *responseRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// bodyPreview 返回 body 的文本预览；非 UTF-8 内容返回 <binary:N bytes> 占位。
 func bodyPreview(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -366,6 +377,7 @@ func bodyPreview(body []byte) string {
 	return fmt.Sprintf("<binary:%d bytes>", len(body))
 }
 
+// sensitiveJSONKeys 是请求/响应体日志脱敏时按键名匹配的敏感字段（小写）。
 var sensitiveJSONKeys = []string{
 	"password", "passwd", "secret", "token", "access_token",
 	"refresh_token", "id_token", "authorization", "api_key", "apikey",
@@ -452,6 +464,7 @@ func containsSensitiveKey(lower string) bool {
 	return false
 }
 
+// isJSONContentType 判断 Content-Type 是否为 application/json 或 +json 后缀。
 func isJSONContentType(contentType string) bool {
 	if contentType == "" {
 		return false
@@ -485,6 +498,7 @@ func isSSERequest(r *http.Request, prefixes []string) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
 }
 
+// isSSERequestPath 判断路径是否命中任一非空的 SSE 前缀。
 func isSSERequestPath(path string, prefixes []string) bool {
 	path = strings.TrimSpace(path)
 	if path == "" {

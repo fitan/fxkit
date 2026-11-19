@@ -13,10 +13,15 @@ import (
 
 // ListResult 是标准的列表响应封装。
 type ListResult[T any] struct {
-	Items      []T     `json:"items"`
-	Total      *int64  `json:"total,omitempty"`
-	Start      int     `json:"start"`
-	Limit      int     `json:"limit"`
+	// Items 当前页的行数据；无结果时为空切片而不是 nil。
+	Items []T `json:"items"`
+	// Total 总行数；仅 ListParams.ReplyWithCount 为 true 时返回，否则为 nil（JSON 中省略）。
+	Total *int64 `json:"total,omitempty"`
+	// Start 本次查询使用的 offset；游标分页时恒为 0。
+	Start int `json:"start"`
+	// Limit 本次查询的页大小（已由 [ListSpec.Normalize] 按 [Limits] 归一）。
+	Limit int `json:"limit"`
+	// NextCursor 下一页的不透明游标；仅游标模式且本页取满时返回，nil 表示已到末页。
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
@@ -66,6 +71,7 @@ func List[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row
 	return res, err
 }
 
+// listImpl 是 [List] 的查询实现，不记录指标。
 func listImpl[M, Row any](ctx context.Context, in ListInput[M, Row]) (ListResult[Row], error) {
 	if in.ToRow == nil {
 		return ListResult[Row]{}, fxerrors.Internal("crudx.List: ToRow is required")
@@ -247,6 +253,8 @@ func listSelectColumns(sel []string, spec ListSpec, meta *ModelMeta, params List
 	return out, nil
 }
 
+// nextCursor 用本页最后一行的排序值与主键生成下一页游标。
+// sortBy 为空时取 spec.DefaultSort；按关联列排序时返回 400。
 func nextCursor[M any](last *M, params ListParams, spec ListSpec, meta *ModelMeta) (string, error) {
 	sortBy, sortDir := params.SortBy, params.SortDirection
 	if sortBy == "" {
@@ -266,6 +274,7 @@ func nextCursor[M any](last *M, params ListParams, spec ListSpec, meta *ModelMet
 	return EncodeCursor(sortBy, sortDir, sv, pk)
 }
 
+// findFieldValueByColumn 在结构体（含匿名嵌入）中按列名或字段名查找字段值；未找到返回 false。
 func findFieldValueByColumn(v reflect.Value, base string) (any, bool) {
 	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
@@ -296,6 +305,7 @@ func findFieldValueByColumn(v reflect.Value, base string) (any, bool) {
 	return nil, false
 }
 
+// readSortValue 从实体中读出排序字段的值，供生成游标；无法定位字段时返回 400。
 func readSortValue[M any](entity *M, sortBy string, spec ListSpec, meta *ModelMeta) (any, error) {
 	col := spec.SortFields[sortBy]
 	if col == "" {
@@ -352,6 +362,7 @@ func fieldByIndex(v reflect.Value, index []int) (reflect.Value, bool) {
 	return v, true
 }
 
+// gormColumnName 从 gorm tag 的 column: 取列名，缺省时用 GORM 默认命名策略。
 func gormColumnName(fieldName, gormTag string) string {
 	if gormTag != "" {
 		for _, p := range strings.Split(gormTag, ";") {

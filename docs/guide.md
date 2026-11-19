@@ -472,9 +472,9 @@ server:
 
 自动就有：
 
-- **trace**：HTTP 进出（otelhttp）、每条 SQL（otelsql）、Hatchet step、`cache.load`、`mcpx.tool`、`outbox.publish`（并把 `traceparent` 写进事件 metadata）。
+- **trace**：HTTP 进出（otelhttp）、每条 SQL（otelsql）与事务边界（`db.transaction`）、Hatchet step、`cache.load`、`mcpx.tool`、`outbox.publish`、`payment.apply`；outbox 会把 `traceparent` 写进事件 metadata，消费端用 `outbox.ExtractTrace` 续接。
 - **log**：slog 自动注入 `trace_id`/`span_id`；错误出口会记录内部错误。
-- **metrics**：HTTP/DB/runtime + 9 个子系统业务指标（见 README §13）。
+- **metrics**：HTTP/DB/runtime + 各子系统业务指标（outbox/inbox、idempotency、authz、ledger、payment、reconciliation、audit、reqx、config 等，见 README §13）。
 
 ---
 

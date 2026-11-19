@@ -601,7 +601,7 @@ auth:
 otel:
   enabled: false
   service_name: "myapp"
-  service_version: "0.1.0"
+  service_version: "0.1.0"      # 空则回退 buildinfo.Version（未注入时为 dev）
   environment: "development"
   endpoint: "localhost:4317"   # 可写 https://host:4317，会自动去掉 scheme
   protocol: "grpc"             # grpc | http
@@ -1333,10 +1333,8 @@ FXKIT_TEST_HATCHET_TLS_STRATEGY=none \
 - 也可用 `FXKIT_TEST_HATCHET_TOKEN_FILE=/path/to/token`，避免 secret 进命令行。
 - 副作用：临时 workflow / run / cron，测试结束会尽力清理。
 - 自建 Hatchet 用 Postgres 队列时，引擎侧需 `SERVER_MSGQUEUE_KIND=postgres`（对应 PG 需 `pgmq` 扩展）；否则用 RabbitMQ。
-- **已知 SDK 问题**：Hatchet 服务端对 DELETE 返回 **204**，而 Go SDK（截至 v0.116.x）的
-  `CronsClient.Delete` 只接受 200，会把成功当失败。`hatchetx.DeleteReminder` 的处理方式：
-  识别 204 误报后**再查一次列表确认该 id 已消失**（最多轮询 10s），而不是直接当作成功。
-  升级 SDK 修复后可简化。
+- **SDK 版本**：`hatchet` 已升级到 v0.120.14。服务端 DELETE 返回 **204**，而 Go SDK 自 v0.120.7 起接受任意 2xx，
+  因此 `hatchetx.DeleteReminder` 直接以 SDK 返回值为准，不再需要旧版本那套「204 误报后回读列表确认」的兜底。
 
 ---
 
@@ -1360,18 +1358,31 @@ Runtime metrics 挂在全局 MeterProvider 上，随 `mp.Shutdown` 一起结束�
 | 子系统 | 指标 |
 |---|---|
 | `cachex` | `cachex.lookups{cache.result=hit\|miss\|negative\|error\|disabled}`、`cachex.loader.duration` |
-| `outbox` | `outbox.publish.duration`、`outbox.publish.results{outbox.result}`、`outbox.event.lag`（入队→发布成功）、`outbox.batch.size` |
-| `authz` | `authz.enforce.duration`、`authz.enforce.results{authz.result=allow\|deny\|error}` |
+| `outbox` | `outbox.publish.duration`、`outbox.publish.results{outbox.result}`、`outbox.event.lag`（入队→发布成功）、`outbox.batch.size`、`outbox.claim.results{outbox.result}`、`outbox.heartbeat.results{outbox.result}`、`outbox.inbox.results{outbox.result=ok\|skipped\|busy\|error}`、`outbox.inbox.duration` |
+| `idempotency` | `idempotency.requests{idempotency.result=first\|replayed\|conflict\|error}`、`idempotency.store.results{idempotency.op,idempotency.result}`、`idempotency.store.duration` |
+| `authz` | `authz.enforce.duration`、`authz.enforce.results{authz.result=allow\|deny\|error}`、`authz.jwks.fetch{authz.result=ok\|error}`、`authz.casbin.reload{authz.result=ok\|error}` |
 | `mcpx` | `mcpx.tool.calls{mcp.tool,mcp.result}`、`mcpx.tool.duration` |
 | `crudx` | `crudx.list.duration`、`crudx.list.rows`、`crudx.list.errors{crudx.error.reason}` |
-| `consulx` | `consulx.lock.acquire.duration`、`consulx.lock.acquire.results{lock.result}`、`consulx.lock.lost`、`consulx.lock.renew.failures` |
-| `server` | `server.readyz.duration{check,status}`、`server.readyz.checks{check,status}` |
+| `consulx` | `consulx.lock.acquire.duration`、`consulx.lock.acquire.results{lock.result}`、`consulx.lock.lost`、`consulx.lock.renew.failures`、`consulx.register.ttl{consulx.result=ok\|error}`、`consulx.register.reregister{consulx.result}` |
+| `server` | `server.readyz.duration{check,status}`、`server.readyz.checks{check,status}`、`server.rejections{server.reason=csrf_cookie_missing\|csrf_token_invalid\|body_too_large}` |
+| `huma` | `huma.errors{error.kind,http.status}` |
+| `reqx` | `reqx.requests{reqx.result=ok\|error\|no_endpoints}`、`reqx.attempts` |
 | `hatchetx` | `hatchetx.actor.runs{hatchetx.actor,hatchetx.result}`、`hatchetx.actor.duration` |
 | `cli` | `fxkit.startup.duration{phase=start\|stop,result}`、`fxkit.startup.results` |
+| `di` | `di.prestart.duration{di.phase,di.result}` |
+| `config` | `config.reload{config.section,config.stage=fetch\|decode\|apply,config.result}` |
+| `payment` | `payment.transitions{payment.result=ok\|invalid\|conflict\|error}` |
+| `ledger` | `ledger.posts{ledger.result=ok\|unbalanced\|invalid\|conflict\|error}`、`ledger.postings.count`、`ledger.post.duration` |
+| `reconciliation` | `reconciliation.runs{reconciliation.result=ok\|error}`、`reconciliation.diffs{reconciliation.kind}`、`reconciliation.duration` |
+| `audit` | `audit.events{audit.result=ok\|error}` |
+| `webhook` | `webhook.verifications{webhook.result=ok\|missing_secret\|invalid_signature\|missing_timestamp\|invalid_timestamp\|expired}` |
 
-推荐告警：`cachex.lookups{result=error}` 持续上升（缓存宕机）、`outbox.event.lag` P99、`authz.enforce{result=error}`、`mcpx.tool{result=error}`、`crudx.list.errors` 突增、`consulx.lock.lost > 0`、`server.readyz.checks{status=error}`。
+> `server.rejections{reason=body_too_large}` 覆盖经 `server.Route` 挂载的裸 chi 路由；Huma 路由按 Huma 自身的 body 限制处理。
 
-**链路**：HTTP（otelhttp）、SQL（otelsql）、Hatchet worker step 都有 span；`cache.load`、`mcpx.tool`、`outbox.publish` 也有。outbox 发布时会把 W3C `traceparent` 写进事件 metadata，消费端可 opt-in 续接。
+推荐告警：`cachex.lookups{result=error}` 持续上升（缓存宕机）、`outbox.event.lag` P99、`authz.enforce{result=error}`、`mcpx.tool{result=error}`、`crudx.list.errors` 突增、`consulx.lock.lost > 0`、`server.readyz.checks{status=error}`。  
+安全/资金面追加：`audit.events{audit.result=error}`（审计写入失败）、`authz.jwks.fetch{result=error}`（IdP 不可达）、`consulx.register.ttl{result=error}`（可能被 Consul 摘除）、`payment.transitions{result=conflict}`、`ledger.posts{result=unbalanced}`、`reconciliation.diffs` 突增。
+
+**链路**：HTTP（otelhttp）、SQL（otelsql）、`db.transaction`（gormx 事务边界）、Hatchet worker step 都有 span；`cache.load`、`mcpx.tool`、`outbox.publish`、`payment.apply` 也有。outbox 发布时会把 W3C `traceparent` 写进事件 metadata，消费端用 `outbox.ExtractTrace(ctx, metadata)` 即可续接。
 
 **访问日志**：`server.access_log: true` 输出 `method/route/status/duration_ms/bytes/remote_ip`（route 用 chi 模板，不记录真实路径）。
 
@@ -1592,7 +1603,7 @@ fxkit gen resource Article \
 fxkit gen client --spec services/orders/openapi.yaml --out ./internal/clients/orders
 ```
 
-`init` 产出根 Makefile：`make run SVC=orders`、`make openapi SVC=orders`、`make build`、`make infra`（本地 Postgres / Hatchet / Consul / OTel）。`gen resource` 用 `crudx.List` 做列表（含 cursor），写方法显式生成并用 `RegisterResource` 挂上；生成的表名/列名与 GORM `NamingStrategy` 一致（`Person` → `people`、`APIKey` → `api_key`），并为模型生成 `TableName()`；`--search` 列会打上 GORM index（TEXT 除外）并把 ListSpec `Indexed` 设为 true。生成后从 `services/<svc>/cmd/main.go` 接入。`gen client` 在调用方生成 oapi-codegen SDK，并用 `reqx.TransportClient` 发请求；默认不覆盖已存在的 `reqx.go`/`generate.go`（需 `--force`），同时生成 `spec.go` 记录源 spec 的 hash/version，生成失败不会留下半成品。
+`init` 产出根 Makefile：`make run SVC=orders`、`make openapi SVC=orders`、`make build`、`make infra`（本地 Postgres / Hatchet / Consul / OTel）。`gen resource` 用 `crudx.List` 做列表（含 cursor），写方法显式生成并用 `RegisterResource` 挂上；同时生成 `CreateXxxReq` / `UpdateXxxReq`（optional 字段为指针）；生成的表名/列名与 GORM `NamingStrategy` 一致（`Person` → `people`、`APIKey` → `api_key`），并为模型生成 `TableName()`；`--search` 列会打上 GORM index（TEXT 除外）并把 ListSpec `Indexed` 设为 true。生成后从 `services/<svc>/cmd/main.go` 接入。`gen client` 在调用方生成 oapi-codegen SDK，并用 `reqx.TransportClient` 发请求；默认不覆盖已存在的 `reqx.go`/`generate.go`（需 `--force`），同时生成 `spec.go` 记录源 spec 的 hash/version，生成失败不会留下半成品。
 
 ---
 
@@ -2023,6 +2034,14 @@ huma:
 改为 `reminderName-<len>-actorId`。
 
 **迁移**：用旧名删除后重建，或显式传 `CreateReminderInput.Name`。
+
+### `fxkit gen resource` 生成 `CreateXxxReq`
+
+**症状**：旧模板的 `Create` 方法引用了未定义的 `CreateXxxReq`，生成的包无法编译。
+
+**原因**：模板只定义了 `UpdateXxxReq`，漏了创建请求类型。
+
+**迁移**：升级 fxkit 后加 `--force` 重新生成；optional 字段在 `CreateXxxReq` 中同样是指针，未提供时保持模型零值。
 
 ### `fxkit gen resource` 的 optional 字段在 UpdateReq 中变为指针
 

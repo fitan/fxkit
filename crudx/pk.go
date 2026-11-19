@@ -16,8 +16,9 @@ import (
 
 // PKInfo 描述从 GORM model 解析出的主键。
 type PKInfo struct {
-	FieldName     string // Go 字段名，例如 "ID"
-	Column        string // 数据库列名，例如 "id"
+	FieldName string // Go 字段名，例如 "ID"
+	Column    string // 数据库列名，例如 "id"
+	// Kind 主键字段的 Go 类型，用于按类型解析与格式化 id 字符串。
 	Kind          reflect.Kind
 	AutoIncrement bool // GORM schema 标记的主键自增（autoIncrement / 数值主键默认）
 }
@@ -28,6 +29,7 @@ func (p PKInfo) autoIncrementNumeric() bool {
 	return p.AutoIncrement && isNumericKind(p.Kind)
 }
 
+// isNumericKind 报告 k 是否为整数类型（有符号或无符号）。
 func isNumericKind(k reflect.Kind) bool {
 	switch k {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
@@ -69,6 +71,8 @@ func ResolveModel[T any](db *gorm.DB) (*ModelMeta, error) {
 	return meta, nil
 }
 
+// resolveModelUncached 解析 T 的 GORM schema 并构建 [ModelMeta]；
+// 要求恰好一个主键，缺失或复合主键都返回错误。
 func resolveModelUncached[T any](db *gorm.DB) (*ModelMeta, error) {
 	var zero T
 	s, err := schema.Parse(&zero, &sync.Map{}, db.NamingStrategy)
@@ -102,6 +106,7 @@ func resolveModelUncached[T any](db *gorm.DB) (*ModelMeta, error) {
 	}, nil
 }
 
+// modelMetaCached 返回 T 已缓存的元数据；未调用过 [ResolveModel] 时 ok 为 false。
 func modelMetaCached[T any]() (*ModelMeta, bool) {
 	v, ok := modelMetaCache.Load(reflect.TypeFor[T]())
 	if !ok {
@@ -183,6 +188,7 @@ func ZeroPrimaryKey[T any](t *T) {
 	zeroPrimaryKey(meta, t)
 }
 
+// zeroPrimaryKey 在 t 指向的结构体上把自增数值主键置零；其他情况不做任何事。
 func zeroPrimaryKey(meta *ModelMeta, t any) {
 	if meta == nil || !meta.autoIncrementNumeric() {
 		return

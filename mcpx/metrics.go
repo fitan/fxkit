@@ -19,11 +19,15 @@ var mcpTracer = otel.Tracer("github.com/fitan/fxkit/mcpx")
 //
 // tool 名是有限集合（来自 OpenAPI operation），作为 attribute 不会造成高基数。
 var (
+	// mcpMetricsOnce 保证指标只注册一次。
 	mcpMetricsOnce sync.Once
-	toolCalls      metric.Int64Counter
-	toolDuration   metric.Float64Histogram
+	// toolCalls 统计 tool 调用次数。
+	toolCalls metric.Int64Counter
+	// toolDuration 记录 tool 调用耗时（单位秒）。
+	toolDuration metric.Float64Histogram
 )
 
+// initMCPMetrics 惰性初始化 tool 调用指标（只执行一次）。
 func initMCPMetrics() {
 	mcpMetricsOnce.Do(func() {
 		m := otel.Meter("github.com/fitan/fxkit/mcpx")
@@ -39,6 +43,7 @@ func initMCPMetrics() {
 	})
 }
 
+// recordToolCall 记录一次 tool 调用的次数、耗时与结果（ok/error）。
 func recordToolCall(ctx context.Context, tool string, d time.Duration, isErr bool) {
 	initMCPMetrics()
 	result := "ok"
@@ -65,6 +70,7 @@ func startToolSpan(ctx context.Context, tool Tool) (context.Context, trace.Span)
 	))
 }
 
+// endToolSpan 在出错时记录错误与状态，并结束 span。
 func endToolSpan(span trace.Span, err error) {
 	if err != nil {
 		span.RecordError(err)

@@ -15,31 +15,48 @@ import (
 
 // Server 实现 http.RoundTripper，模拟 consulx 使用到的 Consul HTTP API。
 type Server struct {
+	// mu 保护本结构的所有可变字段。
 	mu sync.Mutex
 
+	// Sessions 记录仍存在的 session ID（destroy 后删除）。
 	Sessions map[string]bool
-	KV       map[string]string // key（已解码）-> sessionID
+	// KV 记录 KV key（已解码）→ 持有该 key 的 session ID；session 被 destroy 时删除对应项。
+	// 真实 Consul 的 KV 条目还保存值本身，并以 Session 字段标记持有者；此处只保留持有关系。
+	// 另用 "__meta__/<session>" 键保存 create 请求的 TTL/LockDelay，destroy 时不清除。
+	KV map[string]string // key（已解码）-> sessionID
 
-	Doomed     map[string]bool // 这些 session 的 renew 返回 500
+	// Doomed 中的 session 在 renew 时返回 500；由 Doom 设置，DoomAllRenew 可让全部 session 失败。
+	Doomed map[string]bool // 这些 session 的 renew 返回 500
+	// RenewCalls 记录每个 session 的 renew 调用次数（含失败）。
 	RenewCalls map[string]int
 
 	// DoomAllRenew 为 true 时所有 renew（含未来创建的 session）都返回 500。
 	DoomAllRenew bool
 
+	// AcquireCalls acquire 请求计数。
 	AcquireCalls int
+	// ReleaseCalls release 请求计数。
 	ReleaseCalls int
+	// DestroyCalls session destroy 请求计数。
 	DestroyCalls int
 
-	CreateStatus   int // 非 0 时 session/create 强制返回该状态码
-	AcquireStatus  int // 非 0 时 acquire 强制返回该状态码（4xx 致命）
+	// CreateStatus 非 0 时 session/create 强制返回该状态码，用于测试创建会话失败。
+	CreateStatus int // 非 0 时 session/create 强制返回该状态码
+	// AcquireStatus 非 0 时 acquire 强制返回该状态码；4xx 在 consulx 侧视为致命、不重试。
+	AcquireStatus int // 非 0 时 acquire 强制返回该状态码（4xx 致命）
+	// AcquireFailure >0 时前 N 次 acquire 返回 500，每次调用递减，用于测试瞬时故障重试。
 	AcquireFailure int // >0 时前 N 次 acquire 返回 500
-	ReleaseStatus  int // 非 0 时 release 返回该状态码
-	DestroyStatus  int // 非 0 时 destroy 返回该状态码
+	// ReleaseStatus 非 0 时 release 强制返回该状态码，用于测试释放失败的告警路径。
+	ReleaseStatus int // 非 0 时 release 返回该状态码
+	// DestroyStatus 非 0 时 destroy 强制返回该状态码，用于测试会话清理失败。
+	DestroyStatus int // 非 0 时 destroy 返回该状态码
 
+	// PassStatus 非 0 时 check/pass 强制返回该状态码，用于测试心跳失败。
 	PassStatus int // 非 0 时 check/pass 返回该状态码
 	// NotFoundUntilRegistered 为 true 时，服务未注册前 check/pass 返回 404。
 	NotFoundUntilRegistered bool
 
+	// RegisterStatus 非 0 时 agent/service/register 强制返回该状态码，用于测试注册失败。
 	RegisterStatus int // 非 0 时 agent/service/register 返回该状态码
 
 	// AcquireDelay 在 acquire 请求处理前等待（不持内部锁），用于让续租协程先失败。
@@ -48,16 +65,25 @@ type Server struct {
 	// SuppressAcquireIndex 模拟真实 Consul：KV PUT 不返回 X-Consul-Index。
 	SuppressAcquireIndex bool
 
-	Registrations   [][]byte
+	// Registrations 按顺序保存每次服务注册的原始 JSON 请求体。
+	Registrations [][]byte
+	// Deregistrations 按顺序保存每次注销请求的服务 ID。
 	Deregistrations []string
-	PassCalls       []string
-	Tokens          []string
+	// PassCalls 按顺序保存每次 TTL pass 的 checkID。
+	PassCalls []string
+	// Tokens 按顺序保存每个请求携带的 X-Consul-Token（未携带时为空串）。
+	Tokens []string
 
-	Requests     []string
+	// Requests 按顺序保存每个请求的 "METHOD URI"，便于断言调用序列。
+	Requests []string
+	// WatchQueries 记录每次 KV 读请求的 query 参数（含 wait/index）。
 	WatchQueries []url.Values
+	// EscapedPaths 记录每次 KV 请求的转义路径，用于断言 key 的转义。
 	EscapedPaths []string
 
-	seq   int
+	// seq 自增生成 session ID（形如 session-<n>）。
+	seq int
+	// index 是 fake 自增的伪造 X-Consul-Index；真实 Consul 的索引由服务端生成，且 KV PUT 不返回该头。
 	index uint64
 }
 
@@ -76,6 +102,12 @@ func (s *Server) Client() *http.Client {
 	return &http.Client{Transport: s}
 }
 
+// RoundTrip 按路径分发模拟的 Consul HTTP API：session create/renew/destroy、
+// KV acquire/release/阻塞查询、agent 注册/注销与 TTL pass；未匹配的路径返回 404。
+//
+// 与真实 Consul 的差异：真实 KV PUT 不返回 X-Consul-Index，此处默认会返回（
+// 置 SuppressAcquireIndex 可模拟真实行为）；GET /v1/agent/services 与 /v1/agent/checks
+// 恒返回空对象，不维护 catalog。
 func (s *Server) RoundTrip(req *http.Request) (*http.Response, error) {
 	s.mu.Lock()
 	delay := s.AcquireDelay
@@ -218,6 +250,7 @@ func (s *Server) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp(req, http.StatusNotFound, "unhandled: "+path, 0), nil
 }
 
+// resp 构造测试用的 *http.Response，仅在 index > 0 时设置 X-Consul-Index。
 func resp(req *http.Request, code int, body string, index uint64) *http.Response {
 	h := make(http.Header)
 	h.Set("Content-Type", "application/json")

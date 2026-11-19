@@ -14,11 +14,15 @@ import (
 // statusError 表示 Consul 返回了非 2xx 状态码。
 // 用于区分 4xx（致命，重试无意义）与 5xx/429（瞬时可重试）。
 type statusError struct {
-	Op   string
+	// Op 操作名，作为错误信息前缀（如 "consul acquire kv"）。
+	Op string
+	// Code Consul 返回的 HTTP 状态码，isRetryable 据此区分致命与可重试错误。
 	Code int
+	// Body 响应体（已去除首尾空白），可能为空。
 	Body string
 }
 
+// Error 返回 "op: status=code" 形式的描述，有响应体时附加 ": body"。
 func (e *statusError) Error() string {
 	if e.Body == "" {
 		return fmt.Sprintf("%s: status=%d", e.Op, e.Code)

@@ -1,3 +1,8 @@
+// Package docs 提供 /docs（Scalar UI）与 /openapi.{yaml,json} 端点，
+// 把内嵌的 base OpenAPI 与当前生效的 Huma spec 合并后输出。
+//
+// [Module] 受配置 docs.enabled 控制，默认关闭；[MergedModule] 是显式调用，
+// 不受该开关影响，适合需要自定义 base spec 的场景。
 package docs
 
 import (
@@ -9,9 +14,12 @@ import (
 	"github.com/fitan/fxkit/di"
 )
 
+// openAPIYAML 是内嵌的 base OpenAPI 规范（openapi.yaml）。
+//
 //go:embed openapi.yaml
 var openAPIYAML []byte
 
+// defaultScalarURL 是 Scalar UI 脚本的默认 CDN 地址。
 const defaultScalarURL = "https://cdn.jsdelivr.net/npm/@scalar/api-reference"
 
 // scalarHTML 生成 Scalar UI 页面。base path 与脚本地址均可配置，
@@ -41,6 +49,7 @@ func scalarHTML(opts RouteOptions) string {
 </html>`, specURL, script, integrity)
 }
 
+// normalizeBasePath 规范化挂载前缀：补前导斜杠、去尾部斜杠；空串与 "/" 返回空串。
 func normalizeBasePath(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" || p == "/" {
@@ -52,6 +61,7 @@ func normalizeBasePath(p string) string {
 	return strings.TrimRight(p, "/")
 }
 
+// joinURLPath 把前缀与路径拼接；base 为空时原样返回 p。
 func joinURLPath(base, p string) string {
 	if base == "" {
 		return p
@@ -68,6 +78,7 @@ func joinURLPath(base, p string) string {
 // 生产环境应显式开启，并配合网关/鉴权保护。需要自定义 base spec 时用 [MergedModule]
 // （它是显式调用，不受本开关影响）。
 type Config struct {
+	// Enabled 为 true 时挂载 /docs 与 /openapi.{yaml,json}；默认 false。
 	Enabled bool `yaml:"enabled"`
 	// BasePath 挂载前缀（例如 "/api"）。默认空，表示直接挂在根路径。
 	BasePath string `yaml:"base_path"`

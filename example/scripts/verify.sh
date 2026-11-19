@@ -9,6 +9,8 @@ export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 
 HOST="${FXKIT_HOST:-10.170.34.223}"
 CONSUL_HOST="${CONSUL_HOST:-localhost}"
+PG_HOST="${PG_HOST:-127.0.0.1}"
+PG_PORT="${PG_PORT:-5432}"
 CATALOG_URL="${CATALOG_URL:-http://127.0.0.1:8081}"
 CATALOG2_URL="${CATALOG2_URL:-http://127.0.0.1:8083}"
 STOREFRONT_URL="${STOREFRONT_URL:-http://127.0.0.1:8082}"
@@ -83,7 +85,7 @@ OTEL_OK=0
 CONSUL_OK=0
 HATCHET_OK=0
 LOGTO_OK=0
-if probe_tcp "$HOST" 5435; then PG_OK=1; ok "postgres $HOST:5435"; else fail "postgres $HOST:5435"; fi
+if probe_tcp "$PG_HOST" "$PG_PORT"; then PG_OK=1; ok "postgres $PG_HOST:$PG_PORT"; else fail "postgres $PG_HOST:$PG_PORT"; fi
 if probe_tcp "$HOST" 4318; then OTEL_OK=1; ok "otel $HOST:4318"; else fail "otel $HOST:4318"; fi
 if probe_tcp "$CONSUL_HOST" 8500; then CONSUL_OK=1; ok "consul $CONSUL_HOST:8500"; else skip "consul $CONSUL_HOST:8500 (connection refused)"; fi
 if probe_tcp "$HOST" 7077; then HATCHET_OK=1; ok "hatchet $HOST:7077"

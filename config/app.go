@@ -8,6 +8,8 @@ import (
 // App 是跨模块的应用标识（yaml: app）。
 // consulx 注册名、Huma OpenAPI 标题；otel.service_name 为空时回退到此值。
 type App struct {
+	// Name 应用名；consulx 注册名与 Huma OpenAPI 标题均取自它，otel.service_name 为空时也回退到此值。
+	// 默认 "fxkit-app"，[App.Validate] 拒绝空值。
 	Name string `yaml:"name"`
 }
 

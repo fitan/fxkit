@@ -10,9 +10,13 @@ import (
 	"gorm.io/gorm"
 )
 
+// listApplyOpts 配置一次 applyList 调用的游标与分页行为。
 type listApplyOpts struct {
-	PKColumn   string
-	PKKind     reflect.Kind
+	// PKColumn 是根表主键列（可带表前缀），用于游标谓词与一对多 JOIN 去重；为空时游标不可用。
+	PKColumn string
+	// PKKind 是主键的 Go 类型，用于把游标里的主键字符串还原为对应类型。
+	PKKind reflect.Kind
+	// SkipPaging 为 true 时不追加 LIMIT/OFFSET（供先 Count 后分页的 [List] 使用）。
 	SkipPaging bool
 }
 
@@ -31,6 +35,7 @@ func ApplyList(tx *gorm.DB, spec ListSpec, params *ListParams) (*gorm.DB, error)
 	return out, err
 }
 
+// pkOptsFromDB 从 tx 的 schema 推导主键列与主键类型；非单一主键时返回零值。
 func pkOptsFromDB(tx *gorm.DB) listApplyOpts {
 	if tx == nil || tx.Statement == nil {
 		return listApplyOpts{}
@@ -51,6 +56,7 @@ func pkOptsFromDB(tx *gorm.DB) listApplyOpts {
 	}
 }
 
+// qualifiedColumn 给未带前缀的列名加上 table 前缀。
 func qualifiedColumn(table, column string) string {
 	if column == "" {
 		return ""
@@ -61,6 +67,8 @@ func qualifiedColumn(table, column string) string {
 	return table + "." + column
 }
 
+// applyList 是 [ApplyList] 与 [List] 共用的实现：应用过滤、JOIN、排序、游标与分页，
+// 并返回本次 JOIN 数。opts.SkipPaging 为 true 时不加 LIMIT/OFFSET。
 func applyList(tx *gorm.DB, spec ListSpec, params *ListParams, opts listApplyOpts) (*gorm.DB, int, error) {
 	if tx == nil {
 		return nil, 0, fxerrors.Internal("crudx.ApplyList: nil db")
@@ -272,6 +280,7 @@ func isForeignColumn(col, pkColumn string) bool {
 	return col[:i] != pkColumn[:j]
 }
 
+// isSameColumn 报告两个列名是否指向同一列（允许一边带表前缀）。
 func isSameColumn(a, b string) bool {
 	if a == b {
 		return true
@@ -285,6 +294,7 @@ func isSameColumn(a, b string) bool {
 	return false
 }
 
+// rejectRelationCursor 在游标分页下拒绝按关联列排序（返回 400）；非游标模式直接放行。
 func rejectRelationCursor(spec ListSpec, params *ListParams, sortBy string) error {
 	if params == nil || (params.Cursor == "" && !params.UseCursor) {
 		return nil
@@ -302,6 +312,7 @@ func rejectRelationCursor(spec ListSpec, params *ListParams, sortBy string) erro
 	return nil
 }
 
+// resolveFieldForSort 解析排序字段：不含点号时优先查 SortFields，否则走 [resolveField]。
 func resolveFieldForSort(spec ListSpec, sortBy string) (resolvedField, error) {
 	if col, ok := spec.SortFields[sortBy]; ok && !strings.Contains(sortBy, ".") {
 		return resolvedField{Column: col}, nil
@@ -309,6 +320,7 @@ func resolveFieldForSort(spec ListSpec, sortBy string) (resolvedField, error) {
 	return resolveField(spec, sortBy)
 }
 
+// applyCondition 按 c.Op 为单个条件生成 WHERE；nil 值转为 IS NULL / IS NOT NULL。
 func applyCondition(tx *gorm.DB, col string, c Condition) (*gorm.DB, error) {
 	switch c.Op {
 	case OpEqual:
@@ -375,6 +387,7 @@ func applyCondition(tx *gorm.DB, col string, c Condition) (*gorm.DB, error) {
 	}
 }
 
+// validatedSortPath 把排序键解析为列名与归一化方向；无法排序时 ok 为 false。
 func validatedSortPath(spec ListSpec, sortBy, sortDir string) (col, dir string, ok bool) {
 	sortBy = strings.TrimSpace(sortBy)
 	if sortBy == "" {
@@ -411,6 +424,7 @@ func validatedSortPath(spec ListSpec, sortBy, sortDir string) (col, dir string, 
 	return col, dir, true
 }
 
+// coerceCursorPK 把游标里的主键字符串转换为模型主键的类型；解析失败返回 400。
 func coerceCursorPK(pk string, kind reflect.Kind) (any, error) {
 	pk = strings.TrimSpace(pk)
 	switch kind {

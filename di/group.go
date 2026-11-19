@@ -15,7 +15,9 @@ import (
 
 // Group 用于汇聚同一类型 T 的多个提供者（替代 Fx 的 fx.Group / ResultTags）。
 type Group[T any] struct {
-	mu    sync.Mutex
+	// mu 保护 items，使 Add/Items 可并发调用。
+	mu sync.Mutex
+	// items 是按注册顺序保存的条目。
 	items []T
 }
 
@@ -54,7 +56,9 @@ func (g *Group[T]) Items() []T {
 // 而且容器是否被回收取决于调用方有没有记得清理。作为容器内的一个服务，
 // 生命周期跟着容器走，这些问题全部消失。
 type groupIndex struct {
-	mu     sync.RWMutex
+	// mu 保护 byElem 的读写。
+	mu sync.RWMutex
+	// byElem 是元素类型到取条目函数的映射。
 	byElem map[reflect.Type]func() []any
 
 	// assembling 标记容器正在执行 Option 闭包（装配期）。
@@ -62,16 +66,19 @@ type groupIndex struct {
 	assembling atomic.Bool
 }
 
+// newGroupIndex 创建一个空的 group 索引。
 func newGroupIndex() *groupIndex {
 	return &groupIndex{byElem: make(map[reflect.Type]func() []any)}
 }
 
+// register 登记元素类型到取条目函数的映射，重复登记会覆盖旧值。
 func (x *groupIndex) register(elem reflect.Type, items func() []any) {
 	x.mu.Lock()
 	x.byElem[elem] = items
 	x.mu.Unlock()
 }
 
+// items 调用登记函数返回该元素类型的条目；未登记时第二个返回值为 false。
 func (x *groupIndex) items(elem reflect.Type) ([]any, bool) {
 	x.mu.RLock()
 	fn, ok := x.byElem[elem]
@@ -82,6 +89,7 @@ func (x *groupIndex) items(elem reflect.Type) ([]any, bool) {
 	return fn(), true
 }
 
+// exists 报告该元素类型是否已登记。
 func (x *groupIndex) exists(elem reflect.Type) bool {
 	x.mu.RLock()
 	_, ok := x.byElem[elem]
@@ -89,6 +97,7 @@ func (x *groupIndex) exists(elem reflect.Type) bool {
 	return ok
 }
 
+// elemTypes 返回已登记的元素类型，按类型名排序。
 func (x *groupIndex) elemTypes() []reflect.Type {
 	x.mu.RLock()
 	out := make([]reflect.Type, 0, len(x.byElem))

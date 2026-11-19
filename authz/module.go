@@ -119,6 +119,8 @@ var Module = di.Module("fxkit/authz",
 
 // validatorParams 是 [NewValidator] 的 Fx 入参。
 type validatorParams struct {
+	// Config 是 auth 配置。
 	Config *Config
-	LC     *di.Lifecycle `optional:"true"`
+	// LC 是可选的钩子生命周期，用于在停止时关闭 JWKS 缓存。
+	LC *di.Lifecycle `optional:"true"`
 }

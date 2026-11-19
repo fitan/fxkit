@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 )
 
 // PreStart 阶段常用的优先级。数值小的先执行。
@@ -35,14 +36,20 @@ const (
 
 // Hook 定义服务的启动和停止钩子。
 type Hook struct {
+	// OnStart 启动钩子；PreStart 与 OnStart 两个阶段都会执行它，返回错误会触发逆序回滚。
 	OnStart func(ctx context.Context) error
-	OnStop  func(ctx context.Context) error
+	// OnStop 关闭钩子；[Lifecycle.Stop] 时逆序执行，nil 表示无需清理。
+	OnStop func(ctx context.Context) error
 }
 
+// phasedHook 是一条带优先级与注册序号的 PreStart 钩子。
 type phasedHook struct {
+	// priority 是阶段优先级，数值小的先执行（见 [PhaseResolveContributors] 等常量）。
 	priority int
-	seq      int
-	hook     Hook
+	// seq 是注册序号，同优先级时按它稳定排序。
+	seq int
+	// hook 是实际的钩子函数。
+	hook Hook
 }
 
 // Lifecycle 管理应用的生命周期钩子。
@@ -58,10 +65,14 @@ type phasedHook struct {
 //
 // 关闭时 OnStop 逆序执行。任一 PreStart/OnStart 失败都会逆序回滚已启动的钩子。
 type Lifecycle struct {
-	mu       sync.Mutex
+	// mu 保护 preStart/hooks/seq 的并发访问。
+	mu sync.Mutex
+	// preStart 是按优先级排序执行的 PreStart 钩子集合。
 	preStart []phasedHook
-	hooks    []Hook
-	seq      int
+	// hooks 是按注册顺序保存的 OnStart/OnStop 钩子。
+	hooks []Hook
+	// seq 是 PreStart 钩子的注册序号计数器。
+	seq int
 }
 
 // NewLifecycle 创建一个新的 Lifecycle 实例。
@@ -103,7 +114,7 @@ func (lc *Lifecycle) AppendPreStartPhase(priority int, hook Hook) {
 }
 
 // orderedPreStart 返回按 (priority, 注册顺序) 排好的 PreStart 钩子。
-func (lc *Lifecycle) orderedPreStart() []Hook {
+func (lc *Lifecycle) orderedPreStart() []phasedHook {
 	lc.mu.Lock()
 	phased := append([]phasedHook(nil), lc.preStart...)
 	lc.mu.Unlock()
@@ -114,12 +125,7 @@ func (lc *Lifecycle) orderedPreStart() []Hook {
 		}
 		return phased[a].seq < phased[b].seq
 	})
-
-	out := make([]Hook, len(phased))
-	for i, p := range phased {
-		out[i] = p.hook
-	}
-	return out
+	return phased
 }
 
 // StartPreStartOnly 只运行 PreStart 阶段，不启动任何服务。
@@ -131,7 +137,8 @@ func (lc *Lifecycle) StartPreStartOnly(ctx context.Context) error {
 	if lc == nil {
 		return nil
 	}
-	for _, h := range lc.orderedPreStart() {
+	for _, p := range lc.orderedPreStart() {
+		h := p.hook
 		if h.OnStart == nil {
 			continue
 		}
@@ -158,11 +165,15 @@ func (lc *Lifecycle) Start(ctx context.Context) error {
 		}
 	}
 
-	for i, h := range lc.orderedPreStart() {
+	for i, p := range lc.orderedPreStart() {
+		h := p.hook
 		if h.OnStart == nil {
 			continue
 		}
-		if err := h.OnStart(ctx); err != nil {
+		start := time.Now()
+		err := h.OnStart(ctx)
+		recordPreStartPhase(ctx, p.priority, time.Since(start), err)
+		if err != nil {
 			slog.Error("lifecycle pre-start failed; rolling back", "error", err, "step", i)
 			rollback()
 			return fmt.Errorf("lifecycle pre-start hook failed: %w", err)
@@ -227,8 +238,8 @@ func (lc *Lifecycle) Stop(ctx context.Context) error {
 
 	pre := lc.orderedPreStart()
 	for i := len(pre) - 1; i >= 0; i-- {
-		if pre[i].OnStop != nil {
-			if err := pre[i].OnStop(ctx); err != nil {
+		if pre[i].hook.OnStop != nil {
+			if err := pre[i].hook.OnStop(ctx); err != nil {
 				errs(err)
 			}
 		}

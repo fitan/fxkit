@@ -43,11 +43,15 @@ func IsNullVal(data []byte) bool {
 // errors.Is 只认 ErrNegativeHit。fxNotFound 为真时，errors.As 得到 KindNotFound，
 // 这样 fxerrors.NotFound 的第二次请求仍是 404。
 type NegativeHitError struct {
-	Key        string
-	Message    string
+	// Key 命中负缓存的键。
+	Key string
+	// Message 错误消息；为空时使用 "not found"。
+	Message string
+	// fxNotFound 标记原错误是否为 fxerrors.NotFound，决定 errors.As 是否给出 KindNotFound。
 	fxNotFound bool
 }
 
+// Error 返回负缓存命中错误消息；Message 为空时用 not found，Key 非空时带上键名。
 func (e *NegativeHitError) Error() string {
 	if e == nil {
 		return ErrNegativeHit.Error()
@@ -100,12 +104,15 @@ func classifyNotFound(err error) (fxNotFound bool, ok bool) {
 	return false, ok
 }
 
+// isNotFoundError 报告 err 是否属于可写入负缓存的「未找到」错误。
 func isNotFoundError(err error) bool {
 	_, ok := classifyNotFound(err)
 	return ok
 }
 
+// negativeEntry 是负缓存 payload 的 JSON 结构。
 type negativeEntry struct {
+	// FX 标记原错误是否为 fxerrors.KindNotFound，命中后仍应映射为 404。
 	FX bool `json:"fx,omitempty"`
 }
 

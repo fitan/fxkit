@@ -7,8 +7,11 @@ import (
 	"time"
 )
 
+// advertiseResult 是 resolveAdvertise 的结果。
 type advertiseResult struct {
-	Addr     string
+	// Addr 写入 Consul catalog 的服务地址。
+	Addr string
+	// Explicit 地址是否来自 discovery.advertise_address；false 表示自动探测或回环兜底。
 	Explicit bool
 }
 
@@ -30,6 +33,8 @@ func resolveAdvertise(disc *Config) advertiseResult {
 	return advertiseResult{Addr: "127.0.0.1"}
 }
 
+// isLoopbackAddr 判断 addr 的主机部分是否为回环地址。
+// 支持 host:port 形式，并额外把 localhost 视为回环。
 func isLoopbackAddr(addr string) bool {
 	host := strings.TrimSpace(addr)
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -57,6 +62,7 @@ func detectLocalIP(consulAddress string) string {
 	return firstNonLoopbackIPv4()
 }
 
+// consulHostname 从 Consul 地址中解析主机名；空地址、回环地址或解析失败时返回 ""。
 func consulHostname(addr string) string {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -76,6 +82,8 @@ func consulHostname(addr string) string {
 	return host
 }
 
+// outboundIP 向 dest 发起 UDP 拨号（2s 超时），返回所用本机 IPv4。
+// 拨号失败、非 UDP 地址或结果为回环/未指定地址时返回 ""。
 func outboundIP(dest string) string {
 	conn, err := net.DialTimeout("udp", dest, 2*time.Second)
 	if err != nil {
@@ -93,6 +101,8 @@ func outboundIP(dest string) string {
 	return ip.String()
 }
 
+// isPointToPointIP 判断 ipStr 是否属于某个点对点（如 VPN）网卡；
+// IP 解析失败或枚举网卡失败时返回 false。
 func isPointToPointIP(ipStr string) bool {
 	want := net.ParseIP(ipStr)
 	if want == nil {
@@ -119,6 +129,8 @@ func isPointToPointIP(ipStr string) bool {
 	return false
 }
 
+// firstNonLoopbackIPv4 返回按网卡名打分（en/eth/wlan > bridge > 其他）选出的
+// 非回环、非点对点 IPv4；没有可用地址时返回 ""。
 func firstNonLoopbackIPv4() string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -161,6 +173,7 @@ func firstNonLoopbackIPv4() string {
 	return best.ip
 }
 
+// ipFromAddr 从 *net.IPNet 或 *net.IPAddr 中取出 IP，其他类型返回 nil。
 func ipFromAddr(a net.Addr) net.IP {
 	switch v := a.(type) {
 	case *net.IPNet:

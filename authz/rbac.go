@@ -14,15 +14,22 @@ import (
 
 // RoleRecord 是面向管理端的角色元数据（与 casbin_rule 分开存放）。
 type RoleRecord struct {
-	Name        string    `gorm:"primaryKey;size:64" json:"name"`
-	DisplayName string    `gorm:"size:128" json:"display_name"`
-	Description string    `gorm:"size:512" json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Name 角色名，主键，同时也是 Casbin 策略中的 sub，长度 64。
+	Name string `gorm:"primaryKey;size:64" json:"name"`
+	// DisplayName 展示名；为空则回退为 Name。
+	DisplayName string `gorm:"size:128" json:"display_name"`
+	// Description 角色描述。
+	Description string `gorm:"size:512" json:"description"`
+	// CreatedAt 首次创建时间；upsert 冲突时不更新。
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt 最后一次更新时间，每次 upsert 刷新。
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// TableName 返回角色元数据表名 authz_role。
 func (RoleRecord) TableName() string { return "authz_role" }
 
+// ensureRoleTable 自动迁移角色元数据表；db 为 nil 时直接返回 nil。
 func ensureRoleTable(db *gorm.DB) error {
 	if db == nil {
 		return nil
@@ -32,39 +39,55 @@ func ensureRoleTable(db *gorm.DB) error {
 
 // CreateRoleInput 创建或更新角色元数据。
 type CreateRoleInput struct {
-	Name        string
+	// Name 角色名，必填；仅含空白时报错。
+	Name string
+	// DisplayName 展示名；为空时回退为 Name。
 	DisplayName string
+	// Description 角色描述，保存前会去除首尾空白。
 	Description string
 }
 
 // RolePermission 是授予角色的单条 path+method 权限。
 type RolePermission struct {
+	// Domain 租户 domain（json: domain）；"*" 表示全局。
 	Domain string `json:"domain"` // 租户 domain；"*" = 全局
-	Path   string `json:"path"`   // Huma 的 `{id}` 或 Casbin 的 `:id`
+	// Path 权限路径（json: path），Huma 的 `{id}` 或 Casbin 的 `:id`。
+	Path string `json:"path"` // Huma 的 `{id}` 或 Casbin 的 `:id`
+	// Method HTTP 方法（json: method），如 GET / POST / *。
 	Method string `json:"method"` // GET / POST / * …
 }
 
 // SetRolePermissionsInput 全量替换某个角色在某个 domain 的 p 规则。
 type SetRolePermissionsInput struct {
-	Role   string
+	// Role 角色名，必填；不存在时会先创建角色元数据。
+	Role string
+	// Domain 租户 domain；空 = "*"（全局）
 	Domain string // 空 = "*"（全局）
-	Items  []RolePermission
+	// Items 该角色在 Domain 下的完整权限列表，会替换旧规则；空表示清空。
+	Items []RolePermission
 }
 
 // SubjectRolesInput 设置/查询主体在某个 domain 的角色绑定。
 type SubjectRolesInput struct {
+	// Subject 主体标识（用户 ID），必填。
 	Subject string
-	Domain  string // 空 = "*"
-	Roles   []string
+	// Domain 租户 domain；空 = "*"
+	Domain string // 空 = "*"
+	// Roles 主体在该 domain 的完整角色列表，会替换旧绑定；空表示全部解绑，重复项会被忽略。
+	Roles []string
 }
 
 // AddSubjectRoleInput 把一个角色绑定到主体（可按 domain）。
 type AddSubjectRoleInput struct {
+	// Subject 主体标识（用户 ID），必填。
 	Subject string
-	Role    string
-	Domain  string // 空 = "*"
+	// Role 角色名，必填。
+	Role string
+	// Domain 租户 domain；空 = "*"
+	Domain string // 空 = "*"
 }
 
+// requireEnabled 在执行器未启用时返回 Internal 错误。
 func (e *Enforcer) requireEnabled() error {
 	if !e.Enabled() {
 		return fxerrors.Internal("auth casbin not enabled")
@@ -238,6 +261,7 @@ func (e *Enforcer) GetRole(ctx context.Context, name string) (*RoleRecord, error
 
 // DeleteRoleInput 删除角色元数据以及该角色的全部 casbin p/g 规则。
 type DeleteRoleInput struct {
+	// Role 要删除的角色名，必填；会同时删除其全部 p/g 规则与元数据。
 	Role string
 }
 
@@ -347,9 +371,13 @@ func (e *Enforcer) SetRolePermissions(ctx context.Context, in SetRolePermissions
 
 // AddRolePermissionInput 为角色追加一条权限。
 type AddRolePermissionInput struct {
-	Role   string
+	// Role 角色名，必填；AddRolePermission 会在角色不存在时先创建元数据。
+	Role string
+	// Domain 租户 domain；空 = "*"
 	Domain string // 空 = "*"
-	Path   string
+	// Path 权限路径，支持 Huma 的 `{id}` 或 Casbin 的 `:id`，写入前会转成 Casbin 模式。
+	Path string
+	// Method HTTP 方法，写入前转大写；"*" 表示任意方法。
 	Method string
 }
 

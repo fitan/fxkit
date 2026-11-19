@@ -16,6 +16,7 @@ import (
 	"github.com/fitan/fxkit/server"
 )
 
+// maxResponseBytes 是可缓存响应体的上限（1 MiB）；超过后不再缓存、直接透写。
 const maxResponseBytes = 1 << 20
 
 // Middleware 对带 Idempotency-Key 的 mutating 请求做去重与响应重放。
@@ -56,20 +57,26 @@ func Middleware(cfg Config, store Store) server.Middleware {
 			hash := hex.EncodeToString(sum[:])
 
 			scoped := scopedKey(r, key)
+			beginAt := time.Now()
 			rec, created, err := store.Begin(r.Context(), scoped, hash, cfg.TTL)
+			recordStoreOp(r.Context(), "begin", time.Since(beginAt), err)
 			if err != nil {
+				recordRequest(r.Context(), "error")
 				fxerrors.WriteError(w, r, fxerrors.Wrap(err))
 				return
 			}
 			if !created {
 				if !rec.Completed {
+					recordRequest(r.Context(), "conflict")
 					fxerrors.WriteError(w, r, fxerrors.Conflict("idempotency key is in progress"))
 					return
 				}
 				if rec.RequestHash != hash {
+					recordRequest(r.Context(), "conflict")
 					fxerrors.WriteError(w, r, fxerrors.Conflict("idempotency key reused with a different request"))
 					return
 				}
+				recordRequest(r.Context(), "replayed")
 				if rec.ContentType != "" {
 					w.Header().Set("Content-Type", rec.ContentType)
 				}
@@ -78,6 +85,7 @@ func Middleware(cfg Config, store Store) server.Middleware {
 				_, _ = w.Write(rec.ResponseBody)
 				return
 			}
+			recordRequest(r.Context(), "first")
 
 			cw := &captureWriter{ResponseWriter: w, header: make(http.Header)}
 			defer func() {
@@ -96,11 +104,19 @@ func Middleware(cfg Config, store Store) server.Middleware {
 			writeCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 			defer cancel()
 			if status >= 200 && status < 500 && !streaming && !overflow {
-				if err := store.Complete(writeCtx, scoped, status, contentType, respBody); err != nil {
+				completeAt := time.Now()
+				err := store.Complete(writeCtx, scoped, status, contentType, respBody)
+				recordStoreOp(r.Context(), "complete", time.Since(completeAt), err)
+				if err != nil {
 					slog.WarnContext(writeCtx, "idempotency complete failed", "error", err)
 				}
-			} else if err := store.Abort(writeCtx, scoped); err != nil {
-				slog.WarnContext(writeCtx, "idempotency abort failed", "error", err)
+			} else {
+				abortAt := time.Now()
+				err := store.Abort(writeCtx, scoped)
+				recordStoreOp(r.Context(), "abort", time.Since(abortAt), err)
+				if err != nil {
+					slog.WarnContext(writeCtx, "idempotency abort failed", "error", err)
+				}
 			}
 		})
 	}
@@ -125,24 +141,34 @@ func ScopeKey(method, path, subject, clientKey string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// captureWriter 缓冲 handler 的响应，供中间件在请求结束后写入幂等存储。
 type captureWriter struct {
 	http.ResponseWriter
-	header      http.Header
-	status      int
-	body        []byte
-	streaming   bool
-	overflow    bool
+	// header 是待写出的响应头，flush 时复制到真实 ResponseWriter。
+	header http.Header
+	// status 是记录的首个状态码，0 表示尚未 WriteHeader。
+	status int
+	// body 是已缓冲的响应体，flush 后清空。
+	body []byte
+	// streaming 表示 handler 调用过 Flush（如 SSE），此类响应不缓存。
+	streaming bool
+	// overflow 表示已停止缓冲、直接透写（缓冲超限或 handler 调用 Flush）。
+	overflow bool
+	// wroteHeader 表示响应头已写给真实 ResponseWriter（只写一次）。
 	wroteHeader bool
 }
 
+// Header 返回待写出的响应头集合。
 func (w *captureWriter) Header() http.Header { return w.header }
 
+// WriteHeader 只记录首个状态码，不立即写出。
 func (w *captureWriter) WriteHeader(code int) {
 	if w.status == 0 {
 		w.status = code
 	}
 }
 
+// Write 缓冲响应体；超过 maxResponseBytes 后转为 overflow 并直接透写。
 func (w *captureWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -159,6 +185,7 @@ func (w *captureWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// Flush 标记发生了流式写出，并立即把已缓冲内容刷给真实 ResponseWriter。
 func (w *captureWriter) Flush() {
 	w.streaming = true
 	w.overflow = true
@@ -168,8 +195,10 @@ func (w *captureWriter) Flush() {
 	}
 }
 
+// Unwrap 返回被包装的 ResponseWriter，供 http.ResponseController 使用。
 func (w *captureWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// statusCode 返回已记录的状态码，未写时为 200。
 func (w *captureWriter) statusCode() int {
 	if w.status == 0 {
 		return http.StatusOK
@@ -177,6 +206,7 @@ func (w *captureWriter) statusCode() int {
 	return w.status
 }
 
+// flush 把已缓冲的响应头与响应体写出到真实 ResponseWriter（只写一次）。
 func (w *captureWriter) flush() {
 	if !w.wroteHeader {
 		dst := w.ResponseWriter.Header()

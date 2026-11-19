@@ -36,9 +36,12 @@ const (
 	consulRetryBackoff = 200 * time.Millisecond
 )
 
+// consulLocker 是基于 Consul Session 与 KV 的 Locker 实现。
 type consulLocker struct {
+	// baseURL 归一化后的 Consul HTTP 地址（已补 scheme、无尾部斜杠）。
 	baseURL string
-	client  *http.Client
+	// client 所有锁请求共用的 HTTP 客户端，超时必须大于 blocking query 的 wait。
+	client *http.Client
 }
 
 // NewConsulLocker 创建基于 Consul Session 与 KV 的分布式锁管理器。
@@ -63,6 +66,8 @@ func NewConsulLocker(consulAddr string, client *http.Client) (Locker, error) {
 	}, nil
 }
 
+// NewLock 校验 key 与 Prefix+key 的字符集，套用默认选项并归一化 TTL/LockDelay 后创建锁实例。
+// key 为空或含 Consul 不允许的字符时返回错误。
 func (l *consulLocker) NewLock(key string, opts ...LockOption) (Lock, error) {
 	cleanKey := strings.TrimSpace(strings.Trim(key, "/"))
 	if cleanKey == "" {
@@ -87,6 +92,8 @@ func (l *consulLocker) NewLock(key string, opts ...LockOption) (Lock, error) {
 	}, nil
 }
 
+// WithLock 获取锁后执行 fn，结束后用独立超时的 context 释放锁；
+// fn 与 Unlock 的错误通过 errors.Join 合并返回。
 func (l *consulLocker) WithLock(ctx context.Context, key string, fn func(ctx context.Context) error, opts ...LockOption) (err error) {
 	lock, err := l.NewLock(key, opts...)
 	if err != nil {
@@ -106,18 +113,28 @@ func (l *consulLocker) WithLock(ctx context.Context, key string, fn func(ctx con
 // renewState 是单次加锁尝试（session）的续租状态。
 // 续租协程只写本结构，不获取 consulLock.mu，因此与 Unlock 不存在锁序依赖。
 type renewState struct {
+	// sessionID 本次加锁使用的 Consul session。
 	sessionID string
-	stop      chan struct{}
-	done      chan struct{}
-	stopOnce  sync.Once
-	alive     atomic.Bool  // 续租协程是否仍在运行
-	lost      atomic.Bool  // 续租判定会话失效
-	lastOK    atomic.Int64 // 最近一次续租成功的 UnixNano
+	// stop 关闭即通知续租协程退出。
+	stop chan struct{}
+	// done 在续租协程退出时关闭。
+	done chan struct{}
+	// stopOnce 保证 stop 只关闭一次。
+	stopOnce sync.Once
+	// alive 在续租协程退出时置为 false；startSession 在启动 goroutine 前置位。
+	alive atomic.Bool // 续租协程是否仍在运行
+	// lost 置位后 IsHeld 立即返回 false，Unlock 会报告 ErrLockLost。
+	lost atomic.Bool // 续租判定会话失效
+	// lastOK 最近一次续租成功的 UnixNano；距其超过 TTL 即判定锁已丢失。
+	lastOK atomic.Int64 // 最近一次续租成功的 UnixNano
 
-	mu     sync.Mutex
+	// mu 保护 lostEr。
+	mu sync.Mutex
+	// lostEr 首个失效原因；未失效时为 nil。
 	lostEr error
 }
 
+// newRenewState 创建续租状态，并把 lastOK 初始化为当前时间。
 func newRenewState(sessionID string) *renewState {
 	s := &renewState{
 		sessionID: sessionID,
@@ -128,14 +145,17 @@ func newRenewState(sessionID string) *renewState {
 	return s
 }
 
+// stopRenew 关闭停止信号；重复调用安全。
 func (s *renewState) stopRenew() {
 	s.stopOnce.Do(func() { close(s.stop) })
 }
 
+// wait 阻塞直到续租协程退出。
 func (s *renewState) wait() {
 	<-s.done
 }
 
+// markLost 记录首个失效原因并置位 lost；后续调用的 err 被忽略。
 func (s *renewState) markLost(err error) {
 	s.mu.Lock()
 	if s.lostEr == nil {
@@ -145,45 +165,60 @@ func (s *renewState) markLost(err error) {
 	s.lost.Store(true)
 }
 
+// lostErr 返回会话失效原因；未失效时返回 nil。
 func (s *renewState) lostErr() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lostEr
 }
 
+// usable 返回续租协程仍在运行且未判定失效。
 func (s *renewState) usable() bool {
 	return !s.lost.Load() && s.alive.Load()
 }
 
+// consulLock 是单个 Consul 分布式锁实例，同一实例不可重入。
 type consulLock struct {
+	// locker 创建该锁的 Locker，提供 baseURL 与 client。
 	locker *consulLocker
-	key    string
-	opts   LockOptions
+	// key 业务 key（不含 Prefix）。
+	key string
+	// opts 归一化后的锁选项。
+	opts LockOptions
 
 	// renewInterval 为 0 时按 TTL/3 推导（下限 2s）。仅测试需要覆盖。
 	renewInterval time.Duration
 
-	mu      sync.Mutex
-	held    bool
+	// mu 保护 held/pending/renew。
+	mu sync.Mutex
+	// held 当前是否持有锁。
+	held bool
+	// pending 为 true 时并发的 Lock/TryLock 直接返回 ErrLockHeld。
 	pending bool // 正在获取中（Lock 阻塞等待期间），用于实现不可重入
-	renew   *renewState
+	// renew 当前持有对应的续租状态；未持有时为 nil。
+	renew *renewState
+	// fencing 最近一次成功 acquire 的 X-Consul-Index（0 = 未持有/已释放）。
 	fencing atomic.Uint64
 }
 
+// FencingToken 返回最近一次成功 acquire 的 KV ModifyIndex；未持有或已释放时为 0。
 func (l *consulLock) FencingToken() uint64 {
 	return l.fencing.Load()
 }
 
+// Key 返回锁的业务 key（不含 Prefix）。
 func (l *consulLock) Key() string {
 	return l.key
 }
 
+// IsHeld 返回本实例仍持有锁且续租协程可用；会话失效后立即返回 false。
 func (l *consulLock) IsHeld() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.held && l.renew != nil && l.renew.usable()
 }
 
+// fullKey 返回 Prefix 与 key 拼成的完整 KV 路径。
 func (l *consulLock) fullKey() string {
 	return l.opts.keyPath(l.key)
 }
@@ -215,6 +250,7 @@ func (l *consulLock) beginAcquire() error {
 	return nil
 }
 
+// endAcquire 清除 pending 标记，结束一次获取尝试。
 func (l *consulLock) endAcquire() {
 	l.mu.Lock()
 	l.pending = false
@@ -248,6 +284,8 @@ func (l *consulLock) discardSession(st *renewState) {
 	}
 }
 
+// TryLock 非阻塞获取锁：创建会话或 acquire 失败时返回错误，锁被占用时返回 ErrLockHeld。
+// 失败路径都会销毁已创建的会话；成功时记录 fencing token。
 func (l *consulLock) TryLock(ctx context.Context) (err error) {
 	start := time.Now()
 	defer func() { recordLockAcquire(ctx, time.Since(start), err) }()
@@ -292,6 +330,8 @@ func (l *consulLock) TryLock(ctx context.Context) (err error) {
 	return nil
 }
 
+// Lock 阻塞获取锁直到成功或 ctx 结束：内层用 Blocking Query 等待 KV 变化，
+// 会话失效或遇到可重试错误时重建 session 后继续。
 func (l *consulLock) Lock(ctx context.Context) (err error) {
 	start := time.Now()
 	defer func() { recordLockAcquire(ctx, time.Since(start), err) }()
@@ -399,6 +439,8 @@ func (l *consulLock) Lock(ctx context.Context) (err error) {
 	}
 }
 
+// Unlock 停止续租、释放 KV 并销毁会话，释放与销毁使用独立超时的 context。
+// 未持有时返回 ErrLockNotHeld；锁已丢失时返回 ErrLockLost，并用 errors.Join 附带失效与清理错误。
 func (l *consulLock) Unlock(ctx context.Context) error {
 	l.mu.Lock()
 	if !l.held {
@@ -434,6 +476,7 @@ func (l *consulLock) Unlock(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// sessionLostError 把 ErrLockLost 与失效原因合并返回；无原因时只返回 ErrLockLost。
 func (l *consulLock) sessionLostError(st *renewState) error {
 	if err := st.lostErr(); err != nil {
 		return errors.Join(ErrLockLost, err)
@@ -454,13 +497,20 @@ func (l *consulLock) startSession(ctx context.Context) (string, *renewState, err
 	return sessionID, st, nil
 }
 
+// createSessionRequest 是 PUT /v1/session/create 的请求体。
 type createSessionRequest struct {
-	Name      string `json:"Name"`
-	TTL       string `json:"TTL"`
-	Behavior  string `json:"Behavior"`
+	// Name 会话名，取 fxkit-lock:<完整 KV 路径>，便于在 Consul 侧排查。
+	Name string `json:"Name"`
+	// TTL 会话 TTL，形如 "15s"（已向上取整到整秒）。
+	TTL string `json:"TTL"`
+	// Behavior 会话失效后对已 acquire 的 KV 的处理方式，固定为 release（自动释放锁）。
+	Behavior string `json:"Behavior"`
+	// LockDelay 锁释放后的延迟，形如 "0s"（已向上取整到整秒）。
 	LockDelay string `json:"LockDelay"`
 }
 
+// createSession 调用 PUT /v1/session/create 创建 Behavior=release 的会话，
+// TTL 与 LockDelay 均向上取整到秒；返回 Consul 分配的 session id。
 func (l *consulLock) createSession(ctx context.Context) (string, error) {
 	ttlSec := ttlSecondsCeil(l.opts.TTL)
 	delaySec := lockDelaySeconds(l.opts.LockDelay)
@@ -506,6 +556,8 @@ func (l *consulLock) createSession(ctx context.Context) (string, error) {
 	return res.ID, nil
 }
 
+// renewLoop 按 TTL/3（下限 2s）周期续租；遇到 404、连续失败达到阈值
+// 或距上次成功超过 TTL 时判定会话失效，记录指标并触发 OnLost。
 func (l *consulLock) renewLoop(st *renewState) {
 	defer func() {
 		st.alive.Store(false)
@@ -579,6 +631,7 @@ func safeOnLost(fn func(key string, err error), key string, err error) {
 	fn(key, err)
 }
 
+// renewSession 调用 PUT /v1/session/renew/{id} 续租，单次请求超时由 timeout 控制。
 func (l *consulLock) renewSession(sessionID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -600,6 +653,7 @@ func (l *consulLock) renewSession(sessionID string, timeout time.Duration) error
 	return err
 }
 
+// destroySession 调用 PUT /v1/session/destroy/{id} 销毁会话；sessionID 为空时直接返回 nil。
 func (l *consulLock) destroySession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return nil
@@ -630,10 +684,13 @@ func escapeKeyPath(fullKey string) string {
 	return strings.Join(segments, "/")
 }
 
+// kvURL 拼接 KV 请求 URL，路径逐段转义并保留 "/" 作为分隔符。
 func (l *consulLock) kvURL(fullKey string) string {
 	return l.locker.baseURL + "/v1/kv/" + escapeKeyPath(fullKey)
 }
 
+// acquireKV 用 ?acquire=<session> 尝试获取 KV 锁，有 Value 时作为请求体。
+// 真实 Consul 的 KV PUT 不返回 X-Consul-Index，因此成功且 index 为 0 时会补发 GET 读取。
 func (l *consulLock) acquireKV(ctx context.Context, sessionID string) (bool, uint64, error) {
 	var body io.Reader
 	if len(l.opts.Value) > 0 {
@@ -722,6 +779,7 @@ func (l *consulLock) acquireWithRetry(ctx context.Context, sessionID string, max
 	}
 }
 
+// releaseKV 用 ?release=<session> 释放 KV 锁。
 func (l *consulLock) releaseKV(ctx context.Context, sessionID string) error {
 	q := "?release=" + url.QueryEscape(sessionID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, l.kvURL(l.fullKey())+q, nil)
@@ -790,6 +848,7 @@ func (l *consulLock) waitKVChange(ctx context.Context, fullKey string, index uin
 	}
 }
 
+// parseConsulIndex 解析 X-Consul-Index；头缺失或无法解析时返回 0。
 func parseConsulIndex(h http.Header) uint64 {
 	if h == nil {
 		return 0

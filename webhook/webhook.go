@@ -17,19 +17,28 @@ import (
 )
 
 const (
+	// DefaultSignatureHeader 是默认的签名请求头名。
 	DefaultSignatureHeader = "X-Webhook-Signature"
+	// DefaultTimestampHeader 是默认的 Unix 秒时间戳请求头名。
 	DefaultTimestampHeader = "X-Webhook-Timestamp"
-	defaultTolerance       = 5 * time.Minute
-	defaultMaxBodyBytes    = 1 << 20
+	// defaultTolerance 是时间戳允许的偏移，默认 5 分钟。
+	defaultTolerance = 5 * time.Minute
+	// defaultMaxBodyBytes 是 [ReadBody] 在 limit<=0 时使用的读取上限（1 MiB）。
+	defaultMaxBodyBytes = 1 << 20
 )
 
 // Verifier 校验 webhook 的 HMAC-SHA256 签名与时间戳。
 type Verifier struct {
-	Secret          []byte
+	// Secret 是 HMAC-SHA256 密钥；为空时 [Verifier.Verify] 返回错误。
+	Secret []byte
+	// SignatureHeader 是签名头名，默认 [DefaultSignatureHeader]；可接受 "sha256=" 前缀。
 	SignatureHeader string
+	// TimestampHeader 是 Unix 秒时间戳头名，默认 [DefaultTimestampHeader]。
 	TimestampHeader string
-	Tolerance       time.Duration
-	Now             func() time.Time
+	// Tolerance 是允许的时间戳偏移，默认 5m；<=0 时使用默认值。
+	Tolerance time.Duration
+	// Now 可注入时钟，便于测试；nil 时使用 time.Now。
+	Now func() time.Time
 }
 
 // Sign 返回 HMAC-SHA256 的 hex 签名。
@@ -41,22 +50,29 @@ func Sign(secret, body []byte) string {
 
 // Verify 校验签名与时间戳。timestamp 为 Unix 秒。
 func (v Verifier) Verify(body []byte, signature, timestamp string) error {
+	result := "ok"
+	defer func() { recordVerification(result) }()
+
 	if len(v.Secret) == 0 {
+		result = "missing_secret"
 		return fmt.Errorf("webhook: secret is required")
 	}
 	sig := strings.TrimSpace(signature)
 	sig = strings.TrimPrefix(sig, "sha256=")
 	expected := Sign(v.Secret, body)
 	if subtle.ConstantTimeCompare([]byte(sig), []byte(expected)) != 1 {
+		result = "invalid_signature"
 		return fmt.Errorf("webhook: invalid signature")
 	}
 
 	ts := strings.TrimSpace(timestamp)
 	if ts == "" {
+		result = "missing_timestamp"
 		return fmt.Errorf("webhook: timestamp is required")
 	}
 	sec, err := strconv.ParseInt(ts, 10, 64)
 	if err != nil {
+		result = "invalid_timestamp"
 		return fmt.Errorf("webhook: invalid timestamp")
 	}
 	now := time.Now
@@ -68,6 +84,7 @@ func (v Verifier) Verify(body []byte, signature, timestamp string) error {
 		tol = defaultTolerance
 	}
 	if d := now().Sub(time.Unix(sec, 0)); d > tol || d < -tol {
+		result = "expired"
 		return fmt.Errorf("webhook: timestamp outside tolerance")
 	}
 	return nil

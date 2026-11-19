@@ -21,9 +21,12 @@ import (
 )
 
 const (
-	defaultTTL             = "15s"
+	// defaultTTL 自注册时写入 TTL 检查的存活时长；心跳间隔 ttlPassInterval 必须小于它。
+	defaultTTL = "15s"
+	// defaultDeregisterAfter TTL 检查持续 critical 超过该时长后 Consul 自动注销服务。
 	defaultDeregisterAfter = "1m"
-	ttlPassInterval        = 5 * time.Second
+	// ttlPassInterval TTL 心跳间隔。
+	ttlPassInterval = 5 * time.Second
 	// ttlWarnAfterFailures 连续失败达到该次数后从 Debug 升到 Warn（带次数，避免刷屏）。
 	ttlWarnAfterFailures = 2
 	// ttlReregisterAfterFailures 连续失败达到该次数后尝试重新注册
@@ -31,23 +34,36 @@ const (
 	ttlReregisterAfterFailures = 3
 )
 
-type registerConfigError struct{ msg string }
+// registerConfigError 表示配置不完整/非法导致的注册失败，msg 为面向调用方的错误信息。
+// 用于与网络/HTTP 错误区分（测试据此断言错误类型）。
+type registerConfigError struct {
+	// msg 是面向调用方的错误信息。
+	msg string
+}
 
+// Error 返回构造时记录的配置错误信息。
 func (e *registerConfigError) Error() string { return e.msg }
 
+// registerConfigErrorf 构造 *registerConfigError，用于区分配置错误与网络错误。
 func registerConfigErrorf(format string, args ...any) error {
 	return &registerConfigError{msg: fmt.Sprintf(format, args...)}
 }
 
+// isRegisterConfigError 判断 err 是否为 *registerConfigError。
 func isRegisterConfigError(err error) bool {
 	var e *registerConfigError
 	return errors.As(err, &e)
 }
 
+// registerSelfParams 是自注册所需的依赖集合。
 type registerSelfParams struct {
-	LC     *di.Lifecycle
-	Disc   *Config
-	App    *config.App
+	// LC 用于追加 OnStart/OnStop hook；为 nil 时不注册也不注销。
+	LC *di.Lifecycle
+	// Disc discovery 配置；为 nil 时直接返回。
+	Disc *Config
+	// App 应用配置，提供 app.name。
+	App *config.App
+	// Server server 配置，提供监听端口。
 	Server *server.Config
 }
 
@@ -97,10 +113,13 @@ func registerSelfLifecycle(p registerSelfParams) {
 	}
 }
 
+// registerSelf 用 8s 超时的默认 client 调用 registerSelfWithClient。
 func registerSelf(ctx context.Context, disc *Config, app *config.App, srv *server.Config) (string, error) {
 	return registerSelfWithClient(ctx, &http.Client{Timeout: 8 * time.Second}, disc, app, srv)
 }
 
+// registerSelfWithClient 以 app.name 向 /v1/agent/service/register 注册 TTL 检查。
+// register=false 时返回空 id 且不报错；配置不完整时返回 *registerConfigError。
 func registerSelfWithClient(ctx context.Context, client *http.Client, disc *Config, app *config.App, srv *server.Config) (string, error) {
 	if disc == nil || !disc.Register {
 		return "", nil
@@ -179,6 +198,7 @@ func registerSelfWithClient(ctx context.Context, client *http.Client, disc *Conf
 	return id, nil
 }
 
+// mergeRegisterTags 在内置 fxkit/http 标签后追加去重后的自定义标签，跳过空白项。
 func mergeRegisterTags(extra []string) []string {
 	out := []string{"fxkit", "http"}
 	seen := map[string]struct{}{"fxkit": {}, "http": {}}
@@ -244,6 +264,7 @@ func ttlPassLoopWithClient(
 			return
 		case <-t.C:
 			err := passTTL(ctx, client, agentBase, serviceID)
+			recordTTLPass(ctx, err)
 			if err == nil {
 				if failures >= ttlWarnAfterFailures {
 					slog.Info("consul ttl pass recovered", "id", serviceID, "failures", failures)
@@ -271,6 +292,7 @@ func ttlPassLoopWithClient(
 			lastRegister = time.Now()
 
 			newID, rerr := reregister(ctx)
+			recordReregister(ctx, rerr)
 			if rerr != nil {
 				slog.Warn("consul re-register after ttl failures failed",
 					"id", serviceID, "failures", failures, "error", rerr)
@@ -286,6 +308,7 @@ func ttlPassLoopWithClient(
 	}
 }
 
+// passTTL 调用 PUT /v1/agent/check/pass/service:<id> 发送一次 TTL 心跳。
 func passTTL(ctx context.Context, client *http.Client, agentBase, serviceID string) error {
 	checkID := "service:" + serviceID
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, agentBase+"/v1/agent/check/pass/"+url.PathEscape(checkID), nil)
@@ -302,6 +325,8 @@ func passTTL(ctx context.Context, client *http.Client, agentBase, serviceID stri
 	return err
 }
 
+// deregisterSelf 调用 PUT /v1/agent/service/deregister/{id} 注销服务；
+// disc 为 nil、地址为空或 serviceID 为空时直接返回 nil。
 func deregisterSelf(ctx context.Context, disc *Config, serviceID string) error {
 	if disc == nil {
 		return nil

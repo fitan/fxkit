@@ -13,7 +13,9 @@ type Currency string
 
 // Money 是某个币种的金额。
 type Money struct {
-	Amount   int64    `json:"amount"`
+	// Amount 是整数最小货币单位金额（如分），不使用 float。
+	Amount int64 `json:"amount"`
+	// Currency 是 ISO 4217 三字母大写货币代码。
 	Currency Currency `json:"currency"`
 }
 
@@ -79,10 +81,12 @@ func (m Money) Compare(other Money) (int, error) {
 // IsZero 报告金额是否为 0。
 func (m Money) IsZero() bool { return m.Amount == 0 }
 
+// String 返回 "<amount> <currency>" 形式的文本，如 "100 CNY"。
 func (m Money) String() string {
 	return fmt.Sprintf("%d %s", m.Amount, m.Currency)
 }
 
+// validCurrency 报告 c 是否为三位大写字母的币种代码。
 func validCurrency(c Currency) bool {
 	if len(c) != 3 {
 		return false

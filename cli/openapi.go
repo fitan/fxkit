@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// buildOpenAPICmd 构建 openapi 子命令：编码 Huma 运行期 spec 并写到 stdout 或 --output 文件。
+// --base 提供静态 YAML/JSON 与 Huma 文档合并；--best-effort 在启动失败时输出不完整 spec。
 func buildOpenAPICmd(opts []di.Option) *cobra.Command {
 	var (
 		format     string
@@ -75,6 +77,7 @@ func buildOpenAPICmd(opts []di.Option) *cobra.Command {
 	return cmd
 }
 
+// flagString 读取字符串 flag；flag 不存在时返回空串。
 func flagString(cmd *cobra.Command, name string) string {
 	v, _ := cmd.Flags().GetString(name)
 	return v

@@ -1,3 +1,8 @@
+// Package di 是 fxkit 的依赖注入与生命周期装配层，底层复用 samber/do/v2。
+//
+// 用 [New] 创建根容器，通过 [Module]、[Provide]、[ProvideValue] 注册服务，
+// 用 [Invoke] / [MustInvoke] 解析；[Lifecycle] 按优先级分阶段执行 PreStart 与
+// OnStart/OnStop 钩子，[Lifecycle.Start] 失败时会逆序回滚已启动的钩子。
 package di
 
 import (

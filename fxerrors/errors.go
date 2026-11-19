@@ -1,3 +1,8 @@
+// Package fxerrors 定义 fxkit 的统一错误类型：按 [Kind] 映射 HTTP 状态码，
+// 通过 [NotFound]、[Conflict]、[Validation] 等构造函数创建，序列化为 Problem Details 风格的 JSON。
+//
+// [Wrap] 将任意 error 归一为 *[Error]（已是 *Error 则原样返回），[WriteError] 负责写响应：
+// KindInternal 对外固定为 "internal error"，原始错误只写日志。
 package fxerrors
 
 import (
@@ -12,18 +17,30 @@ import (
 type Kind string
 
 const (
-	KindBadRequest       Kind = "bad_request"
-	KindUnauthorized     Kind = "unauthorized"
+	// KindBadRequest 请求语法有效但语义有误，映射 HTTP 400。
+	KindBadRequest Kind = "bad_request"
+	// KindUnauthorized 缺少认证或认证无效，映射 HTTP 401。
+	KindUnauthorized Kind = "unauthorized"
+	// KindPermissionDenied 认证主体无权执行该操作，映射 HTTP 403。
 	KindPermissionDenied Kind = "permission_denied"
-	KindNotFound         Kind = "not_found"
-	KindConflict         Kind = "conflict"
-	KindValidation       Kind = "validation"
-	KindUnprocessable    Kind = "unprocessable"
-	KindTooManyRequests  Kind = "too_many_requests"
-	KindInternal         Kind = "internal"
-	KindUnavailable      Kind = "unavailable"
-	KindTimeout          Kind = "timeout"
-	KindCanceled         Kind = "canceled"
+	// KindNotFound 指定资源不存在，映射 HTTP 404。
+	KindNotFound Kind = "not_found"
+	// KindConflict 与当前资源状态冲突（如唯一约束），映射 HTTP 409。
+	KindConflict Kind = "conflict"
+	// KindValidation 字段级校验失败，映射 HTTP 400（与 KindBadRequest 相同）。
+	KindValidation Kind = "validation"
+	// KindUnprocessable 语义正确但被业务规则拒绝，映射 HTTP 422。
+	KindUnprocessable Kind = "unprocessable"
+	// KindTooManyRequests 超出限流配额，映射 HTTP 429。
+	KindTooManyRequests Kind = "too_many_requests"
+	// KindInternal 未预期的系统内部错误，映射 HTTP 500；对外消息固定为 "internal error"。
+	KindInternal Kind = "internal"
+	// KindUnavailable 服务当前无法处理请求，映射 HTTP 503。
+	KindUnavailable Kind = "unavailable"
+	// KindTimeout 下游调用超过 deadline，映射 HTTP 504。
+	KindTimeout Kind = "timeout"
+	// KindCanceled 请求被取消，映射非标准的 499；客户端已断开时通常读不到响应。
+	KindCanceled Kind = "canceled"
 )
 
 // Status 返回 kind 对应的 HTTP 状态码。未知 kind 回退为 500。
@@ -58,11 +75,16 @@ func (k Kind) Status() int {
 // Error 是 fxkit 标准错误。请使用下方辅助构造函数（[NotFound]、[Conflict] 等），
 // 勿直接构造，以保持 kind/status 映射一致。
 type Error struct {
-	Kind    Kind           `json:"code"`
-	Message string         `json:"message"`
+	// Kind 错误分类，决定序列化时的 HTTP status。
+	Kind Kind `json:"code"`
+	// Message 对外错误消息；为空时 [Error.Error] 回退到 cause 或 Kind。
+	Message string `json:"message"`
+	// Details 附加的结构化细节（如校验失败的字段），为空时 JSON 省略。
 	Details map[string]any `json:"details,omitempty"`
-	TraceID string         `json:"trace_id,omitempty"`
+	// TraceID 关联的 trace id；[WriteError] 会在缺省时从 span context 自动补齐。
+	TraceID string `json:"trace_id,omitempty"`
 
+	// cause 是底层错误，仅供 [Error.Error] 回退与 [errors.Is] / [errors.As] 使用，不参与 JSON。
 	cause error
 }
 
@@ -137,6 +159,7 @@ func (e *Error) WithDetails(d map[string]any) *Error {
 	return &out
 }
 
+// new_ 构造指定 Kind 的 Error，args 非空时按 format 格式化消息。
 func new_(k Kind, format string, args ...any) *Error {
 	msg := format
 	if len(args) > 0 {

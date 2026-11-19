@@ -16,12 +16,15 @@ type State string
 
 // Transition 是一条合法状态流转。
 type Transition struct {
+	// From 是流转的起点状态。
 	From State
-	To   State
+	// To 是流转的终点状态。
+	To State
 }
 
 // Machine 是状态机。
 type Machine struct {
+	// allowed 是 from → to 的合法流转集合；未列出的流转一律拒绝。
 	allowed map[State]map[State]struct{}
 }
 
@@ -49,7 +52,9 @@ func (m *Machine) Can(from, to State) bool {
 // Entity 是状态机需要的实体能力。
 type Entity interface {
 	gormx.Versioned
+	// PaymentState 返回当前支付状态。
 	PaymentState() State
+	// SetPaymentState 由 [Apply] 在事务内写回新状态。
 	SetPaymentState(State)
 }
 
@@ -61,12 +66,23 @@ func Apply(ctx context.Context, db *gormx.Client, m *Machine, e Entity, to State
 		return fxerrors.Internal("payment: nil entity")
 	}
 	from := e.PaymentState()
+	ctx, span := startApplySpan(ctx, from, to)
+	result := "ok"
+	var err error
+	defer func() { endApplySpan(ctx, span, result, err) }()
+
 	if !m.Can(from, to) {
-		return fxerrors.Conflict("payment: invalid transition %s -> %s", from, to)
+		result = "invalid"
+		err = fxerrors.Conflict("payment: invalid transition %s -> %s", from, to)
+		return err
 	}
 	e.SetPaymentState(to)
-	if err := gormx.UpdateWithVersion(ctx, db, e, "state"); err != nil {
+	if err = gormx.UpdateWithVersion(ctx, db, e, "state"); err != nil {
 		e.SetPaymentState(from)
+		result = "error"
+		if fxerrors.Wrap(err).Kind == fxerrors.KindConflict {
+			result = "conflict"
+		}
 		return err
 	}
 	return nil

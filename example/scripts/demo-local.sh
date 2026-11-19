@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 本地 demo：SQLite catalog + storefront，供 Nuxt dashboard 使用。
-# 不需要 Postgres / Consul；Redis 可选（有 Docker 时自动启动）；Hatchet 有 token 时自动启用。
+# 本地 demo：PostgreSQL catalog + storefront，供 Nuxt dashboard 使用。
+# 需要 Docker（自动起 Postgres/Consul/Redis/Traefik）；Hatchet 有 token 时自动启用。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,8 +30,8 @@ server:
     prefix: "/debug/pprof/"
 
 db:
-  driver: "sqlite"
-  dsn: "file:tmp/catalog-demo.db?_fk=1&_busy_timeout=5000"
+  driver: "postgres"
+  dsn: "postgres://fxkit:fxkit@127.0.0.1:5432/fxkit?sslmode=disable"
   log_level: "error"
   slow_threshold: 0s
   auto_migrate: true
@@ -126,8 +126,8 @@ server:
     enabled: false
 
 db:
-  driver: "sqlite"
-  dsn: "file:tmp/storefront-demo.db?_fk=1&_busy_timeout=5000"
+  driver: "postgres"
+  dsn: "postgres://fxkit:fxkit@127.0.0.1:5432/fxkit?sslmode=disable"
   log_level: "error"
   slow_threshold: 0s
   auto_migrate: true
@@ -197,16 +197,22 @@ wait_http() {
 
 write_configs
 
-# 有 Docker 就起 Consul + Traefik + Redis；没有则跳过（可用 make web-dev-direct）。
+# 有 Docker 就起 Postgres + Consul + Traefik + Redis；没有 Docker 时需要本机 127.0.0.1:5432 已有 Postgres。
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  docker compose up -d consul traefik redis >/dev/null 2>&1 || true
+  docker compose up -d postgres consul traefik redis >/dev/null 2>&1 || true
   for _ in $(seq 1 120); do
-    if nc -z 127.0.0.1 8500 2>/dev/null && nc -z 127.0.0.1 6379 2>/dev/null && nc -z 127.0.0.1 8880 2>/dev/null; then
+    if nc -z 127.0.0.1 5432 2>/dev/null && nc -z 127.0.0.1 8500 2>/dev/null && nc -z 127.0.0.1 6379 2>/dev/null && nc -z 127.0.0.1 8880 2>/dev/null; then
       break
     fi
     sleep 0.25
   done
 fi
+
+if ! nc -z 127.0.0.1 5432 2>/dev/null; then
+  echo "postgres 127.0.0.1:5432 不可达；请先启动 docker compose postgres 或本机 Postgres"
+  exit 1
+fi
+echo "postgres: 127.0.0.1:5432 (fxkit/fxkit)"
 
 if nc -z 127.0.0.1 8500 2>/dev/null; then
   python3 - "$CAT_CFG" "$SF_CFG" <<'PY'
@@ -331,6 +337,7 @@ fi
 
 echo "catalog    http://127.0.0.1:8081  (log: $CAT_LOG)"
 echo "storefront http://127.0.0.1:8082  (log: $SF_LOG)"
+echo "postgres   127.0.0.1:5432  (fxkit/fxkit)"
 echo "consul     http://127.0.0.1:8500  (UI)"
 echo "traefik    http://127.0.0.1:8880  (dashboard: http://127.0.0.1:8881)"
 echo "dashboard  http://127.0.0.1:8880  (make web-dev；直连 3000 用 make web-dev-direct)"

@@ -29,6 +29,7 @@ var clientUserFiles = []string{"generate.go", "reqx.go"}
 // runCodegen 是 oapi-codegen 的调用入口，测试中可替换。
 var runCodegen = runOapiCodegen
 
+// genClientCmd 构建 gen client 子命令：从 OpenAPI spec 生成 oapi-codegen 客户端与 reqx 适配层。
 func genClientCmd() *cobra.Command {
 	var (
 		specPath    string
@@ -77,14 +78,22 @@ service name (or Seeds for local).
 	return cmd
 }
 
+// clientGenInput 是 gen client 的输入参数。
 type clientGenInput struct {
-	SpecPath    string
-	OutDir      string
-	Package     string
+	// SpecPath 是 OpenAPI YAML/JSON 文件路径。
+	SpecPath string
+	// OutDir 是输出包目录。
+	OutDir string
+	// Package 是生成的 Go 包名；为空时取 OutDir 的 basename。
+	Package string
+	// SkipCodegen 为 true 时只写脚手架，不执行 oapi-codegen。
 	SkipCodegen bool
-	Force       bool
+	// Force 为 true 时覆盖已存在的 reqx.go / generate.go。
+	Force bool
 }
 
+// generateClient 在 --out 的兄弟目录搭临时舞台生成代码，成功后才写入 --out；
+// 失败时整个舞台被删除，不会留下半成品包。--skip-codegen 只写脚手架，不执行 oapi-codegen。
 func generateClient(in clientGenInput) error {
 	specPath := strings.TrimSpace(in.SpecPath)
 	outDir := strings.TrimSpace(in.OutDir)
@@ -179,6 +188,7 @@ func installClientFiles(stage, outDir string, force bool) error {
 	return nil
 }
 
+// copyFileAtomic 读取 src 后经 [writeFileAtomic] 写入 dst。
 func copyFileAtomic(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -187,6 +197,7 @@ func copyFileAtomic(src, dst string) error {
 	return writeFileAtomic(dst, data, 0o644)
 }
 
+// writeClientScaffold 写出 openapi.yaml、spec.go、oapi-codegen.yaml、generate.go 与 reqx.go。
 func writeClientScaffold(outDir, pkg string, spec []byte) error {
 	if err := writeFileAtomic(filepath.Join(outDir, "openapi.yaml"), spec, 0o644); err != nil {
 		return fmt.Errorf("gen client write openapi.yaml: %w", err)
@@ -225,6 +236,7 @@ generate:
 	return nil
 }
 
+// renderClientReqx 渲染 reqx.go：NewFromFactory 基于 [reqx.Factory] 建客户端，ProvideClient 返回 DI 构造函数。
 func renderClientReqx(pkg string) ([]byte, error) {
 	src := fmt.Sprintf(`package %s
 
@@ -294,6 +306,7 @@ const (
 	return formatted, nil
 }
 
+// runOapiCodegen 在 dir 下用 go run 执行固定版本的 oapi-codegen，输出直通 stderr。
 func runOapiCodegen(dir string) error {
 	cmd := exec.Command("go", "run", oapiCodegenPkg, "-config", "oapi-codegen.yaml", "openapi.yaml")
 	cmd.Dir = dir
@@ -305,6 +318,7 @@ func runOapiCodegen(dir string) error {
 	return nil
 }
 
+// validateGoPackageName 校验包名非空、不是关键字且是合法 Go 标识符。
 func validateGoPackageName(name string) error {
 	if name == "" {
 		return fmt.Errorf("package name is empty")
@@ -326,6 +340,7 @@ func validateGoPackageName(name string) error {
 	return nil
 }
 
+// goKeywords 是 Go 关键字集合，用于拒绝非法的包名与标识符。
 var goKeywords = map[string]bool{
 	"break": true, "case": true, "chan": true, "const": true, "continue": true,
 	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,

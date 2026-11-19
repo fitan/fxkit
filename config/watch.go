@@ -19,11 +19,13 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
+// watchConsulWait 是 Consul 长轮询的 wait 参数（阻塞查询的上限）。
 const watchConsulWait = 5 * time.Minute
 
 // Dynamic 是只读的动态配置接口。消费方只依赖它，便于测试与替换。
 // Watch[T] 实现它；框架对象（listener/db/auth/otel）不通过它热替换。
 type Dynamic[T any] interface {
+	// Get 返回当前配置快照；指针在下次热更新前保持有效，调用方不应修改它。
 	Get() *T
 }
 
@@ -34,10 +36,14 @@ type Dynamic[T any] interface {
 //
 // 只建议用于宿主业务配置；框架配置（server/db/auth/otel）仍应使用 ProvideConfig 的启动快照。
 type Watch[T any] struct {
-	mu     sync.RWMutex
-	v      *T
+	// mu 保护 v 的替换与读取。
+	mu sync.RWMutex
+	// v 是当前配置快照。
+	v *T
+	// cancel 停止后台 watch；未启用 Consul watch 时为 nil。
 	cancel context.CancelFunc
-	once   sync.Once
+	// once 保证 Close 只取消一次。
+	once sync.Once
 }
 
 // Get 返回当前配置快照。返回值只读，不要修改。
@@ -62,6 +68,7 @@ func (w *Watch[T]) Close() {
 	})
 }
 
+// set 在写锁下替换当前配置快照。
 func (w *Watch[T]) set(v T) {
 	w.mu.Lock()
 	w.v = &v
@@ -124,6 +131,8 @@ func ProvideWatch[T any](key string) di.Option {
 	}
 }
 
+// watchConsulLoop 长轮询 Consul KV，内容变化时解码 section 并替换 w 的快照；
+// 失败按指数退避重试，ctx 取消后退出。
 func watchConsulLoop[T any](ctx context.Context, addr, consulKey, section string, w *Watch[T]) {
 	var index uint64
 	backoff := time.Second
@@ -136,6 +145,7 @@ func watchConsulLoop[T any](ctx context.Context, addr, consulKey, section string
 			if ctx.Err() != nil {
 				return
 			}
+			recordReload(ctx, section, "fetch", err)
 			slog.Warn("config watch failed", "key", consulKey, "error", err)
 			select {
 			case <-ctx.Done():
@@ -164,17 +174,21 @@ func watchConsulLoop[T any](ctx context.Context, addr, consulKey, section string
 		var next T
 		k := koanf.New(".")
 		if err := k.Load(rawbytes.Provider(raw), yaml.Parser()); err != nil {
+			recordReload(ctx, section, "decode", err)
 			slog.Warn("config watch yaml", "key", consulKey, "error", err)
 			continue
 		}
 		if err := unmarshalYAML(k, section, &next); err != nil {
+			recordReload(ctx, section, "decode", err)
 			slog.Warn("config watch decode", "key", consulKey, "section", section, "error", err)
 			continue
 		}
 		w.set(next)
+		recordReload(ctx, section, "apply", nil)
 	}
 }
 
+// watchConsulKV 带 index 长轮询 Consul KV，返回内容与 X-Consul-Index；key 不存在时返回错误。
 func watchConsulKV(ctx context.Context, addr, key string, index uint64) ([]byte, uint64, error) {
 	base, err := consuladdr.Normalize(addr)
 	if err != nil {

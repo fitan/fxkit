@@ -37,10 +37,13 @@ func singleflightGroup(c Cache) (*singleflight.Group, string) {
 
 // sfHolder 供内置实现内嵌，惰性创建并持有自己的 group。
 type sfHolder struct {
+	// once 保证 group 只创建一次。
 	once sync.Once
-	sf   *singleflight.Group
+	// sf 是该实例持有的 singleflight.Group。
+	sf *singleflight.Group
 }
 
+// singleflightGroup 惰性创建并返回该 holder 持有的 singleflight.Group。
 func (h *sfHolder) singleflightGroup() *singleflight.Group {
 	h.once.Do(func() { h.sf = &singleflight.Group{} })
 	return h.sf

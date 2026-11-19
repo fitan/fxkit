@@ -112,6 +112,10 @@ func TestRenderResource_listEngine(t *testing.T) {
 		"crudx.ListResult[ArticleListRow]",
 		`gorm:"size:255;not null;index"`,
 		"s.client.WithTxResult",
+		// Create 请求类型必须存在（模板曾漏定义，导致产物编译失败）
+		"type CreateArticleReq struct {",
+		"u.Title = req.Title",
+		"u.Body = *req.Body",
 	}
 	for _, s := range mustContain {
 		if !bytes.Contains(src, []byte(s)) {

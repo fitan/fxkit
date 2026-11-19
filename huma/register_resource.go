@@ -12,17 +12,23 @@ import (
 // ResourceHandlers 是 [RegisterResource] 所需的可选 REST 接口。
 // List 应使用 [crudx.List] 实现；写操作仍是普通的 service 方法。
 type ResourceHandlers[ListRow, Detail, CreateReq, UpdateReq any] interface {
+	// List 返回受控列表；应使用 [crudx.List] 以支持 q=、游标与分页上限。
 	List(ctx context.Context, params crudx.ListParams) (crudx.ListResult[ListRow], error)
+	// Get 按 id 返回详情；不存在时返回 fxerrors.NotFound。
 	Get(ctx context.Context, id string) (Detail, error)
+	// Create 创建资源并返回详情。
 	Create(ctx context.Context, req CreateReq) (Detail, error)
+	// Update 更新资源并返回详情。
 	Update(ctx context.Context, req UpdateReq) (Detail, error)
+	// Delete 按 id 删除资源；不存在时返回 fxerrors.NotFound。
 	Delete(ctx context.Context, id string) error
 }
 
 // RegisterResourceInput 配置路径前缀与 operation 元数据。
 type RegisterResourceInput[UpdateReq any] struct {
-	Path        string   // 例如 "/users"
-	Tags        []string // OpenAPI 标签
+	Path string   // 例如 "/users"
+	Tags []string // OpenAPI 标签
+	// ListSummary 是列表 operation 的 summary；为空时默认为 "List"。
 	ListSummary string
 	// BindUpdate 在调用 Update 之前将路径 id 注入 UpdateReq。
 	// 若为 nil，则不注册 PUT。
@@ -44,17 +50,24 @@ type RegisterResourceInput[UpdateReq any] struct {
 type resourceOpKind int
 
 const (
+	// opList 对应 GET {path} 列表路由。
 	opList resourceOpKind = iota
+	// opGet 对应 GET {path}/{id} 详情路由。
 	opGet
+	// opCreate 对应 POST {path} 创建路由。
 	opCreate
+	// opUpdate 对应 PUT {path}/{id} 更新路由。
 	opUpdate
+	// opDelete 对应 DELETE {path}/{id} 删除路由。
 	opDelete
 )
 
 // resourceOp 是一条资源路由的元数据 + 语义。
 type resourceOp struct {
+	// kind 是路由语义，决定 [RegisterResource] 绑定哪个 handler。
 	kind resourceOpKind
-	op   huma.Operation
+	// op 是传给 Huma 的 operation 元数据（id/method/path/summary/tags）。
+	op huma.Operation
 }
 
 // buildResourceOps 是 operationId / method / path / summary / tags 的**唯一**构造点。
@@ -138,27 +151,39 @@ func ResourceOperations[UpdateReq any](in RegisterResourceInput[UpdateReq]) []hu
 	return out
 }
 
+// idPath 是只带路径参数的请求输入，对应 URL 中的 {id}。
 type idPath struct {
+	// ID 是路径参数 id。
 	ID string `path:"id"`
 }
 
+// listOut 是列表路由的响应，Body 直接作为 JSON 响应体。
 type listOut[T any] struct {
+	// Body 序列化为 items/start/limit（以及可选的 total、nextCursor）字段。
 	Body crudx.ListResult[T]
 }
 
+// detailOut 是详情类路由的响应，Body 直接作为 JSON 响应体。
 type detailOut[T any] struct {
+	// Body 序列化为资源详情对象的 JSON。
 	Body T
 }
 
+// createIn 是创建路由的请求输入。
 type createIn[T any] struct {
+	// Body 是请求 JSON 解析出的创建 DTO。
 	Body T
 }
 
+// updateIn 是更新路由的请求输入：路径 id 加请求体。
 type updateIn[T any] struct {
-	ID   string `path:"id"`
+	// ID 是路径参数 id，传给 [RegisterResourceInput.BindUpdate]。
+	ID string `path:"id"`
+	// Body 是请求 JSON 解析出的更新 DTO。
 	Body T
 }
 
+// emptyOut 是空输出：没有 Body 字段，Huma 返回 204 No Content。
 type emptyOut struct{}
 
 // RegisterResource 可选地为资源挂载五个 JSON 路由。
@@ -228,6 +253,7 @@ func RegisterResource[ListRow, Detail, CreateReq, UpdateReq any](
 	}
 }
 
+// sanitizeOpID 从 path 生成 OperationID：pascalCase 为真时按 / - _ 切分并首字母大写，否则只保留字母数字。
 func sanitizeOpID(path string, pascalCase bool) string {
 	if !pascalCase {
 		var b strings.Builder

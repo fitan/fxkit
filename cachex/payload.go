@@ -12,8 +12,11 @@ import (
 // GetOrSet[Order] 读到同一 key 下 User 的 JSON 后静默反序列化为零值。
 var payloadMagic = []byte("<<__FXKIT_CACHE_PAYLOAD_V1__>>")
 
+// payloadEnvelope 是带类型指纹的缓存信封。
 type payloadEnvelope struct {
-	Type string          `json:"type"`
+	// Type 是写入时的类型指纹，读取时必须与当前类型一致。
+	Type string `json:"type"`
+	// Data 是原始值的 JSON。
 	Data json.RawMessage `json:"data"`
 }
 
@@ -22,6 +25,7 @@ func typeFingerprint[T any]() string {
 	return fingerprintOf(reflect.TypeFor[T]())
 }
 
+// fingerprintOf 返回类型的稳定指纹：有名字时用 PkgPath.Name，否则用 Type.String()，nil 返回 <nil>。
 func fingerprintOf(t reflect.Type) string {
 	if t == nil {
 		return "<nil>"
@@ -33,6 +37,7 @@ func fingerprintOf(t reflect.Type) string {
 	return t.String()
 }
 
+// encodeValue 把 v 序列化为带类型指纹信封的 payload。
 func encodeValue[T any](v T) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {

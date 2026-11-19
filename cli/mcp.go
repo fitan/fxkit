@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// buildMCPCmd 构建 mcp 子命令：以 SkipListen 启动应用图，再把 *mcpx.Server 跑在标准输入输出上。
+// 依赖图里没有 mcpx.Module 时返回错误。
 func buildMCPCmd(opts []di.Option) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",

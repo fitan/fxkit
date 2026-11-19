@@ -15,24 +15,38 @@ import (
 	"github.com/fitan/fxkit/config"
 )
 
+// consulHealthEntry 是 Consul 健康服务查询返回条目的子集。
 type consulHealthEntry struct {
+	// Node 是注册该服务的 Consul 节点。
 	Node struct {
+		// Address 是节点地址；Service.Address 为空时使用。
 		Address string `json:"Address"`
 	} `json:"Node"`
+	// Service 是服务实例。
 	Service struct {
+		// Address 是服务实例地址。
 		Address string `json:"Address"`
-		Port    int    `json:"Port"`
+		// Port 是服务实例端口。
+		Port int `json:"Port"`
 	} `json:"Service"`
 }
 
+// watchConfig 是单个服务的 Consul blocking query 监听配置。
 type watchConfig struct {
-	consulBase  string
-	service     string
+	// consulBase 是 Consul 基础 URL（已归一化）。
+	consulBase string
+	// service 是 Consul 服务名。
+	service string
+	// passingOnly 为 true 时只取健康检查 passing 的实例。
 	passingOnly bool
-	wait        time.Duration
-	httpClient  *http.Client
+	// wait 是 blocking query 的最大挂起时长，<=0 时用默认 5m。
+	wait time.Duration
+	// httpClient 是查询 Consul 用的 HTTP client，nil 时按 wait 推导超时。
+	httpClient *http.Client
 }
 
+// run 循环执行 Consul blocking query，把端点变化同步到 pool，直到 ctx 结束。
+// wait/httpClient 未设置时使用默认值；查询失败时记录日志并间隔 2s 重试。
 func (w watchConfig) run(ctx context.Context, pool *endpointPool) {
 	if w.wait <= 0 {
 		w.wait = defaultWatchWait
@@ -84,6 +98,8 @@ func (w watchConfig) run(ctx context.Context, pool *endpointPool) {
 	}
 }
 
+// fetch 以 index 发起一次 Consul 健康查询，返回归一化端点与下一次 blocking query 的 index。
+// passingOnly 控制是否只取 passing 实例。
 func (w watchConfig) fetch(ctx context.Context, index uint64) ([]string, uint64, error) {
 	u, err := url.Parse(w.consulBase + "/v1/health/service/" + url.PathEscape(w.service))
 	if err != nil {
@@ -157,6 +173,7 @@ func nextWatchIndex(current, fetched uint64) uint64 {
 	return fetched
 }
 
+// formatConsulWait 把时长夹到 [1s, 10m] 并格式化为 Consul wait 参数（秒）。
 func formatConsulWait(d time.Duration) string {
 	if d < time.Second {
 		d = time.Second
@@ -167,6 +184,7 @@ func formatConsulWait(d time.Duration) string {
 	return strconv.Itoa(int(d/time.Second)) + "s"
 }
 
+// normalizeConsulBase 去掉首尾空白与末尾斜杠，缺少 scheme 时补 http://；地址为空时返回错误。
 func normalizeConsulBase(addr string) (string, error) {
 	a := strings.TrimSpace(strings.TrimRight(addr, "/"))
 	if a == "" {

@@ -16,13 +16,16 @@ import (
 )
 
 const (
+	// defaultTimeout 是 ClientInput.Timeout 未设置（<=0）时的默认请求超时。
 	defaultTimeout = 30 * time.Second
 
 	// defaultMaxIdleConnsPerHost 避免使用标准库全局默认值 2，
 	// 该默认值会让扇出到少量上游的服务频繁重建连接。
 	defaultMaxIdleConnsPerHost = 32
-	defaultMaxIdleConns        = 200
-	defaultIdleConnTimeout     = 90 * time.Second
+	// defaultMaxIdleConns 是每个 client 传输层的空闲连接总数上限。
+	defaultMaxIdleConns = 200
+	// defaultIdleConnTimeout 是空闲 keep-alive 连接的回收时间。
+	defaultIdleConnTimeout = 90 * time.Second
 
 	// defaultWatchWait 是 Consul blocking query 的默认值。它是最大空闲
 	// 挂起时间：index 变化会立即返回，因此更长的 wait 不会延迟
@@ -36,21 +39,29 @@ const (
 // Factory 构建通过 Consul 监听（和/或静态种子地址）解析目标的 [req.Client] 实例。
 // 由 [Module] 提供（已包含在 fxkit.Default 中）。
 type Factory struct {
+	// cfg 用于读取 discovery 段配置；可为 nil。
 	cfg *config.Config
 
-	mu    sync.Mutex
+	// mu 保护 pools、clients、cancel 与 closed。
+	mu sync.Mutex
+	// pools 按 poolKey 缓存端点池及其 watch 的取消函数。
 	pools map[string]*managedPool
 	// clients 记录已创建的 http.Client，Close 时释放它们的 idle 连接。
 	clients []*http.Client
-	root    context.Context
-	cancel  context.CancelFunc
+	// root 是所有 Consul watch 的父 context，Close 时取消。
+	root context.Context
+	// cancel 取消 root。
+	cancel context.CancelFunc
 	// closed 标记已 Close。关闭后 root ctx 已取消，
 	// 继续建带 Consul watch 的 client 会得到一个永不更新的空端点池。
 	closed bool
 }
 
+// managedPool 是一个端点池及其 Consul watch 的取消函数。
 type managedPool struct {
-	pool   *endpointPool
+	// pool 是共享的端点池。
+	pool *endpointPool
+	// cancel 停止该池的 Consul watch。
 	cancel context.CancelFunc
 }
 
@@ -327,12 +338,18 @@ func (f *Factory) TransportClient(in ClientInput) (*http.Client, string, error) 
 	return cli.GetClient(), scheme + "://" + name, nil
 }
 
+// ensurePoolInput 是 ensurePool 的入参。
 type ensurePoolInput struct {
-	Name        string
-	Seeds       []string
+	// Name 是 Consul 服务名；为空时只用 Seeds。
+	Name string
+	// Seeds 是静态端点，会先经 normalizeEndpoints 归一化。
+	Seeds []string
+	// PassingOnly 覆盖 discovery 配置的 passing 过滤；nil 时沿用配置。
 	PassingOnly *bool
 }
 
+// ensurePool 返回（必要时创建）按 name、passingOnly 与 seeds 缓存的端点池。
+// 首次创建时做一次 Consul 拉取并启动后台 watch；工厂已关闭或缺少 Consul 地址且无种子时返回错误。
 func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 	passingOnly, consulAddr, err := discoverySettings(in.PassingOnly, f.cfg)
 	if err != nil {
@@ -416,6 +433,8 @@ func (f *Factory) ensurePool(in ensurePoolInput) (*endpointPool, error) {
 	return pool, nil
 }
 
+// discoverySettings 读取 discovery 配置中的 consul_address 与 consul_passing_only；
+// override 非 nil 时覆盖 passingOnly，passingOnly 默认为 true。
 func discoverySettings(override *bool, cfg *config.Config) (passingOnly bool, consulAddr string, err error) {
 	passingOnly = true
 	if cfg != nil {
@@ -433,6 +452,7 @@ func discoverySettings(override *bool, cfg *config.Config) (passingOnly bool, co
 	return passingOnly, consulAddr, nil
 }
 
+// poolKey 生成端点池的缓存键：小写服务名、passingOnly 标志与种子列表。
 func poolKey(name string, passingOnly bool, seeds []string) string {
 	b := strings.Builder{}
 	b.WriteString(strings.ToLower(strings.TrimSpace(name)))

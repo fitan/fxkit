@@ -1,3 +1,10 @@
+// Package mcpx 把 Huma/OpenAPI 路由导出为大模型工具，并提供 MCP Server。
+//
+// [ParseHuma] / [ParseOpenAPI] 从 operation 提取 [Tool]；[ToOpenAI]、[ToClaude]、
+// [ToGemini] 转成各厂商的 Function Calling 格式；[InProcessDispatcher] 用内存 HTTP
+// 请求直通本服务的 chi.Mux，复用 Huma 的路径/查询/请求体反序列化。
+// [Module] 引入后自动同步工具，并在 mcp.enabled 为 true 时把 SSE 端点挂到 mcp.path；
+// stdio 由 `fxkit-app mcp` 调用 [Server.ServeStdio] 启动。
 package mcpx
 
 import (
@@ -17,9 +24,13 @@ import (
 
 // Config 定义在 application config 中的 mcp 配置段。
 type Config struct {
-	Enabled bool              `yaml:"enabled"`
-	Name    string            `yaml:"name"`
-	Path    string            `yaml:"path"` // 默认 "/mcp"
+	// Enabled 为 true 时才把 SSE 端点挂到 [Config.Path]；false 不注册 HTTP 路由，仅保留 stdio。
+	Enabled bool `yaml:"enabled"`
+	// Name 是 MCP server 名称；空则回退 "fxkit-service"。
+	Name string `yaml:"name"`
+	Path string `yaml:"path"` // 默认 "/mcp"
+	// Headers 是转发进程内 HTTP 请求时附带的固定请求头（如 Authorization）；
+	// 调用者身份头最后写入，会覆盖同名项。
 	Headers map[string]string `yaml:"headers"`
 	// MaxResponseBytes 单次 tool 调用返回的最大字节数；默认 1 MiB，负数不限制。
 	MaxResponseBytes int `yaml:"max_response_bytes"`
@@ -31,6 +42,7 @@ type Config struct {
 	ExcludeTools []string `yaml:"exclude_tools"`
 }
 
+// provideConfig 从 config 的 mcp 段解码配置，并补齐 path 前缀与默认值。
 func provideConfig(cfg *config.Config) (Config, error) {
 	c := Config{Path: "/mcp"}
 	if cfg != nil {
@@ -51,11 +63,15 @@ func provideConfig(cfg *config.Config) (Config, error) {
 	return c, nil
 }
 
+// serverParams 是 [provideServer] 的输入。
 type serverParams struct {
+	// Config 是已解码并补齐默认值的 mcp 配置。
 	Config Config
-	Mux    *chi.Mux
+	// Mux 是进程内直通的 chi mux；nil 时不配置分发器。
+	Mux *chi.Mux
 }
 
+// provideServer 按配置与 chi.Mux 构造 Server，名称缺省为 "fxkit-service"。
 func provideServer(p serverParams) (*Server, error) {
 	name := p.Config.Name
 	if name == "" {
@@ -77,6 +93,7 @@ func provideServer(p serverParams) (*Server, error) {
 	return srv, nil
 }
 
+// provideRoutes 在 mcp.enabled 时返回挂载 SSE 端点的路由，否则返回 nil。
 func provideRoutes(srv *Server, cfg Config) []server.Route {
 	// mcp.enabled 未开启时不对外暴露 HTTP 端点（stdio 仍可用 `fxkit-app mcp`）。
 	if !cfg.Enabled {
